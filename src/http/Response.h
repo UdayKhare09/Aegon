@@ -62,11 +62,39 @@ public:
         return *this;
     }
 
+    Response& chunked() {
+        is_chunked_ = true;
+        headers_.set("Transfer-Encoding", "chunked");
+        return *this;
+    }
+
+    [[nodiscard]] bool is_chunked() const noexcept { return is_chunked_; }
+
     // Getters
     [[nodiscard]] StatusCode status() const noexcept { return status_; }
     [[nodiscard]] const HeaderMap& headers() const noexcept { return headers_; }
     [[nodiscard]] HeaderMap& headers() noexcept { return headers_; }
     [[nodiscard]] std::string_view body() const noexcept { return body_; }
+
+    /**
+     * @brief Serialize a single chunk per RFC 9112 §7.1 (<hex-len>\r\n<data>\r\n)
+     */
+    static void serialize_chunk(std::string_view data, std::string& out) {
+        if (data.empty()) return;
+        char hex_buf[24];
+        auto [ptr, _] = std::to_chars(hex_buf, hex_buf + 24, data.size(), 16);
+        out.append(hex_buf, ptr - hex_buf);
+        out.append("\r\n");
+        out.append(data);
+        out.append("\r\n");
+    }
+
+    /**
+     * @brief Serialize terminating chunk per RFC 9112 §7.1 (0\r\n\r\n)
+     */
+    static void serialize_chunk_end(std::string& out) {
+        out.append("0\r\n\r\n");
+    }
 
     /**
      * @brief Serialize complete HTTP/1.1 response into output string buffer.
@@ -84,8 +112,12 @@ public:
         out.append(status_phrase(status_));
         out.append("\r\n");
 
-        // Content-Length header if body is present
-        if (!headers_.contains("Content-Length")) {
+        // Content-Length header if body is present and not chunked
+        if (is_chunked_) {
+            if (!headers_.contains("Transfer-Encoding")) {
+                out.append("Transfer-Encoding: chunked\r\n");
+            }
+        } else if (!headers_.contains("Content-Length")) {
             out.append("Content-Length: ");
             char len_buf[24];
             auto [lptr, unused] = std::to_chars(len_buf, len_buf + 24, body_.size());
@@ -103,13 +135,22 @@ public:
         }
 
         out.append("\r\n");
-        out.append(body_);
+
+        if (is_chunked_) {
+            if (!body_.empty()) {
+                serialize_chunk(body_, out);
+            }
+            serialize_chunk_end(out);
+        } else {
+            out.append(body_);
+        }
     }
 
 private:
     StatusCode status_{StatusCode::Ok};
     HeaderMap headers_{};
     std::string body_{};
+    bool is_chunked_{false};
 };
 
 } // namespace aegon::http

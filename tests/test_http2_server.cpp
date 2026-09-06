@@ -74,6 +74,14 @@ int main() {
         std::cout << "  -> PASS: HTTP/2 POST /users with UUID v7 verified\n";
     }
 
+    // 4. HTTP/2 with Upgrade: h2c handshake (standard curl --http2)
+    {
+        int ret = std::system("curl -s --http2 http://127.0.0.1:19877/health | grep -q '\"status\":\"h2_healthy\"'");
+        assert(ret == 0);
+        (void)ret;
+        std::cout << "  -> PASS: HTTP/2 with standard Upgrade: h2c handshake verified\n";
+    }
+
     std::cout << "\n[TEST 2] Testing HTTP/1.1 fallback auto-negotiation on same port...\n";
     {
         int ret = std::system("curl -s --http1.1 http://127.0.0.1:19877/health | grep -q '\"status\":\"h2_healthy\"'");

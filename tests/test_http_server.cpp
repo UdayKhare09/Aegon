@@ -91,6 +91,16 @@ void test_live_server_loopback() {
         co_return;
     });
 
+    server.post("/echo", [](Context& ctx) -> aegon::core::Task<void> {
+        ctx.text(ctx.body());
+        co_return;
+    });
+
+    server.get("/stream", [](Context& ctx) -> aegon::core::Task<void> {
+        ctx.res().chunked().text("Chunked Streaming Data");
+        co_return;
+    });
+
     std::thread server_thread([&]() {
         server.run();
     });
@@ -157,6 +167,89 @@ void test_live_server_loopback() {
         assert(resp.find("201 Created") != std::string::npos);
         assert(resp.find("{\"uuid\":\"") != std::string::npos);
         std::cout << "  -> POST /users response verified: 201 Created with monotonic UUID v7\n";
+    }
+
+    // 5. RFC 9112 §7.1 Inbound Chunked Body Decoding
+    {
+        std::string req = 
+            "POST /echo HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Connection: close\r\n\r\n"
+            "4\r\nWiki\r\n"
+            "5\r\npedia\r\n"
+            "0\r\n\r\n";
+        std::string resp = send_http_request(req);
+        assert(resp.find("200 OK") != std::string::npos);
+        assert(resp.find("Wikipedia") != std::string::npos);
+        std::cout << "  -> RFC 9112 §7.1: Inbound Chunked Body Decoding (Wikipedia) verified: PASS\n";
+    }
+
+    // 6. RFC 9112 Outbound Chunked Response
+    {
+        std::string req = "GET /stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        std::string resp = send_http_request(req);
+        assert(resp.find("200 OK") != std::string::npos);
+        assert(resp.find("Transfer-Encoding: chunked") != std::string::npos);
+        assert(resp.find("Chunked Streaming Data") != std::string::npos);
+        assert(resp.find("0\r\n\r\n") != std::string::npos);
+        std::cout << "  -> RFC 9112: Outbound Chunked Response verified: PASS\n";
+    }
+
+    // 7. RFC 9112 §3.2 Mandatory Host Header Validation (missing Host -> 400)
+    {
+        std::string req = "GET /health HTTP/1.1\r\nConnection: close\r\n\r\n";
+        std::string resp = send_http_request(req);
+        assert(resp.find("400 Bad Request") != std::string::npos);
+        std::cout << "  -> RFC 9112 §3.2: Missing Host header rejected with 400 Bad Request: PASS\n";
+    }
+
+    // 8. RFC 9112 §3.2 Multiple Host Headers Validation (duplicate Host -> 400)
+    {
+        std::string req = "GET /health HTTP/1.1\r\nHost: a.com\r\nHost: b.com\r\nConnection: close\r\n\r\n";
+        std::string resp = send_http_request(req);
+        assert(resp.find("400 Bad Request") != std::string::npos);
+        std::cout << "  -> RFC 9112 §3.2: Duplicate Host header rejected with 400 Bad Request: PASS\n";
+    }
+
+    // 9. RFC 9112 §6.1 Request Smuggling Prevention (Content-Length + Transfer-Encoding -> 400)
+    {
+        std::string req = 
+            "POST /echo HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Content-Length: 5\r\n"
+            "Transfer-Encoding: chunked\r\n"
+            "Connection: close\r\n\r\n"
+            "0\r\n\r\n";
+        std::string resp = send_http_request(req);
+        assert(resp.find("400 Bad Request") != std::string::npos);
+        std::cout << "  -> RFC 9112 §6.1: Smuggling vector (CL + TE) rejected with 400 Bad Request: PASS\n";
+    }
+
+    // 10. RFC 9112 §7.1 Unsupported Transfer-Encoding (gzip -> 501 Not Implemented)
+    {
+        std::string req = 
+            "POST /echo HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Transfer-Encoding: gzip\r\n"
+            "Connection: close\r\n\r\n";
+        std::string resp = send_http_request(req);
+        assert(resp.find("501 Not Implemented") != std::string::npos);
+        std::cout << "  -> RFC 9112 §7.1: Unsupported Transfer-Encoding rejected with 501 Not Implemented: PASS\n";
+    }
+
+    // 11. RFC 9113 §3.2 HTTP/1.1 to HTTP/2 Upgrade (101 Switching Protocols)
+    {
+        std::string req = 
+            "GET /health HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Connection: Upgrade, HTTP2-Settings\r\n"
+            "Upgrade: h2c\r\n"
+            "HTTP2-Settings: AAMAAABkAARAAAAAAAIAAAAA\r\n\r\n";
+        std::string resp = send_http_request(req);
+        assert(resp.find("101 Switching Protocols") != std::string::npos);
+        assert(resp.find("Upgrade: h2c") != std::string::npos);
+        std::cout << "  -> RFC 9113 §3.2: HTTP/1.1 Upgrade to h2c handshakes with 101 Switching Protocols: PASS\n";
     }
 
     server.stop();

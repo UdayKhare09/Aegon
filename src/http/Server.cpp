@@ -103,6 +103,10 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
         auto status = v1::Http1Parser::parse(req_accum, req, bytes_consumed);
 
         if (status == v1::ParseStatus::NeedMoreData) {
+            if (req.expect_continue()) {
+                req.set_expect_continue(false);
+                (void)(co_await loop.ring().send(client_fd, "HTTP/1.1 100 Continue\r\n\r\n"));
+            }
             continue;
         }
 
@@ -113,6 +117,27 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
             bad_res.serialize_http1(out);
             (void)(co_await loop.ring().send(client_fd, out));
             break;
+        }
+
+        if (status == v1::ParseStatus::NotImplemented) {
+            Response ni_res;
+            ni_res.status(StatusCode::NotImplemented).text("Not Implemented");
+            std::string out;
+            ni_res.serialize_http1(out);
+            (void)(co_await loop.ring().send(client_fd, out));
+            break;
+        }
+
+        // RFC 9113 §3.2 HTTP/1.1 to HTTP/2 Cleartext Upgrade
+        if (req.is_upgrade_h2c()) {
+            std::string upgrade_res =
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                "Connection: Upgrade\r\n"
+                "Upgrade: h2c\r\n\r\n";
+            (void)(co_await loop.ring().send(client_fd, upgrade_res));
+            req_accum.erase(0, bytes_consumed);
+            co_await handle_http2_connection(loop, client_fd, std::move(req_accum));
+            co_return;
         }
 
         Response res;

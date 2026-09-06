@@ -91,13 +91,28 @@ public:
         return std::nullopt;
     }
 
+    // RFC compliance helpers
+    [[nodiscard]] bool expect_continue() const noexcept { return expect_continue_; }
+    void set_expect_continue(bool ec) noexcept { expect_continue_ = ec; }
+
+    [[nodiscard]] bool is_upgrade_h2c() const noexcept { return is_upgrade_h2c_; }
+    void set_upgrade_h2c(bool u) noexcept { is_upgrade_h2c_ = u; }
+
+    void set_decoded_body(std::string body) {
+        decoded_body_storage_ = std::move(body);
+        body_ = decoded_body_storage_;
+    }
+
 private:
     HttpVersion version_{HttpVersion::Http1_1};
     Method method_{Method::GET};
     std::string_view path_{"/"};
     std::string_view query_{};
     std::string_view body_{};
+    std::string decoded_body_storage_{};
     HeaderMap headers_{};
+    bool expect_continue_{false};
+    bool is_upgrade_h2c_{false};
 
     std::array<RouteParam, MAX_ROUTE_PARAMS> params_{};
     size_t param_count_{0};
