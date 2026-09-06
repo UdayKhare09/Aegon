@@ -124,14 +124,14 @@ void test_radix_tree_parameters() {
     Router router;
 
     router.get("/users/:id", [](Context& ctx) {
-        auto id_str = ctx.param("id");
+        auto id_str = ctx.req().param("id");
         TEST_CHECK(id_str.has_value());
         ctx.res().status(StatusCode::Ok).text(std::string(*id_str));
     });
 
     router.get("/users/:user_id/posts/:post_id", [](Context& ctx) {
-        auto uid = ctx.param("user_id");
-        auto pid = ctx.param("post_id");
+        auto uid = ctx.req().param("user_id");
+        auto pid = ctx.req().param("post_id");
         TEST_CHECK(uid == "42");
         TEST_CHECK(pid == "999");
         ctx.res().status(StatusCode::Ok).text("ok");
@@ -161,7 +161,7 @@ void test_radix_tree_parameters() {
 
         Response resp;
         Context ctx(req, resp);
-        auto extracted_uuid = ctx.param_uuid("id");
+        auto extracted_uuid = ctx.req().param_uuid("id");
         TEST_CHECK(extracted_uuid.has_value());
         TEST_CHECK(*extracted_uuid == test_uuid);
     }
@@ -187,7 +187,7 @@ void test_radix_tree_wildcards() {
     Router router;
 
     router.get("/static/*filepath", [](Context& ctx) {
-        auto path = ctx.param("filepath");
+        auto path = ctx.req().param("filepath");
         TEST_CHECK(path.has_value());
         ctx.res().status(StatusCode::Ok).text(std::string(*path));
     });

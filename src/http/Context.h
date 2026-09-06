@@ -23,27 +23,6 @@ public:
     [[nodiscard]] Response& res() noexcept { return res_; }
     [[nodiscard]] const Response& res() const noexcept { return res_; }
 
-    // Inbound Request inspection helpers
-    [[nodiscard]] std::string_view path() const noexcept { return req_.path(); }
-    [[nodiscard]] Method method() const noexcept { return req_.method(); }
-    [[nodiscard]] std::string_view body() const noexcept { return req_.body(); }
-
-    [[nodiscard]] std::optional<std::string_view> param(std::string_view key) const noexcept {
-        return req_.param(key);
-    }
-
-    [[nodiscard]] std::optional<aegon::data::UUID> param_uuid(std::string_view key) const noexcept {
-        return req_.param_uuid(key);
-    }
-
-    [[nodiscard]] std::optional<std::string_view> query(std::string_view key) const noexcept {
-        return req_.query_param(key);
-    }
-
-    [[nodiscard]] std::optional<std::string_view> header(std::string_view key) const noexcept {
-        return req_.headers().get(key);
-    }
-
     // Typed user state / database connection pool accessor (zero-cost DI)
     template <typename T>
     [[nodiscard]] T* state() noexcept {

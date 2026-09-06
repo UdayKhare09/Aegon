@@ -225,7 +225,7 @@ void test_live_http3_server() {
     });
 
     router.get("/users/:id", [](Context& ctx) {
-        auto user_id_opt = ctx.param_uuid("id");
+        auto user_id_opt = ctx.req().param_uuid("id");
         if (!user_id_opt) {
             ctx.res().status(StatusCode::BadRequest).text("Invalid UUID");
             return;

@@ -20,7 +20,7 @@ void test_http_parser_and_router() {
 
     router.get("/users/:id", [&](Context& ctx) -> aegon::core::Task<void> {
         reached_user_route = true;
-        auto id = ctx.param_uuid("id");
+        auto id = ctx.req().param_uuid("id");
         assert(id.has_value());
         captured_uuid = *id;
         ctx.res().uuid(*id);
@@ -74,7 +74,7 @@ void test_live_server_loopback() {
     });
 
     router.get("/users/:id", [](Context& ctx) {
-        auto id = ctx.param_uuid("id");
+        auto id = ctx.req().param_uuid("id");
         if (!id) {
             ctx.res().status(StatusCode::BadRequest).text("Invalid UUID parameter");
             return;
@@ -88,7 +88,7 @@ void test_live_server_loopback() {
     });
 
     router.post("/echo", [](Context& ctx) {
-        ctx.res().text(ctx.body());
+        ctx.res().text(ctx.req().body());
     });
 
     router.get("/stream", [](Context& ctx) {

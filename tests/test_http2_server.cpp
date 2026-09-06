@@ -24,7 +24,7 @@ int main() {
     });
 
     router.get("/users/:id", [](Context& ctx) {
-        auto id = ctx.param_uuid("id");
+        auto id = ctx.req().param_uuid("id");
         if (!id) {
             ctx.res().status(StatusCode::BadRequest).text("Invalid UUID parameter");
             return;

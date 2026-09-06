@@ -91,6 +91,14 @@ public:
         return std::nullopt;
     }
 
+    [[nodiscard]] std::optional<std::string_view> query(std::string_view key) const noexcept {
+        return query_param(key);
+    }
+
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view key) const noexcept {
+        return headers_.get(key);
+    }
+
     // RFC compliance helpers
     [[nodiscard]] bool expect_continue() const noexcept { return expect_continue_; }
     void set_expect_continue(bool ec) noexcept { expect_continue_ = ec; }
