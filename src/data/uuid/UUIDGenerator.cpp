@@ -229,36 +229,31 @@ uint64_t UUIDGenerator::hardware_seed64() noexcept {
 }
 
 // ============================================================
-//  UUID v4 — single UUID (scalar GPR path, no spill needed
-//  since 16 bytes fit in one XMM register)
+//  UUID v4 — single UUID
+//  Pure scalar GPR path: avoids GPR <-> XMM register domain crossing
+//  which makes vector slower than scalar for a single 16-byte UUID.
 // ============================================================
 UUID UUIDGenerator::v4() noexcept {
     UUID uuid;
-#if defined(__SSE2__)
-    uint64_t a = tl_rng.next_u64();
-    uint64_t b = tl_rng.next_u64();
-    __m128i raw = _mm_set_epi64x(static_cast<long long>(b), static_cast<long long>(a));
-
-    const __m128i and_mask = _mm_setr_epi8(
-        -1, -1, -1, -1, -1, -1, 0x0F, -1,
-        0x3F, -1, -1, -1, -1, -1, -1, -1
-    );
-    const __m128i or_mask = _mm_setr_epi8(
-        0, 0, 0, 0, 0, 0, 0x40, 0,
-        static_cast<char>(0x80), 0, 0, 0, 0, 0, 0, 0
-    );
-    _mm_store_si128(
-        reinterpret_cast<__m128i*>(uuid.data.data()),
-        _mm_or_si128(_mm_and_si128(raw, and_mask), or_mask)
-    );
-#else
     uint64_t w0 = tl_rng.next_u64();
     uint64_t w1 = tl_rng.next_u64();
+
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || defined(__x86_64__) || defined(_M_X64)
+    // Little-endian GPR bit manipulation:
+    // w0: byte 6 is bits [48..55]. Clear high nibble, set 0x40 (version 4)
+    w0 = (w0 & 0xFF0FFFFFFFFFFFFFULL) | 0x0040000000000000ULL;
+    // w1: byte 8 (first byte of w1) is bits [0..7]. Clear top 2 bits, set 0x80 (variant RFC 4122)
+    w1 = (w1 & 0xFFFFFFFFFFFFFF3FULL) | 0x0000000000000080ULL;
+
+    std::memcpy(uuid.data.data(),     &w0, 8);
+    std::memcpy(uuid.data.data() + 8, &w1, 8);
+#else
     std::memcpy(uuid.data.data(),     &w0, 8);
     std::memcpy(uuid.data.data() + 8, &w1, 8);
     uuid.data[6] = static_cast<uint8_t>((uuid.data[6] & 0x0F) | 0x40);
     uuid.data[8] = static_cast<uint8_t>((uuid.data[8] & 0x3F) | 0x80);
 #endif
+
     return uuid;
 }
 
