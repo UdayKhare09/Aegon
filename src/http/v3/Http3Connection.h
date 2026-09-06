@@ -16,8 +16,14 @@
 #include <string>
 #include <vector>
 #include <span>
+#include <cstdint>
 
 namespace aegon::http::v3 {
+
+/**
+ * @brief Checks if a header is prohibited in HTTP/3 per RFC 9114 §4.2.
+ */
+bool is_prohibited_header(std::string_view name);
 
 struct Http3Stream {
     int64_t stream_id{-1};
@@ -55,7 +61,22 @@ public:
     /**
      * @brief Flush pending outbound QUIC packets over UDP.
      */
-    core::Task<bool> flush_outbound();
+    bool flush_outbound();
+
+    /**
+     * @brief Return the nanosecond timestamp when the QUIC timer next expires (RFC 9002).
+     */
+    [[nodiscard]] uint64_t get_expiry() const noexcept;
+
+    /**
+     * @brief Handle timer expiry / loss detection tick (RFC 9002).
+     */
+    bool handle_expiry();
+
+    /**
+     * @brief Gracefully initiate HTTP/3 connection shutdown (RFC 9114 GOAWAY).
+     */
+    void shutdown();
 
     [[nodiscard]] bool is_closed() const noexcept;
     [[nodiscard]] const sockaddr_storage& remote_addr() const noexcept { return remote_addr_; }
@@ -68,6 +89,7 @@ public:
 
     // nghttp3 callbacks
     int on_stream_header(int64_t stream_id, int32_t token, nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t flags);
+    int on_stream_trailer(int64_t stream_id, int32_t token, nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t flags);
     int on_stream_end(int64_t stream_id);
     int on_stream_data(int64_t stream_id, const uint8_t* data, size_t datalen);
     int on_stream_close(int64_t stream_id, uint64_t app_error_code);

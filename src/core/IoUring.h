@@ -137,6 +137,20 @@ public:
         [[nodiscard]] int await_resume() noexcept;
     };
 
+    // Async Timeout (for timers and loss recovery)
+    struct TimeoutAwaiter : IoAwaiter {
+        IoUring& ring;
+        __kernel_timespec ts{};
+
+        TimeoutAwaiter(IoUring& r, uint64_t ns) noexcept : ring(r) {
+            ts.tv_sec = static_cast<int64_t>(ns / 1'000'000'000ULL);
+            ts.tv_nsec = static_cast<int64_t>(ns % 1'000'000'000ULL);
+        }
+
+        void submit() noexcept override;
+        int await_resume() noexcept;
+    };
+
     // Helper builders
     [[nodiscard]] MultishotAcceptAwaiter accept(int listen_fd) noexcept {
         return MultishotAcceptAwaiter{*this, listen_fd};
@@ -160,6 +174,10 @@ public:
 
     [[nodiscard]] RecvmsgAwaiter recvmsg(int fd, msghdr* msg) noexcept {
         return RecvmsgAwaiter{*this, fd, msg};
+    }
+
+    [[nodiscard]] TimeoutAwaiter timeout(uint64_t ns) noexcept {
+        return TimeoutAwaiter{*this, ns};
     }
 
     // Process all pending completion queue events (CQEs) and resume awaiting coroutines

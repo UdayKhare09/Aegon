@@ -29,6 +29,15 @@ public:
         return *this;
     }
 
+    Response& set_header_owned(std::string name, std::string value) {
+        owned_strings_.push_back(std::move(name));
+        std::string_view n = owned_strings_.back();
+        owned_strings_.push_back(std::move(value));
+        std::string_view v = owned_strings_.back();
+        headers_.set(n, v);
+        return *this;
+    }
+
     Response& body(std::string b) {
         body_ = std::move(b);
         return *this;
@@ -151,6 +160,7 @@ private:
     HeaderMap headers_{};
     std::string body_{};
     bool is_chunked_{false};
+    std::vector<std::string> owned_strings_{};
 };
 
 } // namespace aegon::http

@@ -197,7 +197,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
             }
 
             if (http3_enabled_) {
-                res.header("alt-svc", "h3=\":" + std::to_string(port_) + "\"; ma=86400");
+                res.set_header_owned("alt-svc", "h3=\":" + std::to_string(port_) + "\"; ma=86400");
             }
 
             std::string out;
@@ -346,6 +346,7 @@ void Server::run() {
         h3_server_ = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), user_state_);
         if (h3_server_->start()) {
             loop.spawn(h3_server_->run_receive_loop());
+            loop.spawn(h3_server_->run_timer_loop());
         }
     }
 
@@ -374,6 +375,7 @@ void Server::run(size_t threads) {
                     h3_worker = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), user_state_);
                     if (h3_worker->start()) {
                         loop.spawn(h3_worker->run_receive_loop());
+                        loop.spawn(h3_worker->run_timer_loop());
                     }
                 }
 

@@ -111,6 +111,12 @@ add_executable(test_http3_server
 )
 target_link_libraries(test_http3_server PRIVATE aegon_http aegon_core aegon_uuid)
 
+add_executable(test_http3_compliance
+    tests/test_http3_compliance.cpp
+)
+target_link_libraries(test_http3_compliance PRIVATE aegon_http aegon_core aegon_uuid)
+
+
 
 
 

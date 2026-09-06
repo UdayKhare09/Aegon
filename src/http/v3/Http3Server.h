@@ -22,12 +22,12 @@ public:
     Http3Server& operator=(const Http3Server&) = delete;
 
     /**
-     * @brief Bind UDP socket and initialize server.
+     * @brief Bind UDP socket and initialize dual-stack server.
      */
     bool start();
 
     /**
-     * @brief Stop the server and close UDP socket.
+     * @brief Stop the server, send GOAWAY to active connections, and close UDP socket.
      */
     void stop() noexcept;
 
@@ -36,11 +36,23 @@ public:
      */
     core::Task<void> run_receive_loop();
 
+    /**
+     * @brief Coroutine timer loop handling QUIC loss recovery and timer ticks (RFC 9002).
+     */
+    core::Task<void> run_timer_loop();
+
     [[nodiscard]] int socket_fd() const noexcept { return udp_fd_; }
     [[nodiscard]] uint16_t port() const noexcept { return port_; }
     [[nodiscard]] size_t connection_count() const noexcept { return connections_.size(); }
 
+    void check_expiries();
+    void prune_connections();
+
 private:
+    void send_version_negotiation(const ngtcp2_version_cid& vc,
+                                  const sockaddr_storage& remote_addr,
+                                  socklen_t remote_addr_len);
+
     core::EventLoop& loop_;
     uint16_t port_;
     const Router& router_;

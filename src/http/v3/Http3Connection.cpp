@@ -7,6 +7,15 @@
 
 namespace aegon::http::v3 {
 
+bool is_prohibited_header(std::string_view n) {
+    if (n.size() == 10 && strncasecmp(n.data(), "connection", 10) == 0) return true;
+    if (n.size() == 10 && strncasecmp(n.data(), "keep-alive", 10) == 0) return true;
+    if (n.size() == 16 && strncasecmp(n.data(), "proxy-connection", 16) == 0) return true;
+    if (n.size() == 17 && strncasecmp(n.data(), "transfer-encoding", 17) == 0) return true;
+    if (n.size() == 7 && strncasecmp(n.data(), "upgrade", 7) == 0) return true;
+    return false;
+}
+
 namespace {
 
 uint64_t get_timestamp_ns() {
@@ -19,6 +28,13 @@ int h3_recv_header(nghttp3_conn*, int64_t stream_id, int32_t token,
                    nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t flags,
                    void* user_data, void*) {
     return static_cast<Http3Connection*>(user_data)->on_stream_header(
+        stream_id, token, name, value, flags);
+}
+
+int h3_recv_trailer(nghttp3_conn*, int64_t stream_id, int32_t token,
+                    nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t flags,
+                    void* user_data, void*) {
+    return static_cast<Http3Connection*>(user_data)->on_stream_trailer(
         stream_id, token, name, value, flags);
 }
 
@@ -117,6 +133,7 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
     // Initialize nghttp3 callbacks
     nghttp3_callbacks h3_cb{};
     h3_cb.recv_header = h3_recv_header;
+    h3_cb.recv_trailer = h3_recv_trailer;
     h3_cb.end_stream = h3_end_stream;
     h3_cb.recv_data = h3_recv_data;
     h3_cb.stream_close = h3_stream_close;
@@ -234,7 +251,10 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
     qparams.initial_max_streams_uni = 100;
     qparams.initial_max_stream_data_bidi_remote = 1048576;
     qparams.initial_max_stream_data_bidi_local = 1048576;
+    qparams.initial_max_stream_data_uni = 1048576;
     qparams.initial_max_data = 10485760;
+    qparams.max_idle_timeout = 30 * NGTCP2_SECONDS;
+    qparams.active_connection_id_limit = 8;
 
     // RFC 9000: Set original_dcid to the DCID from client's Initial packet
     qparams.original_dcid_present = 1;
@@ -249,7 +269,21 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
     ngtcp2_cid_init(&qdcid, scid, scidlen); // Remote peer's SCID
     ngtcp2_cid_init(&qscid, local_scid, sizeof(local_scid)); // Local server's SCID
 
-    getsockname(udp_fd_, reinterpret_cast<sockaddr*>(&local_addr_), &local_addr_len_);
+    local_addr_len_ = sizeof(sockaddr_storage);
+    if (udp_fd_ < 0 || getsockname(udp_fd_, reinterpret_cast<sockaddr*>(&local_addr_), &local_addr_len_) != 0) {
+        auto* sin = reinterpret_cast<sockaddr_in*>(&local_addr_);
+        sin->sin_family = AF_INET;
+        sin->sin_port = htons(443);
+        sin->sin_addr.s_addr = htonl(INADDR_ANY);
+        local_addr_len_ = sizeof(sockaddr_in);
+    }
+    if (remote_addr_len_ == 0 || remote_addr_len_ > sizeof(sockaddr_in6)) {
+        auto* sin = reinterpret_cast<sockaddr_in*>(&remote_addr_);
+        sin->sin_family = AF_INET;
+        sin->sin_port = htons(12345);
+        sin->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        remote_addr_len_ = sizeof(sockaddr_in);
+    }
 
     ngtcp2_path path{};
     path.local.addr = const_cast<sockaddr*>(reinterpret_cast<const sockaddr*>(&local_addr_));
@@ -290,6 +324,14 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
     std::string_view n(reinterpret_cast<const char*>(name_buf.base), name_buf.len);
     std::string_view v(reinterpret_cast<const char*>(val_buf.base), val_buf.len);
 
+    // RFC 9114 §4.2: Connection-specific fields MUST NOT be present
+    if (is_prohibited_header(n)) {
+        return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+    }
+    if (n.size() == 2 && strncasecmp(n.data(), "te", 2) == 0 && v != "trailers") {
+        return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+    }
+
     if (n == ":method") {
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
@@ -317,6 +359,31 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         stream->req.headers().add(back.first, back.second);
     }
 
+    return 0;
+}
+
+int Http3Connection::on_stream_trailer(int64_t stream_id, int32_t, nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t) {
+    auto* stream = get_or_create_stream(stream_id);
+
+    auto name_buf = nghttp3_rcbuf_get_buf(name);
+    auto val_buf = nghttp3_rcbuf_get_buf(value);
+
+    std::string_view n(reinterpret_cast<const char*>(name_buf.base), name_buf.len);
+    std::string_view v(reinterpret_cast<const char*>(val_buf.base), val_buf.len);
+
+    // RFC 9114 §4.3: Pseudo-headers are not permitted in trailers
+    if (n.starts_with(':')) {
+        return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+    }
+
+    // RFC 9114 §4.3: Prohibited and framing headers are not permitted in trailers
+    if (is_prohibited_header(n) || n == "content-length" || n == "host") {
+        return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+    }
+
+    stream->header_storage.emplace_back(std::string(n), std::string(v));
+    const auto& back = stream->header_storage.back();
+    stream->req.headers().add(back.first, back.second);
     return 0;
 }
 
@@ -431,10 +498,37 @@ core::Task<void> Http3Connection::dispatch_pending_requests() {
     }
 }
 
-core::Task<bool> Http3Connection::flush_outbound() {
-    if (!qconn_) co_return false;
+uint64_t Http3Connection::get_expiry() const noexcept {
+    if (!qconn_) return UINT64_MAX;
+    return ngtcp2_conn_get_expiry(qconn_);
+}
 
-    uint8_t out[1452];
+bool Http3Connection::handle_expiry() {
+    if (!qconn_ || closed_) return false;
+    uint64_t now = get_timestamp_ns();
+    int rv = ngtcp2_conn_handle_expiry(qconn_, now);
+    if (rv != 0) {
+        closed_ = true;
+        return false;
+    }
+    return flush_outbound();
+}
+
+void Http3Connection::shutdown() {
+    if (h3conn_ && http3_streams_setup_) {
+        nghttp3_conn_submit_shutdown_notice(h3conn_);
+    }
+}
+
+bool Http3Connection::flush_outbound() {
+    if (!qconn_) return false;
+
+    alignas(64) uint8_t out[65536];
+    size_t max_payload = ngtcp2_conn_get_max_tx_udp_payload_size(qconn_);
+    if (max_payload == 0 || max_payload > sizeof(out)) {
+        max_payload = 1452;
+    }
+
     ngtcp2_path_storage ps;
     ngtcp2_path_storage_init(&ps, reinterpret_cast<const ngtcp2_sockaddr*>(&local_addr_), local_addr_len_,
                              reinterpret_cast<const ngtcp2_sockaddr*>(&remote_addr_), remote_addr_len_, nullptr);
@@ -449,7 +543,7 @@ core::Task<bool> Http3Connection::flush_outbound() {
             veccnt = nghttp3_conn_writev_stream(h3conn_, &stream_id, &fin, vec, 16);
             if (veccnt < 0) {
                 closed_ = true;
-                co_return false;
+                return false;
             }
         }
 
@@ -460,11 +554,11 @@ core::Task<bool> Http3Connection::flush_outbound() {
 
         if (stream_id >= 0) {
             nwrite = ngtcp2_conn_writev_stream(
-                qconn_, &ps.path, &pi, out, sizeof(out), &pdatalen,
+                qconn_, &ps.path, &pi, out, max_payload, &pdatalen,
                 flags, stream_id, reinterpret_cast<const ngtcp2_vec*>(vec), static_cast<size_t>(veccnt), get_timestamp_ns());
         } else {
             nwrite = ngtcp2_conn_writev_stream(
-                qconn_, &ps.path, &pi, out, sizeof(out), &pdatalen,
+                qconn_, &ps.path, &pi, out, max_payload, &pdatalen,
                 NGTCP2_WRITE_STREAM_FLAG_NONE, -1, nullptr, 0, get_timestamp_ns());
         }
 
@@ -476,7 +570,7 @@ core::Task<bool> Http3Connection::flush_outbound() {
             int rv = nghttp3_conn_add_write_offset(h3conn_, stream_id, static_cast<size_t>(pdatalen));
             if (rv != 0) {
                 closed_ = true;
-                co_return false;
+                return false;
             }
         }
 
@@ -486,10 +580,10 @@ core::Task<bool> Http3Connection::flush_outbound() {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             }
-            co_return false;
+            return false;
         }
     }
-    co_return true;
+    return true;
 }
 
 core::Task<bool> Http3Connection::feed_datagram(std::span<const uint8_t> pkt) {
@@ -512,7 +606,7 @@ core::Task<bool> Http3Connection::feed_datagram(std::span<const uint8_t> pkt) {
     }
 
     co_await dispatch_pending_requests();
-    co_return co_await flush_outbound();
+    co_return flush_outbound();
 }
 
 bool Http3Connection::is_closed() const noexcept {
