@@ -51,39 +51,38 @@ void test_http3_server_live() {
     std::cout << "[Test 2] Testing live HTTP/3 Server with curl --http3... " << std::flush;
 
     const uint16_t port = 19443;
-    Server server;
-    server.listen(port)
-          .enable_tls()     // Generates in-memory self-signed certificate with ALPN h3/h2/http1.1
-          .enable_http3();  // Starts UDP QUIC listener on port 19443
+    Router router;
 
-    server.get("/health", [](Context& ctx) -> core::Task<void> {
+    router.get("/health", [](Context& ctx) {
         ctx.res().status(StatusCode::Ok).json(R"({"status":"ok","engine":"aegon-http3"})");
-        co_return;
     });
 
-    server.get("/users/:id", [](Context& ctx) -> core::Task<void> {
+    router.get("/users/:id", [](Context& ctx) {
         auto id_opt = ctx.req().param("id");
         if (!id_opt) {
             ctx.res().status(StatusCode::BadRequest).json(R"({"error":"missing id"})");
-            co_return;
+            return;
         }
         auto uuid_opt = data::UUID::from_string(*id_opt);
         if (!uuid_opt) {
             ctx.res().status(StatusCode::BadRequest).json(R"({"error":"invalid uuid"})");
-            co_return;
+            return;
         }
 
         std::string out = R"({"id":")" + uuid_opt->to_string() +
                           R"(","version":)" + std::to_string(uuid_opt->version()) +
                           R"(,"protocol":"HTTP/3"})";
         ctx.res().status(StatusCode::Ok).json(out);
-        co_return;
     });
 
-    server.post("/echo", [](Context& ctx) -> core::Task<void> {
+    router.post("/echo", [](Context& ctx) {
         ctx.res().status(StatusCode::Ok).text(std::string(ctx.req().body()));
-        co_return;
     });
+
+    Server server(std::move(router));
+    server.listen(port)
+          .enable_tls()     // Generates in-memory self-signed certificate with ALPN h3/h2/http1.1
+          .enable_http3();  // Starts UDP QUIC listener on port 19443
 
     // Run server in background thread
     std::thread server_thread([&server]() {

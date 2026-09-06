@@ -43,6 +43,11 @@ public:
     core::Task<bool> init();
 
     /**
+     * @brief Handle RFC 9113 §3.2 HTTP/1.1 to HTTP/2 upgrade on stream 1.
+     */
+    core::Task<bool> upgrade_request(Request req, std::string_view http2_settings);
+
+    /**
      * @brief Feed inbound wire data received from io_uring into nghttp2 state machine.
      */
     core::Task<bool> feed_data(const void* data, size_t len);

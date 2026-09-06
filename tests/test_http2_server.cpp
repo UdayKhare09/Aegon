@@ -17,29 +17,28 @@ int main() {
     std::cout << "=======================================================\n\n";
 
     constexpr uint16_t PORT = 19877;
-    Server server;
-    server.listen(PORT, "127.0.0.1");
+    Router router;
 
-    server.get("/health", [](Context& ctx) -> aegon::core::Task<void> {
-        ctx.json(R"({"status":"h2_healthy"})");
-        co_return;
+    router.get("/health", [](Context& ctx) {
+        ctx.res().json(R"({"status":"h2_healthy"})");
     });
 
-    server.get("/users/:id", [](Context& ctx) -> aegon::core::Task<void> {
+    router.get("/users/:id", [](Context& ctx) {
         auto id = ctx.param_uuid("id");
         if (!id) {
-            ctx.status(StatusCode::BadRequest).text("Invalid UUID parameter");
-            co_return;
+            ctx.res().status(StatusCode::BadRequest).text("Invalid UUID parameter");
+            return;
         }
-        ctx.uuid(*id);
-        co_return;
+        ctx.res().uuid(*id);
     });
 
-    server.post("/users", [](Context& ctx) -> aegon::core::Task<void> {
+    router.post("/users", [](Context& ctx) {
         UUID new_id = UUIDGenerator::v7();
-        ctx.status(StatusCode::Created).uuid(new_id);
-        co_return;
+        ctx.res().status(StatusCode::Created).uuid(new_id);
     });
+
+    Server server(std::move(router));
+    server.listen(PORT, "127.0.0.1");
 
     std::thread server_thread([&]() {
         server.run();

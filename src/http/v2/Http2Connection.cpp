@@ -223,6 +223,69 @@ core::Task<bool> Http2Connection::init() {
     co_return co_await flush_outbound();
 }
 
+namespace {
+std::vector<uint8_t> base64url_decode(std::string_view in) {
+    std::string s(in);
+    for (char& c : s) {
+        if (c == '-') c = '+';
+        else if (c == '_') c = '/';
+    }
+    while (s.size() % 4 != 0) {
+        s.push_back('=');
+    }
+    auto decode_char = [](char c) -> int {
+        if (c >= 'A' && c <= 'Z') return c - 'A';
+        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+        if (c >= '0' && c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return -1;
+    };
+    std::vector<uint8_t> out;
+    out.reserve(s.size() * 3 / 4);
+    for (size_t i = 0; i + 3 < s.size(); i += 4) {
+        int a = decode_char(s[i]);
+        int b = decode_char(s[i + 1]);
+        int c = (s[i + 2] == '=') ? 0 : decode_char(s[i + 2]);
+        int d = (s[i + 3] == '=') ? 0 : decode_char(s[i + 3]);
+        if (a < 0 || b < 0) break;
+        out.push_back(static_cast<uint8_t>((a << 2) | (b >> 4)));
+        if (s[i + 2] != '=') {
+            out.push_back(static_cast<uint8_t>(((b & 0xf) << 4) | (c >> 2)));
+        }
+        if (s[i + 3] != '=') {
+            out.push_back(static_cast<uint8_t>(((c & 0x3) << 6) | d));
+        }
+    }
+    return out;
+}
+} // anonymous namespace
+
+core::Task<bool> Http2Connection::upgrade_request(Request req, std::string_view http2_settings) {
+    auto settings_bin = base64url_decode(http2_settings);
+    int rv = nghttp2_session_upgrade2(session_, settings_bin.data(), settings_bin.size(),
+                                      req.method() == Method::HEAD ? 1 : 0, nullptr);
+    if (rv != 0) {
+        co_return false;
+    }
+
+    auto* stream = get_or_create_stream(1);
+    stream->req = std::move(req);
+
+    auto match_res = router_.match(stream->req);
+    if (match_res.route_found && match_res.handler) {
+        Context ctx(stream->req, stream->res, user_state_);
+        co_await (*match_res.handler)(ctx);
+    } else if (match_res.method_not_allowed) {
+        stream->res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
+    } else {
+        stream->res.status(StatusCode::NotFound).text("Not Found");
+    }
+
+    submit_response(stream);
+    co_return co_await flush_outbound();
+}
+
 core::Task<void> Http2Connection::dispatch_pending_requests() {
     if (pending_dispatch_.empty()) co_return;
 

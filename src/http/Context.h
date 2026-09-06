@@ -6,10 +6,10 @@
 namespace aegon::http {
 
 /**
- * @brief Zero-overhead compile-time Context passed to all fluent route handlers.
+ * @brief Zero-overhead compile-time Context passed to all route handlers.
  *
- * Provides direct access to request data, response builder, route parameters,
- * SIMD UUID extraction, and typed user state / database connection pool.
+ * Provides direct access to inbound request data, response builder, route parameters,
+ * SIMD UUID extraction, and typed user state / dependency injection.
  */
 class Context {
 public:
@@ -23,7 +23,7 @@ public:
     [[nodiscard]] Response& res() noexcept { return res_; }
     [[nodiscard]] const Response& res() const noexcept { return res_; }
 
-    // Fluent helpers mapping to Request
+    // Inbound Request inspection helpers
     [[nodiscard]] std::string_view path() const noexcept { return req_.path(); }
     [[nodiscard]] Method method() const noexcept { return req_.method(); }
     [[nodiscard]] std::string_view body() const noexcept { return req_.body(); }
@@ -42,42 +42,6 @@ public:
 
     [[nodiscard]] std::optional<std::string_view> header(std::string_view key) const noexcept {
         return req_.headers().get(key);
-    }
-
-    // Fluent helpers mapping to Response
-    Context& status(StatusCode code) noexcept {
-        res_.status(code);
-        return *this;
-    }
-
-    Context& status(uint16_t code) noexcept {
-        res_.status(code);
-        return *this;
-    }
-
-    Context& header(std::string_view name, std::string_view value) {
-        res_.header(name, value);
-        return *this;
-    }
-
-    Context& text(std::string_view t) {
-        res_.text(t);
-        return *this;
-    }
-
-    Context& json(std::string_view j) {
-        res_.json(j);
-        return *this;
-    }
-
-    Context& html(std::string_view h) {
-        res_.html(h);
-        return *this;
-    }
-
-    Context& uuid(const aegon::data::UUID& id) {
-        res_.uuid(id);
-        return *this;
     }
 
     // Typed user state / database connection pool accessor (zero-cost DI)

@@ -14,6 +14,7 @@
 namespace aegon::http {
 
 Server::Server() = default;
+Server::Server(Router router) : router_(std::move(router)) {}
 Server::~Server() = default;
 
 Server& Server::enable_tls(const std::string& cert_file, const std::string& key_file) {
@@ -65,6 +66,46 @@ int Server::create_listen_socket() {
 core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data) {
     v2::Http2Connection h2(loop, client_fd, router_, user_state_);
     bool ok = co_await h2.init();
+    if (!ok) {
+        (void)(co_await loop.ring().close(client_fd));
+        co_return;
+    }
+
+    if (!initial_data.empty()) {
+        ok = co_await h2.feed_data(initial_data.data(), initial_data.size());
+        if (!ok) {
+            (void)(co_await loop.ring().close(client_fd));
+            co_return;
+        }
+    }
+
+    while (running_ && !h2.is_closed()) {
+        auto recv_res = co_await loop.ring().recv_multishot(client_fd, loop.buffer_pool().bgid());
+        if (recv_res.bytes <= 0) {
+            break;
+        }
+
+        auto buf_slice = loop.buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
+        ok = co_await h2.feed_data(buf_slice.data(), buf_slice.size());
+        loop.buffer_pool().return_buffer(recv_res.bid);
+
+        if (!ok) {
+            break;
+        }
+    }
+
+    (void)(co_await loop.ring().close(client_fd));
+}
+
+core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings, std::string initial_data) {
+    v2::Http2Connection h2(loop, client_fd, router_, user_state_);
+    bool ok = co_await h2.init();
+    if (!ok) {
+        (void)(co_await loop.ring().close(client_fd));
+        co_return;
+    }
+
+    ok = co_await h2.upgrade_request(std::move(req), http2_settings);
     if (!ok) {
         (void)(co_await loop.ring().close(client_fd));
         co_return;
@@ -281,7 +322,8 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 "Upgrade: h2c\r\n\r\n";
             (void)(co_await loop.ring().send(client_fd, upgrade_res));
             req_accum.erase(0, bytes_consumed);
-            co_await handle_http2_connection(loop, client_fd, std::move(req_accum));
+            std::string h2_settings = std::string(req.headers().get("HTTP2-Settings").value_or(""));
+            co_await handle_http2_upgrade(loop, client_fd, std::move(req), std::move(h2_settings), std::move(req_accum));
             co_return;
         }
 

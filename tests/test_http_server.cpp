@@ -23,7 +23,7 @@ void test_http_parser_and_router() {
         auto id = ctx.param_uuid("id");
         assert(id.has_value());
         captured_uuid = *id;
-        ctx.uuid(*id);
+        ctx.res().uuid(*id);
         co_return;
     });
 
@@ -61,45 +61,42 @@ void test_http_parser_and_router() {
     assert(out.find("200 OK") != std::string_view::npos);
     assert(out.find("550e8400-e29b-41d4-a716-446655440000") != std::string_view::npos);
 
-    std::cout << "  -> PASS: Http1Parser, Router parameter extraction, and UUID binding verified.\n";
+    std::cout << "  -> PASS: Path matching, SIMD UUID extraction and HTTP/1 serialization verified.\n";
 }
 
 void test_live_server_loopback() {
     std::cout << "[TEST 2] Testing live Server over loopback TCP with fluent endpoints...\n";
 
-    Server server;
-    server.listen(19876, "127.0.0.1");
+    Router router;
 
-    server.get("/health", [](Context& ctx) -> aegon::core::Task<void> {
-        ctx.json(R"({"status":"healthy"})");
-        co_return;
+    router.get("/health", [](Context& ctx) {
+        ctx.res().json(R"({"status":"healthy"})");
     });
 
-    server.get("/users/:id", [](Context& ctx) -> aegon::core::Task<void> {
+    router.get("/users/:id", [](Context& ctx) {
         auto id = ctx.param_uuid("id");
         if (!id) {
-            ctx.status(StatusCode::BadRequest).text("Invalid UUID parameter");
-            co_return;
+            ctx.res().status(StatusCode::BadRequest).text("Invalid UUID parameter");
+            return;
         }
-        ctx.uuid(*id);
-        co_return;
+        ctx.res().uuid(*id);
     });
 
-    server.post("/users", [](Context& ctx) -> aegon::core::Task<void> {
+    router.post("/users", [](Context& ctx) {
         UUID new_user_id = UUIDGenerator::v7();
-        ctx.status(StatusCode::Created).uuid(new_user_id);
-        co_return;
+        ctx.res().status(StatusCode::Created).uuid(new_user_id);
     });
 
-    server.post("/echo", [](Context& ctx) -> aegon::core::Task<void> {
-        ctx.text(ctx.body());
-        co_return;
+    router.post("/echo", [](Context& ctx) {
+        ctx.res().text(ctx.body());
     });
 
-    server.get("/stream", [](Context& ctx) -> aegon::core::Task<void> {
+    router.get("/stream", [](Context& ctx) {
         ctx.res().chunked().text("Chunked Streaming Data");
-        co_return;
     });
+
+    Server server(std::move(router));
+    server.listen(19876, "127.0.0.1");
 
     std::thread server_thread([&]() {
         server.run();

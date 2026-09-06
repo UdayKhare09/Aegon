@@ -218,30 +218,29 @@ void test_live_http3_server() {
     std::cout << "[Test 4] Live HTTP/3 Server Multi-Stream & Alt-Svc Negotiation...\n";
 
     uint16_t port = 19444;
-    Server server;
-    server.listen(port);
-    server.enable_tls();
-    server.enable_http3(true);
+    Router router;
 
-    server.get("/health", [](Context& ctx) -> core::Task<void> {
+    router.get("/health", [](Context& ctx) {
         ctx.res().json(R"({"status":"healthy","protocol":"HTTP/3","engine":"aegon-http3"})");
-        co_return;
     });
 
-    server.get("/users/:id", [](Context& ctx) -> core::Task<void> {
+    router.get("/users/:id", [](Context& ctx) {
         auto user_id_opt = ctx.param_uuid("id");
         if (!user_id_opt) {
             ctx.res().status(StatusCode::BadRequest).text("Invalid UUID");
-            co_return;
+            return;
         }
         ctx.res().json(R"({"user_id":")" + user_id_opt->to_string() + R"(","protocol":"HTTP/3"})");
-        co_return;
     });
 
-    server.post("/echo", [](Context& ctx) -> core::Task<void> {
+    router.post("/echo", [](Context& ctx) {
         ctx.res().text(ctx.req().body());
-        co_return;
     });
+
+    Server server(std::move(router));
+    server.listen(port);
+    server.enable_tls();
+    server.enable_http3(true);
 
     std::thread server_thread([&server]() {
         server.run();

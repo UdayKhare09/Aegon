@@ -1,19 +1,18 @@
 #pragma once
 
 #include "http/Router.h"
+#include "http/tls/TlsContext.h"
+#include "http/v3/Http3Server.h"
 #include "core/EventLoop.h"
+#include "core/Task.h"
 #include <string>
 #include <string_view>
+#include <memory>
 #include <vector>
 #include <thread>
 #include <atomic>
-#include <memory>
 
 namespace aegon::http {
-
-namespace tls {
-class TlsContext;
-}
 
 namespace v3 {
 class Http3Server;
@@ -22,33 +21,24 @@ class Http3Server;
 class Server {
 public:
     Server();
+    explicit Server(Router router);
     ~Server();
 
-    // Fluent routing methods
-    Server& get(std::string_view pattern, Handler handler) {
-        router_.get(pattern, std::move(handler));
+    Server(Server&&) noexcept = default;
+    Server& operator=(Server&&) noexcept = default;
+    Server(const Server&) = delete;
+    Server& operator=(const Server&) = delete;
+
+    /**
+     * @brief Sets or updates the Router instance.
+     */
+    Server& set_router(Router router) {
+        router_ = std::move(router);
         return *this;
     }
 
-    Server& post(std::string_view pattern, Handler handler) {
-        router_.post(pattern, std::move(handler));
-        return *this;
-    }
-
-    Server& put(std::string_view pattern, Handler handler) {
-        router_.put(pattern, std::move(handler));
-        return *this;
-    }
-
-    Server& del(std::string_view pattern, Handler handler) {
-        router_.del(pattern, std::move(handler));
-        return *this;
-    }
-
-    Server& patch(std::string_view pattern, Handler handler) {
-        router_.patch(pattern, std::move(handler));
-        return *this;
-    }
+    [[nodiscard]] const Router& router() const noexcept { return router_; }
+    [[nodiscard]] Router& router() noexcept { return router_; }
 
     // Dependency injection / shared application state
     Server& set_state(void* state) noexcept {
@@ -78,16 +68,18 @@ public:
     // Run thread-per-core shared-nothing event loop cluster
     void run(size_t threads);
 
+    // Stop server
     void stop();
 
-    [[nodiscard]] const Router& router() const noexcept { return router_; }
     [[nodiscard]] uint16_t port() const noexcept { return port_; }
+    [[nodiscard]] std::string_view host() const noexcept { return host_; }
     [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
     [[nodiscard]] bool is_http3_enabled() const noexcept { return http3_enabled_; }
 
 private:
     core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
     core::Task<void> handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data);
+    core::Task<void> handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings, std::string initial_data);
     core::Task<void> handle_tls_connection(core::EventLoop& loop, int client_fd);
     core::Task<void> accept_loop(core::EventLoop& loop, int listen_fd);
     int create_listen_socket();
@@ -106,4 +98,3 @@ private:
 };
 
 } // namespace aegon::http
-

@@ -56,6 +56,7 @@ target_link_libraries(aegon_core PUBLIC
 
 # HTTP Server and Routing library
 add_library(aegon_http
+    src/http/RadixTree.cpp
     src/http/Router.cpp
     src/http/Server.cpp
     src/http/v2/Http2Connection.cpp
@@ -115,6 +116,11 @@ add_executable(test_http3_compliance
     tests/test_http3_compliance.cpp
 )
 target_link_libraries(test_http3_compliance PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_radix_router
+    tests/test_radix_router.cpp
+)
+target_link_libraries(test_radix_router PRIVATE aegon_http aegon_core aegon_uuid)
 
 
 
