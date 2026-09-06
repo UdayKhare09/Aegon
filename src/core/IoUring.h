@@ -22,10 +22,15 @@ struct IoAwaiter {
     int32_t result{0};
     uint32_t cqe_flags{0};
 
+    virtual ~IoAwaiter() = default;
+
     [[nodiscard]] bool await_ready() const noexcept { return false; }
+
+    virtual void submit() noexcept = 0;
 
     inline void await_suspend(std::coroutine_handle<> h) noexcept {
         continuation = h;
+        submit();
     }
 };
 
@@ -77,7 +82,7 @@ public:
 
         MultishotAcceptAwaiter(IoUring& r, int fd) noexcept : ring(r), listen_fd(fd) {}
 
-        void submit() noexcept;
+        void submit() noexcept override;
         [[nodiscard]] AcceptResult await_resume() noexcept;
     };
 
@@ -90,7 +95,7 @@ public:
         MultishotRecvAwaiter(IoUring& r, int fd, uint16_t b) noexcept 
             : ring(r), socket_fd(fd), bgid(b) {}
 
-        void submit() noexcept;
+        void submit() noexcept override;
         [[nodiscard]] RecvResult await_resume() noexcept;
     };
 
@@ -104,7 +109,7 @@ public:
         SendAwaiter(IoUring& r, int fd, const void* b, size_t l) noexcept 
             : ring(r), socket_fd(fd), buf(b), len(l) {}
 
-        void submit() noexcept;
+        void submit() noexcept override;
         [[nodiscard]] int await_resume() noexcept;
     };
 
@@ -115,39 +120,46 @@ public:
 
         CloseAwaiter(IoUring& r, int f) noexcept : ring(r), fd(f) {}
 
-        void submit() noexcept;
+        void submit() noexcept override;
+        [[nodiscard]] int await_resume() noexcept;
+    };
+
+    // Async Recvmsg (for UDP datagrams)
+    struct RecvmsgAwaiter : IoAwaiter {
+        IoUring& ring;
+        int socket_fd;
+        msghdr* msg;
+
+        RecvmsgAwaiter(IoUring& r, int fd, msghdr* m) noexcept
+            : ring(r), socket_fd(fd), msg(m) {}
+
+        void submit() noexcept override;
         [[nodiscard]] int await_resume() noexcept;
     };
 
     // Helper builders
     [[nodiscard]] MultishotAcceptAwaiter accept(int listen_fd) noexcept {
-        MultishotAcceptAwaiter awaiter{*this, listen_fd};
-        awaiter.submit();
-        return awaiter;
+        return MultishotAcceptAwaiter{*this, listen_fd};
     }
 
     [[nodiscard]] MultishotRecvAwaiter recv_multishot(int fd, uint16_t bgid) noexcept {
-        MultishotRecvAwaiter awaiter{*this, fd, bgid};
-        awaiter.submit();
-        return awaiter;
+        return MultishotRecvAwaiter{*this, fd, bgid};
     }
 
     [[nodiscard]] SendAwaiter send(int fd, std::span<const uint8_t> data) noexcept {
-        SendAwaiter awaiter{*this, fd, data.data(), data.size()};
-        awaiter.submit();
-        return awaiter;
+        return SendAwaiter{*this, fd, data.data(), data.size()};
     }
 
     [[nodiscard]] SendAwaiter send(int fd, std::string_view data) noexcept {
-        SendAwaiter awaiter{*this, fd, data.data(), data.size()};
-        awaiter.submit();
-        return awaiter;
+        return SendAwaiter{*this, fd, data.data(), data.size()};
     }
 
     [[nodiscard]] CloseAwaiter close(int fd) noexcept {
-        CloseAwaiter awaiter{*this, fd};
-        awaiter.submit();
-        return awaiter;
+        return CloseAwaiter{*this, fd};
+    }
+
+    [[nodiscard]] RecvmsgAwaiter recvmsg(int fd, msghdr* msg) noexcept {
+        return RecvmsgAwaiter{*this, fd, msg};
     }
 
     // Process all pending completion queue events (CQEs) and resume awaiting coroutines

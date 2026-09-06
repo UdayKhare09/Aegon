@@ -9,8 +9,8 @@ namespace aegon::http::tls {
 
 namespace {
 
-// ALPN wire format: [len][proto][len][proto] -> \x02h2\x08http/1.1
-static const unsigned char SERVER_ALPN[] = "\x02h2\x08http/1.1";
+// ALPN wire format: [len][proto][len][proto] -> \x02h3\x02h2\x08http/1.1
+static const unsigned char SERVER_ALPN[] = "\x02h3\x02h2\x08http/1.1";
 static const unsigned int SERVER_ALPN_LEN = sizeof(SERVER_ALPN) - 1;
 
 int alpn_select_cb(SSL*, const unsigned char** out, unsigned char* outlen,

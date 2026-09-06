@@ -61,6 +61,8 @@ add_library(aegon_http
     src/http/v2/Http2Connection.cpp
     src/http/tls/TlsContext.cpp
     src/http/tls/TlsStream.cpp
+    src/http/v3/Http3Connection.cpp
+    src/http/v3/Http3Server.cpp
 )
 
 target_include_directories(aegon_http PUBLIC
@@ -71,6 +73,9 @@ target_link_libraries(aegon_http PUBLIC
     aegon_core
     aegon_uuid
     nghttp2
+    ngtcp2_crypto_ossl
+    ngtcp2
+    nghttp3
     ssl
     crypto
 )
@@ -100,6 +105,11 @@ add_executable(test_tls_server
     tests/test_tls_server.cpp
 )
 target_link_libraries(test_tls_server PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_http3_server
+    tests/test_http3_server.cpp
+)
+target_link_libraries(test_http3_server PRIVATE aegon_http aegon_core aegon_uuid)
 
 
 

@@ -15,6 +15,10 @@ namespace tls {
 class TlsContext;
 }
 
+namespace v3 {
+class Http3Server;
+}
+
 class Server {
 public:
     Server();
@@ -62,6 +66,12 @@ public:
         return *this;
     }
 
+    // Enable/disable HTTP/3 over QUIC
+    Server& enable_http3(bool enable = true) noexcept {
+        http3_enabled_ = enable;
+        return *this;
+    }
+
     // Run single-threaded event loop
     void run();
 
@@ -73,6 +83,7 @@ public:
     [[nodiscard]] const Router& router() const noexcept { return router_; }
     [[nodiscard]] uint16_t port() const noexcept { return port_; }
     [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
+    [[nodiscard]] bool is_http3_enabled() const noexcept { return http3_enabled_; }
 
 private:
     core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
@@ -89,7 +100,9 @@ private:
     std::vector<std::thread> workers_;
 
     bool tls_enabled_{false};
+    bool http3_enabled_{true}; // Default to enabled when TLS is used
     std::unique_ptr<tls::TlsContext> tls_ctx_;
+    std::unique_ptr<v3::Http3Server> h3_server_;
 };
 
 } // namespace aegon::http

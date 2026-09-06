@@ -46,6 +46,7 @@ int main() {
         // Test buffer retrieval
         auto slice = pool.get_buffer(0, 100);
         assert(slice.size() == 100);
+        (void)slice;
         pool.return_buffer(0);
         std::cout << "  -> PASS: BufferPool (PBUF_RING) created and recycled cleanly.\n";
     }

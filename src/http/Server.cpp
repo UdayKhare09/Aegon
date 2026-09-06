@@ -4,6 +4,7 @@
 #include "http/v2/Http2Frame.h"
 #include "http/tls/TlsContext.h"
 #include "http/tls/TlsStream.h"
+#include "http/v3/Http3Server.h"
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
@@ -195,6 +196,10 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
                 res.header("Connection", "close");
             }
 
+            if (http3_enabled_) {
+                res.header("alt-svc", "h3=\":" + std::to_string(port_) + "\"; ma=86400");
+            }
+
             std::string out;
             res.serialize_http1(out);
             (void)(co_await tls_stream.write_plaintext(out.data(), out.size()));
@@ -336,8 +341,19 @@ void Server::run() {
 
     core::EventLoop loop(4096, 512, 4096);
     loop.spawn(accept_loop(loop, listen_fd));
+
+    if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
+        h3_server_ = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), user_state_);
+        if (h3_server_->start()) {
+            loop.spawn(h3_server_->run_receive_loop());
+        }
+    }
+
     loop.run();
 
+    if (h3_server_) {
+        h3_server_->stop();
+    }
     close(listen_fd);
 }
 
@@ -352,7 +368,20 @@ void Server::run(size_t threads) {
                 core::EventLoop loop(4096, 512, 4096);
                 loop.pin_to_core(i);
                 loop.spawn(accept_loop(loop, listen_fd));
+
+                std::unique_ptr<v3::Http3Server> h3_worker;
+                if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
+                    h3_worker = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), user_state_);
+                    if (h3_worker->start()) {
+                        loop.spawn(h3_worker->run_receive_loop());
+                    }
+                }
+
                 loop.run();
+
+                if (h3_worker) {
+                    h3_worker->stop();
+                }
                 close(listen_fd);
             } catch (const std::exception& e) {
                 std::cerr << "Worker thread " << i << " error: " << e.what() << "\n";
@@ -369,6 +398,9 @@ void Server::run(size_t threads) {
 
 void Server::stop() {
     running_ = false;
+    if (h3_server_) {
+        h3_server_->stop();
+    }
 }
 
 } // namespace aegon::http
