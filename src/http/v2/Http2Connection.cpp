@@ -1,0 +1,301 @@
+#include "http/v2/Http2Connection.h"
+#include <algorithm>
+#include <cstring>
+#include <iostream>
+
+namespace aegon::http::v2 {
+
+namespace {
+
+int on_header_cb(nghttp2_session*, const nghttp2_frame* frame,
+                 const uint8_t* name, size_t namelen,
+                 const uint8_t* value, size_t valuelen,
+                 uint8_t flags, void* user_data) {
+    return static_cast<Http2Connection*>(user_data)->on_header(
+        frame, name, namelen, value, valuelen, flags);
+}
+
+int on_data_chunk_recv_cb(nghttp2_session*, uint8_t flags,
+                          int32_t stream_id, const uint8_t* data,
+                          size_t len, void* user_data) {
+    return static_cast<Http2Connection*>(user_data)->on_data_chunk_recv(
+        flags, stream_id, data, len);
+}
+
+int on_frame_recv_cb(nghttp2_session*, const nghttp2_frame* frame, void* user_data) {
+    return static_cast<Http2Connection*>(user_data)->on_frame_recv(frame);
+}
+
+int on_stream_close_cb(nghttp2_session*, int32_t stream_id, uint32_t error_code, void* user_data) {
+    return static_cast<Http2Connection*>(user_data)->on_stream_close(stream_id, error_code);
+}
+
+ssize_t data_source_read_cb(nghttp2_session*, int32_t stream_id,
+                            uint8_t* buf, size_t length,
+                            uint32_t* data_flags,
+                            nghttp2_data_source*,
+                            void* user_data) {
+    return static_cast<Http2Connection*>(user_data)->on_data_source_read(
+        stream_id, buf, length, data_flags);
+}
+
+} // anonymous namespace
+
+Http2Connection::Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, void* user_state)
+    : loop_(loop), client_fd_(client_fd), router_(router), user_state_(user_state) {
+    nghttp2_session_callbacks* callbacks;
+    nghttp2_session_callbacks_new(&callbacks);
+
+    nghttp2_session_callbacks_set_on_header_callback(callbacks, on_header_cb);
+    nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks, on_data_chunk_recv_cb);
+    nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, on_frame_recv_cb);
+    nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, on_stream_close_cb);
+
+    nghttp2_session_server_new(&session_, callbacks, this);
+    nghttp2_session_callbacks_del(callbacks);
+}
+
+Http2Connection::~Http2Connection() {
+    if (session_) {
+        nghttp2_session_del(session_);
+        session_ = nullptr;
+    }
+}
+
+Http2Stream* Http2Connection::get_or_create_stream(int32_t stream_id) {
+    auto it = streams_.find(stream_id);
+    if (it == streams_.end()) {
+        auto stream = std::make_unique<Http2Stream>();
+        stream->stream_id = stream_id;
+        stream->req.set_version(HttpVersion::Http2);
+        auto* ptr = stream.get();
+        streams_.emplace(stream_id, std::move(stream));
+        return ptr;
+    }
+    return it->second.get();
+}
+
+int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, size_t namelen,
+                               const uint8_t* value, size_t valuelen, uint8_t) {
+    if (frame->hd.type != NGHTTP2_HEADERS || frame->headers.cat != NGHTTP2_HCAT_REQUEST) {
+        return 0;
+    }
+
+    auto* stream = get_or_create_stream(frame->hd.stream_id);
+    std::string_view n(reinterpret_cast<const char*>(name), namelen);
+    std::string_view v(reinterpret_cast<const char*>(value), valuelen);
+
+    if (n == ":method") {
+        stream->req.set_method(string_to_method(v));
+    } else if (n == ":path") {
+        size_t qmark = v.find('?');
+        if (qmark != std::string_view::npos) {
+            stream->path_storage.assign(v.data(), qmark);
+            stream->query_storage.assign(v.data() + qmark + 1, v.size() - qmark - 1);
+            stream->req.set_path(stream->path_storage);
+            stream->req.set_query(stream->query_storage);
+        } else {
+            stream->path_storage.assign(v.data(), v.size());
+            stream->query_storage.clear();
+            stream->req.set_path(stream->path_storage);
+            stream->req.set_query("");
+        }
+    } else if (n == ":authority") {
+        stream->header_storage.emplace_back("Host", std::string(v));
+        const auto& back = stream->header_storage.back();
+        stream->req.headers().add(back.first, back.second);
+    } else if (n.starts_with(':')) {
+        // Other pseudo headers (:scheme, etc.)
+    } else {
+        stream->header_storage.emplace_back(std::string(n), std::string(v));
+        const auto& back = stream->header_storage.back();
+        stream->req.headers().add(back.first, back.second);
+    }
+
+    return 0;
+}
+
+int Http2Connection::on_data_chunk_recv(uint8_t, int32_t stream_id, const uint8_t* data, size_t len) {
+    auto* stream = get_or_create_stream(stream_id);
+    stream->body_accum.append(reinterpret_cast<const char*>(data), len);
+    return 0;
+}
+
+int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
+    if (frame->hd.type == NGHTTP2_HEADERS) {
+        if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
+            auto* stream = get_or_create_stream(frame->hd.stream_id);
+            stream->request_complete = true;
+            pending_dispatch_.push_back(frame->hd.stream_id);
+        }
+    } else if (frame->hd.type == NGHTTP2_DATA) {
+        if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
+            auto* stream = get_or_create_stream(frame->hd.stream_id);
+            stream->request_complete = true;
+            pending_dispatch_.push_back(frame->hd.stream_id);
+        }
+    }
+    return 0;
+}
+
+int Http2Connection::on_stream_close(int32_t stream_id, uint32_t) {
+    streams_.erase(stream_id);
+    return 0;
+}
+
+ssize_t Http2Connection::on_data_source_read(int32_t stream_id, uint8_t* buf, size_t length, uint32_t* data_flags) {
+    auto it = streams_.find(stream_id);
+    if (it == streams_.end()) {
+        return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+    }
+
+    auto* stream = it->second.get();
+    std::string_view body = stream->res.body();
+    size_t available = (stream->body_offset < body.size()) ? (body.size() - stream->body_offset) : 0;
+    size_t to_copy = std::min(available, length);
+
+    if (to_copy > 0) {
+        std::memcpy(buf, body.data() + stream->body_offset, to_copy);
+        stream->body_offset += to_copy;
+    }
+
+    if (stream->body_offset >= body.size()) {
+        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+    }
+
+    return static_cast<ssize_t>(to_copy);
+}
+
+void Http2Connection::submit_response(Http2Stream* stream) {
+    std::string status_str = std::to_string(static_cast<uint16_t>(stream->res.status()));
+    std::string cl_str = std::to_string(stream->res.body().size());
+
+    std::vector<nghttp2_nv> nva;
+    nva.reserve(4 + stream->res.headers().size());
+
+    nva.push_back(nghttp2_nv{
+        .name = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(":status")),
+        .value = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(status_str.data())),
+        .namelen = 7,
+        .valuelen = status_str.size(),
+        .flags = NGHTTP2_NV_FLAG_NONE
+    });
+
+    if (!stream->res.headers().contains("content-length")) {
+        nva.push_back(nghttp2_nv{
+            .name = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>("content-length")),
+            .value = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(cl_str.data())),
+            .namelen = 14,
+            .valuelen = cl_str.size(),
+            .flags = NGHTTP2_NV_FLAG_NONE
+        });
+    }
+
+    for (const auto& h : stream->res.headers()) {
+        // HTTP/2 header names must be lowercase
+        nva.push_back(nghttp2_nv{
+            .name = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(h.name.data())),
+            .value = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(h.value.data())),
+            .namelen = h.name.size(),
+            .valuelen = h.value.size(),
+            .flags = NGHTTP2_NV_FLAG_NONE
+        });
+    }
+
+    nghttp2_data_provider prd;
+    prd.source.ptr = stream;
+    prd.read_callback = data_source_read_cb;
+
+    nghttp2_submit_response(session_, stream->stream_id, nva.data(), nva.size(), &prd);
+    stream->response_submitted = true;
+}
+
+core::Task<bool> Http2Connection::init() {
+    nghttp2_settings_entry iv[] = {
+        {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 256},
+        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 1048576}
+    };
+    int rv = nghttp2_submit_settings(session_, NGHTTP2_FLAG_NONE, iv, 2);
+    if (rv != 0) {
+        co_return false;
+    }
+    co_return co_await flush_outbound();
+}
+
+core::Task<void> Http2Connection::dispatch_pending_requests() {
+    if (pending_dispatch_.empty()) co_return;
+
+    auto ready = std::move(pending_dispatch_);
+    pending_dispatch_.clear();
+
+    for (int32_t sid : ready) {
+        auto it = streams_.find(sid);
+        if (it == streams_.end()) continue;
+        auto* stream = it->second.get();
+        if (stream->response_submitted) continue;
+
+        if (!stream->body_accum.empty()) {
+            stream->req.set_body(stream->body_accum);
+        }
+
+        auto match_res = router_.match(stream->req);
+        if (match_res.route_found && match_res.handler) {
+            Context ctx(stream->req, stream->res, user_state_);
+            co_await (*match_res.handler)(ctx);
+        } else if (match_res.method_not_allowed) {
+            stream->res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
+        } else {
+            stream->res.status(StatusCode::NotFound).text("Not Found");
+        }
+
+        submit_response(stream);
+    }
+
+    co_await flush_outbound();
+}
+
+core::Task<bool> Http2Connection::flush_outbound() {
+    while (nghttp2_session_want_write(session_)) {
+        const uint8_t* data = nullptr;
+        ssize_t len = nghttp2_session_mem_send(session_, &data);
+        if (len < 0) {
+            closed_ = true;
+            co_return false;
+        }
+        if (len == 0 || data == nullptr) {
+            break;
+        }
+
+        int sent = co_await loop_.ring().send(client_fd_, std::span<const uint8_t>(data, static_cast<size_t>(len)));
+        if (sent <= 0) {
+            closed_ = true;
+            co_return false;
+        }
+    }
+    co_return true;
+}
+
+core::Task<bool> Http2Connection::feed_data(const void* data, size_t len) {
+    ssize_t readlen = nghttp2_session_mem_recv(session_, reinterpret_cast<const uint8_t*>(data), len);
+    if (readlen < 0) {
+        closed_ = true;
+        co_return false;
+    }
+
+    co_await dispatch_pending_requests();
+    co_return co_await flush_outbound();
+}
+
+bool Http2Connection::wants_read() const noexcept {
+    return !closed_ && nghttp2_session_want_read(session_);
+}
+
+bool Http2Connection::wants_write() const noexcept {
+    return !closed_ && nghttp2_session_want_write(session_);
+}
+
+bool Http2Connection::is_closed() const noexcept {
+    return closed_;
+}
+
+} // namespace aegon::http::v2

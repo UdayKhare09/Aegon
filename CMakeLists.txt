@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(Aegon LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -28,7 +28,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     )
 endif()
 
-# Core library
+# UUID library
 add_library(aegon_uuid
     src/data/uuid/UUID.cpp
     src/data/uuid/UUIDGenerator.cpp
@@ -38,9 +38,59 @@ target_include_directories(aegon_uuid PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Test and Benchmark executable
+# Core Async io_uring library
+add_library(aegon_core
+    src/core/BufferPool.cpp
+    src/core/IoUring.cpp
+    src/core/EventLoop.cpp
+)
+
+target_include_directories(aegon_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(aegon_core PUBLIC
+    uring
+    pthread
+)
+
+# HTTP Server and Routing library
+add_library(aegon_http
+    src/http/Router.cpp
+    src/http/Server.cpp
+    src/http/v2/Http2Connection.cpp
+)
+
+target_include_directories(aegon_http PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(aegon_http PUBLIC
+    aegon_core
+    aegon_uuid
+    nghttp2
+)
+
+# Test and Benchmark executables
 add_executable(test_uuid
     tests/test_uuid.cpp
 )
-
 target_link_libraries(test_uuid PRIVATE aegon_uuid)
+
+add_executable(test_async_core
+    tests/test_async_core.cpp
+)
+target_link_libraries(test_async_core PRIVATE aegon_core aegon_uuid)
+
+add_executable(test_http_server
+    tests/test_http_server.cpp
+)
+target_link_libraries(test_http_server PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_http2_server
+    tests/test_http2_server.cpp
+)
+target_link_libraries(test_http2_server PRIVATE aegon_http aegon_core aegon_uuid)
+
+
+

@@ -1,0 +1,54 @@
+#include "EventLoop.h"
+#include <pthread.h>
+#include <sched.h>
+#include <stdexcept>
+#include <algorithm>
+
+namespace aegon::core {
+
+EventLoop::EventLoop(uint32_t ring_entries, uint16_t pbuf_entries, size_t buffer_size)
+    : ring_(ring_entries),
+      buffer_pool_(ring_.raw_ring(), DEFAULT_BGID, pbuf_entries, buffer_size) {}
+
+void EventLoop::pin_to_core(int core_id) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(core_id, &cpuset);
+    int rc = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    if (rc != 0) {
+        throw std::system_error(rc, std::generic_category(), "pthread_setaffinity_np failed");
+    }
+}
+
+void EventLoop::spawn(Task<void> task) {
+    task.resume();
+    if (!task.is_ready()) {
+        tasks_.push_back(std::move(task));
+    }
+}
+
+void EventLoop::stop() noexcept {
+    running_ = false;
+}
+
+void EventLoop::run() {
+    running_ = true;
+
+    while (running_) {
+        // Clean up completed tasks
+        std::erase_if(tasks_, [](const Task<void>& t) { return t.is_ready(); });
+
+        // If no more tasks and no pending I/O, exit
+        if (tasks_.empty()) {
+            break;
+        }
+
+        // Wait for at least one completion event
+        ring_.submit_and_wait(1);
+
+        // Process all events and resume coroutines
+        ring_.process_completions();
+    }
+}
+
+} // namespace aegon::core
