@@ -41,8 +41,9 @@ ssize_t data_source_read_cb(nghttp2_session*, int32_t stream_id,
 
 } // anonymous namespace
 
-Http2Connection::Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, void* user_state)
-    : loop_(loop), client_fd_(client_fd), router_(router), user_state_(user_state) {
+Http2Connection::Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
+                                 void* user_state, OutputSender sender)
+    : loop_(loop), client_fd_(client_fd), router_(router), user_state_(user_state), sender_(std::move(sender)) {
     nghttp2_session_callbacks* callbacks;
     nghttp2_session_callbacks_new(&callbacks);
 
@@ -266,7 +267,13 @@ core::Task<bool> Http2Connection::flush_outbound() {
             break;
         }
 
-        int sent = co_await loop_.ring().send(client_fd_, std::span<const uint8_t>(data, static_cast<size_t>(len)));
+        int sent = 0;
+        if (sender_) {
+            sent = co_await sender_(std::span<const uint8_t>(data, static_cast<size_t>(len)));
+        } else {
+            sent = co_await loop_.ring().send(client_fd_, std::span<const uint8_t>(data, static_cast<size_t>(len)));
+        }
+
         if (sent <= 0) {
             closed_ = true;
             co_return false;

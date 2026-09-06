@@ -2,6 +2,8 @@
 #include "http/v1/Http1Parser.h"
 #include "http/v2/Http2Connection.h"
 #include "http/v2/Http2Frame.h"
+#include "http/tls/TlsContext.h"
+#include "http/tls/TlsStream.h"
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
@@ -9,6 +11,24 @@
 #include <iostream>
 
 namespace aegon::http {
+
+Server::Server() = default;
+Server::~Server() = default;
+
+Server& Server::enable_tls(const std::string& cert_file, const std::string& key_file) {
+    tls_ctx_ = std::make_unique<tls::TlsContext>();
+    if (!cert_file.empty() && !key_file.empty()) {
+        if (!tls_ctx_->load_cert_and_key(cert_file, key_file)) {
+            throw std::runtime_error("Failed to load TLS certificate and key from files: " + cert_file);
+        }
+    } else {
+        if (!tls_ctx_->generate_self_signed("localhost")) {
+            throw std::runtime_error("Failed to generate in-memory self-signed TLS certificate");
+        }
+    }
+    tls_enabled_ = true;
+    return *this;
+}
 
 int Server::create_listen_socket() {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -75,7 +95,127 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
     (void)(co_await loop.ring().close(client_fd));
 }
 
+core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client_fd) {
+    tls::TlsStream tls_stream(loop, client_fd, tls_ctx_->native_handle());
+    bool ok = co_await tls_stream.handshake();
+    if (!ok) {
+        (void)(co_await loop.ring().close(client_fd));
+        co_return;
+    }
+
+    std::string_view alpn = tls_stream.alpn();
+
+    if (alpn == "h2") {
+        // HTTP/2 over TLS (ALPN negotiated "h2")
+        v2::OutputSender sender = [&](std::span<const uint8_t> data) -> core::Task<int> {
+            co_return co_await tls_stream.write_plaintext(data.data(), data.size());
+        };
+
+        v2::Http2Connection h2(loop, client_fd, router_, user_state_, std::move(sender));
+        ok = co_await h2.init();
+        if (!ok) {
+            (void)(co_await loop.ring().close(client_fd));
+            co_return;
+        }
+
+        char read_buf[4096];
+        while (running_ && !h2.is_closed()) {
+            int n = co_await tls_stream.read_plaintext(read_buf, sizeof(read_buf));
+            if (n <= 0) break;
+
+            ok = co_await h2.feed_data(read_buf, static_cast<size_t>(n));
+            if (!ok) break;
+        }
+    } else {
+        // HTTP/1.1 over TLS (ALPN "http/1.1" or fallback)
+        std::string req_accum;
+        req_accum.reserve(4096);
+        char read_buf[4096];
+
+        while (running_) {
+            int n = co_await tls_stream.read_plaintext(read_buf, sizeof(read_buf));
+            if (n <= 0) break;
+
+            req_accum.append(read_buf, static_cast<size_t>(n));
+
+            Request req;
+            size_t bytes_consumed = 0;
+            auto status = v1::Http1Parser::parse(req_accum, req, bytes_consumed);
+
+            if (status == v1::ParseStatus::NeedMoreData) {
+                if (req.expect_continue()) {
+                    req.set_expect_continue(false);
+                    std::string cont = "HTTP/1.1 100 Continue\r\n\r\n";
+                    (void)(co_await tls_stream.write_plaintext(cont.data(), cont.size()));
+                }
+                continue;
+            }
+
+            if (status == v1::ParseStatus::Error) {
+                Response bad_res;
+                bad_res.status(StatusCode::BadRequest).text("Bad Request");
+                std::string out;
+                bad_res.serialize_http1(out);
+                (void)(co_await tls_stream.write_plaintext(out.data(), out.size()));
+                break;
+            }
+
+            if (status == v1::ParseStatus::NotImplemented) {
+                Response ni_res;
+                ni_res.status(StatusCode::NotImplemented).text("Not Implemented");
+                std::string out;
+                ni_res.serialize_http1(out);
+                (void)(co_await tls_stream.write_plaintext(out.data(), out.size()));
+                break;
+            }
+
+            Response res;
+            auto match_res = router_.match(req);
+
+            if (match_res.route_found && match_res.handler) {
+                Context ctx(req, res, user_state_);
+                co_await (*match_res.handler)(ctx);
+            } else if (match_res.method_not_allowed) {
+                res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
+            } else {
+                res.status(StatusCode::NotFound).text("Not Found");
+            }
+
+            bool keep_alive = true;
+            if (auto conn_hdr = req.headers().get("Connection")) {
+                if (iequals(*conn_hdr, "close")) {
+                    keep_alive = false;
+                }
+            }
+            if (req.version() == HttpVersion::Http1_0 && !req.headers().contains("Connection")) {
+                keep_alive = false;
+            }
+
+            if (!keep_alive) {
+                res.header("Connection", "close");
+            }
+
+            std::string out;
+            res.serialize_http1(out);
+            (void)(co_await tls_stream.write_plaintext(out.data(), out.size()));
+
+            req_accum.erase(0, bytes_consumed);
+
+            if (!keep_alive) {
+                break;
+            }
+        }
+    }
+
+    (void)(co_await loop.ring().close(client_fd));
+}
+
 core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd) {
+    if (tls_enabled_ && tls_ctx_) {
+        co_await handle_tls_connection(loop, client_fd);
+        co_return;
+    }
+
     std::string req_accum;
     req_accum.reserve(4096);
     bool first_packet = true;

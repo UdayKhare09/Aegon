@@ -26,9 +26,12 @@ struct Http2Stream {
     bool response_submitted{false};
 };
 
+using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
+
 class Http2Connection {
 public:
-    Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, void* user_state = nullptr);
+    Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
+                    void* user_state = nullptr, OutputSender sender = nullptr);
     ~Http2Connection();
 
     Http2Connection(const Http2Connection&) = delete;
@@ -78,6 +81,7 @@ private:
     nghttp2_session* session_{nullptr};
     std::unordered_map<int32_t, std::unique_ptr<Http2Stream>> streams_;
     std::vector<int32_t> pending_dispatch_;
+    OutputSender sender_{nullptr};
     bool closed_{false};
 };
 

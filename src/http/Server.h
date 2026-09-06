@@ -7,13 +7,18 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <memory>
 
 namespace aegon::http {
 
+namespace tls {
+class TlsContext;
+}
+
 class Server {
 public:
-    Server() = default;
-    ~Server() = default;
+    Server();
+    ~Server();
 
     // Fluent routing methods
     Server& get(std::string_view pattern, Handler handler) {
@@ -47,6 +52,9 @@ public:
         return *this;
     }
 
+    // Enable TLS (HTTPS) with ALPN (h2 and http/1.1)
+    Server& enable_tls(const std::string& cert_file = "", const std::string& key_file = "");
+
     // Configure listen address and port
     Server& listen(uint16_t port, std::string_view host = "0.0.0.0") {
         port_ = port;
@@ -64,10 +72,12 @@ public:
 
     [[nodiscard]] const Router& router() const noexcept { return router_; }
     [[nodiscard]] uint16_t port() const noexcept { return port_; }
+    [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
 
 private:
     core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
     core::Task<void> handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data);
+    core::Task<void> handle_tls_connection(core::EventLoop& loop, int client_fd);
     core::Task<void> accept_loop(core::EventLoop& loop, int listen_fd);
     int create_listen_socket();
 
@@ -77,6 +87,10 @@ private:
     void* user_state_{nullptr};
     std::atomic<bool> running_{false};
     std::vector<std::thread> workers_;
+
+    bool tls_enabled_{false};
+    std::unique_ptr<tls::TlsContext> tls_ctx_;
 };
 
 } // namespace aegon::http
+
