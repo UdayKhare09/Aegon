@@ -64,101 +64,10 @@ alignas(64) const uint8_t VBMI_PARSE_PERMUTE[64] = {
 
 } // anonymous namespace
 
-void UUID::to_chars(char* out) const noexcept {
-#if defined(__AVX512VBMI__) && defined(__AVX512F__) && defined(__AVX512BW__)
-    // -------------------------------------------------------------
-    // Tier 1: AVX-512 VBMI (AMD Zen 4/5, Intel Xeon Scalable)
-    // -------------------------------------------------------------
-    __m128i raw = _mm_load_si128(reinterpret_cast<const __m128i*>(data.data()));
-
-    __m128i mask_0f = _mm_set1_epi8(0x0F);
-    __m128i hi_nibbles = _mm_and_si128(_mm_srli_epi16(raw, 4), mask_0f);
-    __m128i lo_nibbles = _mm_and_si128(raw, mask_0f);
-
-    __m128i nibbles_lo = _mm_unpacklo_epi8(hi_nibbles, lo_nibbles);
-    __m128i nibbles_hi = _mm_unpackhi_epi8(hi_nibbles, lo_nibbles);
-
-    __m128i hex_lut = _mm_load_si128(reinterpret_cast<const __m128i*>(HEX_DIGITS_LOWER));
-    __m128i ascii_lo = _mm_shuffle_epi8(hex_lut, nibbles_lo);
-    __m128i ascii_hi = _mm_shuffle_epi8(hex_lut, nibbles_hi);
-
-    __m256i ascii_256 = _mm256_set_m128i(ascii_hi, ascii_lo);
-    __m512i ascii_512 = _mm512_castsi256_si512(ascii_256);
-    ascii_512 = _mm512_mask_set1_epi8(ascii_512, 1ULL << 32, '-');
-
-    __m512i permute_idx = _mm512_load_si512(reinterpret_cast<const __m512i*>(VBMI_FORMAT_PERMUTE));
-    __m512i formatted = _mm512_permutexvar_epi8(permute_idx, ascii_512);
-
-    const uint64_t mask_36 = (1ULL << 36) - 1;
-    _mm512_mask_storeu_epi8(out, mask_36, formatted);
-
-#elif defined(__SSSE3__)
-    // -------------------------------------------------------------
-    // Tier 2: SSSE3 / AVX2 (Intel Haswell+, Alder/Raptor Lake, Zen 1/2/3)
-    // -------------------------------------------------------------
-    __m128i raw = _mm_load_si128(reinterpret_cast<const __m128i*>(data.data()));
-    __m128i mask_0f = _mm_set1_epi8(0x0F);
-    __m128i hi = _mm_and_si128(_mm_srli_epi16(raw, 4), mask_0f);
-    __m128i lo = _mm_and_si128(raw, mask_0f);
-
-    __m128i nibbles_0 = _mm_unpacklo_epi8(hi, lo);
-    __m128i nibbles_1 = _mm_unpackhi_epi8(hi, lo);
-
-    __m128i hex_lut = _mm_load_si128(reinterpret_cast<const __m128i*>(HEX_DIGITS_LOWER));
-    __m128i ascii_0 = _mm_shuffle_epi8(hex_lut, nibbles_0);
-    __m128i ascii_1 = _mm_shuffle_epi8(hex_lut, nibbles_1);
-
-    _mm_storeu_si64(out, ascii_0); // chars 0..7
-    out[8] = '-';
-
-    uint32_t c8_11 = _mm_cvtsi128_si32(_mm_srli_si128(ascii_0, 8));
-    std::memcpy(out + 9, &c8_11, 4);
-    out[13] = '-';
-
-    uint32_t c12_15 = _mm_cvtsi128_si32(_mm_srli_si128(ascii_0, 12));
-    std::memcpy(out + 14, &c12_15, 4);
-    out[18] = '-';
-
-    uint32_t c16_19 = _mm_cvtsi128_si32(ascii_1);
-    std::memcpy(out + 19, &c16_19, 4);
-    out[23] = '-';
-
-    _mm_storeu_si64(out + 24, _mm_srli_si128(ascii_1, 4));
-    uint32_t c28_31 = _mm_cvtsi128_si32(_mm_srli_si128(ascii_1, 12));
-    std::memcpy(out + 32, &c28_31, 4);
-
-#else
-    // -------------------------------------------------------------
-    // Tier 3: Portable Scalar Fallback (Any CPU / ARM / WebAssembly)
-    // -------------------------------------------------------------
-    size_t out_idx = 0;
-    for (size_t i = 0; i < 16; ++i) {
-        if (i == 4 || i == 6 || i == 8 || i == 10) {
-            out[out_idx++] = '-';
-        }
-        uint8_t b = data[i];
-        out[out_idx++] = HEX_DIGITS_LOWER[b >> 4];
-        out[out_idx++] = HEX_DIGITS_LOWER[b & 0x0F];
-    }
-#endif
-}
-
-std::string UUID::to_string() const {
-    std::string str(36, '\0');
-    to_chars(str.data());
-    return str;
-}
-
-std::optional<UUID> UUID::from_string(std::string_view str) noexcept {
-    if (str.size() != 36) [[unlikely]] {
-        return std::nullopt;
-    }
-
-    const char* s = str.data();
-
+bool UUID::from_chars(const char* s, UUID& out) noexcept {
     // Validate hyphens at canonical positions
     if (s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-') [[unlikely]] {
-        return std::nullopt;
+        return false;
     }
 
 #if defined(__AVX512VBMI__) && defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512VL__)
@@ -197,7 +106,7 @@ std::optional<UUID> UUID::from_string(std::string_view str) noexcept {
 
     __m256i is_valid = _mm256_or_si256(is_digit, is_alpha);
     if (_mm256_movemask_epi8(is_valid) != static_cast<int>(0xFFFFFFFF)) [[unlikely]] {
-        return std::nullopt;
+        return false;
     }
 
     __m256i digit_val = _mm256_sub_epi8(hex_lower, c_0);
@@ -211,15 +120,13 @@ std::optional<UUID> UUID::from_string(std::string_view str) noexcept {
     __m128i half1 = _mm256_extracti128_si256(packed_16bit, 1);
     __m128i bytes_16 = _mm_packus_epi16(half0, half1);
 
-    UUID result;
-    _mm_store_si128(reinterpret_cast<__m128i*>(result.data.data()), bytes_16);
-    return result;
+    _mm_store_si128(reinterpret_cast<__m128i*>(out.data.data()), bytes_16);
+    return true;
 
 #else
     // -------------------------------------------------------------
     // Tier 2 & 3: Ultra-Fast Branchless Table-Driven Portable Fallback
     // -------------------------------------------------------------
-    UUID result;
     size_t s_idx = 0;
     uint32_t error_acc = 0;
 
@@ -230,17 +137,23 @@ std::optional<UUID> UUID::from_string(std::string_view str) noexcept {
         uint8_t hi = HEX_DECODE_TABLE[static_cast<uint8_t>(s[s_idx++])];
         uint8_t lo = HEX_DECODE_TABLE[static_cast<uint8_t>(s[s_idx++])];
 
-        // If either character was invalid hex, 0xFF will set top bits
         error_acc |= (hi | lo);
-        result.data[b_idx] = static_cast<uint8_t>((hi << 4) | lo);
+        out.data[b_idx] = static_cast<uint8_t>((hi << 4) | lo);
     }
 
-    if (error_acc & 0xF0) [[unlikely]] {
-        return std::nullopt;
-    }
-
-    return result;
+    return (error_acc & 0xF0) == 0;
 #endif
 }
 
+std::optional<UUID> UUID::from_string(std::string_view str) noexcept {
+    if (str.size() != 36) [[unlikely]] {
+        return std::nullopt;
+    }
+    UUID result;
+    if (from_chars(str.data(), result)) [[likely]] {
+        return result;
+    }
+    return std::nullopt;
+}
 } // namespace aegon::data
+

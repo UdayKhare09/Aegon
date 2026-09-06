@@ -10,52 +10,21 @@
 
 namespace aegon::data {
 
-namespace {
+namespace detail {
 
-// ============================================================
-//  Scalar xoshiro256++ PRNG (single-UUID generation & seeding)
-// ============================================================
-struct alignas(32) FastRng {
-    uint64_t s[4];
-    uint32_t generated_count{0};
-
-    static inline uint64_t rotl(uint64_t x, int k) noexcept {
-        return (x << k) | (x >> (64 - k));
-    }
-
-    void seed_from_hardware() noexcept {
-        for (int i = 0; i < 4; ++i) {
-            s[i] = UUIDGenerator::hardware_seed64();
-            if (s[i] == 0) {
-                s[i] = static_cast<uint64_t>(
-                    std::chrono::steady_clock::now().time_since_epoch().count()
-                ) ^ (0x9e3779b97f4a7c15ULL * static_cast<uint64_t>(i + 1));
-            }
+void FastRng::seed_from_hardware() noexcept {
+    for (int i = 0; i < 4; ++i) {
+        s[i] = UUIDGenerator::hardware_seed64();
+        if (s[i] == 0) {
+            s[i] = static_cast<uint64_t>(
+                std::chrono::steady_clock::now().time_since_epoch().count()
+            ) ^ (0x9e3779b97f4a7c15ULL * static_cast<uint64_t>(i + 1));
         }
-        generated_count = 0;
     }
+    generated_count = 0;
+}
 
-    inline uint64_t next_u64() noexcept {
-        if (++generated_count >= 65536) [[unlikely]] {
-            seed_from_hardware();
-        }
-        const uint64_t result = rotl(s[0] + s[3], 23) + s[0];
-        const uint64_t t = s[1] << 17;
-        s[2] ^= s[0];
-        s[3] ^= s[1];
-        s[1] ^= s[2];
-        s[0] ^= s[3];
-        s[2] ^= t;
-        s[3] = rotl(s[3], 45);
-        return result;
-    }
-};
-
-thread_local FastRng tl_rng = []() {
-    FastRng rng;
-    rng.seed_from_hardware();
-    return rng;
-}();
+} // namespace detail
 
 // ============================================================
 //  Vectorized xoshiro256++ running entirely in SIMD registers
@@ -72,6 +41,8 @@ thread_local FastRng tl_rng = []() {
 
 #if defined(__AVX2__)
 
+namespace detail {
+
 struct alignas(32) VectorRng {
     // 4 xoshiro256++ states packed in 4 × ymm registers
     // Each ymm holds one of the 4 state words across 4 parallel streams.
@@ -86,7 +57,7 @@ struct alignas(32) VectorRng {
         );
     }
 
-    void seed_from_scalar(FastRng& rng) noexcept {
+    void seed_from_scalar(detail::FastRng& rng) noexcept {
         // Seed 4 independent streams by jumping xoshiro256++ state
         // Each stream's 4 words are gathered from scalar rng
         alignas(32) uint64_t buf[16];
@@ -117,7 +88,7 @@ struct alignas(32) VectorRng {
     // one per parallel xoshiro256++ stream. Entire computation stays in ymm.
     [[nodiscard]] inline __m256i next_4x64() noexcept {
         if (++generated_count >= 16384) [[unlikely]] {
-            seed_from_scalar(tl_rng);
+            seed_from_scalar(detail::tl_rng);
         }
 
         // xoshiro256++: result = rotl(s0 + s3, 23) + s0
@@ -142,7 +113,7 @@ struct alignas(32) VectorRng {
 
 thread_local VectorRng tl_vec_rng = []() {
     VectorRng vrng;
-    vrng.seed_from_scalar(tl_rng);
+    vrng.seed_from_scalar(detail::tl_rng);
     return vrng;
 }();
 
@@ -165,7 +136,44 @@ inline __m256i make_avx2_or_mask() noexcept {
     );
 }
 
+#if defined(__AVX512F__)
+void ThreadV4Buffer::refill() noexcept {
+    const __m128i and128 = _mm_setr_epi8(
+        -1, -1, -1, -1, -1, -1, 0x0F, -1,
+        0x3F, -1, -1, -1, -1, -1, -1, -1
+    );
+    const __m128i or128 = _mm_setr_epi8(
+        0, 0, 0, 0, 0, 0, 0x40, 0,
+        static_cast<char>(0x80), 0, 0, 0, 0, 0, 0, 0
+    );
+    const __m512i and_mask = _mm512_broadcast_i32x4(and128);
+    const __m512i or_mask  = _mm512_broadcast_i32x4(or128);
+
+    __m256i rnd_lo = tl_vec_rng.next_4x64();
+    __m256i rnd_hi = tl_vec_rng.next_4x64();
+    __m512i raw512 = _mm512_inserti64x4(_mm512_castsi256_si512(rnd_lo), rnd_hi, 1);
+    __m512i result = _mm512_or_si512(_mm512_and_si512(raw512, and_mask), or_mask);
+    _mm512_storeu_si512(reinterpret_cast<__m512i*>(buffer), result);
+    index = 0;
+}
+#else
+void ThreadV4Buffer::refill() noexcept {
+    const __m256i and_mask = make_avx2_and_mask();
+    const __m256i or_mask  = make_avx2_or_mask();
+    __m256i rnd_a = tl_vec_rng.next_4x64();
+    __m256i rnd_b = tl_vec_rng.next_4x64();
+    __m256i uuid01 = _mm256_unpacklo_epi64(rnd_a, rnd_b);
+    __m256i result = _mm256_or_si256(_mm256_and_si256(uuid01, and_mask), or_mask);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(buffer), result);
+    index = 0;
+}
+#endif
+
+} // namespace detail
+
 #endif // __AVX2__
+
+namespace {
 
 // ============================================================
 //  UUID v7 monotonic state
@@ -229,35 +237,6 @@ uint64_t UUIDGenerator::hardware_seed64() noexcept {
 }
 
 // ============================================================
-//  UUID v4 — single UUID
-//  Pure scalar GPR path: avoids GPR <-> XMM register domain crossing
-//  which makes vector slower than scalar for a single 16-byte UUID.
-// ============================================================
-UUID UUIDGenerator::v4() noexcept {
-    UUID uuid;
-    uint64_t w0 = tl_rng.next_u64();
-    uint64_t w1 = tl_rng.next_u64();
-
-#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__) || defined(__x86_64__) || defined(_M_X64)
-    // Little-endian GPR bit manipulation:
-    // w0: byte 6 is bits [48..55]. Clear high nibble, set 0x40 (version 4)
-    w0 = (w0 & 0xFF0FFFFFFFFFFFFFULL) | 0x0040000000000000ULL;
-    // w1: byte 8 (first byte of w1) is bits [0..7]. Clear top 2 bits, set 0x80 (variant RFC 4122)
-    w1 = (w1 & 0xFFFFFFFFFFFFFF3FULL) | 0x0000000000000080ULL;
-
-    std::memcpy(uuid.data.data(),     &w0, 8);
-    std::memcpy(uuid.data.data() + 8, &w1, 8);
-#else
-    std::memcpy(uuid.data.data(),     &w0, 8);
-    std::memcpy(uuid.data.data() + 8, &w1, 8);
-    uuid.data[6] = static_cast<uint8_t>((uuid.data[6] & 0x0F) | 0x40);
-    uuid.data[8] = static_cast<uint8_t>((uuid.data[8] & 0x3F) | 0x80);
-#endif
-
-    return uuid;
-}
-
-// ============================================================
 //  UUID v4 batch — vectorized PRNG lives entirely in registers
 // ============================================================
 void UUIDGenerator::v4_batch(std::span<UUID> out) noexcept {
@@ -283,9 +262,9 @@ void UUIDGenerator::v4_batch(std::span<UUID> out) noexcept {
 
     for (; i + 4 <= n; i += 4) {
         // 4 × 64-bit (256 bits) for UUIDs 0,1 (lo halves)
-        __m256i rnd_lo = tl_vec_rng.next_4x64();
+        __m256i rnd_lo = detail::tl_vec_rng.next_4x64();
         // 4 × 64-bit (256 bits) for UUIDs 2,3 (hi halves)
-        __m256i rnd_hi = tl_vec_rng.next_4x64();
+        __m256i rnd_hi = detail::tl_vec_rng.next_4x64();
 
         // Pack the 8 independent 64-bit values into a single 512-bit register.
         // Each UUID occupies a contiguous 128-bit lane.
@@ -317,8 +296,8 @@ void UUIDGenerator::v4_batch(std::span<UUID> out) noexcept {
         // First call produces hi 64-bit halves of UUID[0] and UUID[1]
         // Second call produces lo 64-bit halves
         // We interleave pairs from the 4-lane ymm into two contiguous UUIDs.
-        __m256i rnd_a = tl_vec_rng.next_4x64(); // [a0, a1, a2, a3]
-        __m256i rnd_b = tl_vec_rng.next_4x64(); // [b0, b1, b2, b3]
+        __m256i rnd_a = detail::tl_vec_rng.next_4x64(); // [a0, a1, a2, a3]
+        __m256i rnd_b = detail::tl_vec_rng.next_4x64(); // [b0, b1, b2, b3]
 
         // UUID[0] = {a0, b0}  UUID[1] = {a1, b1}
         // Interleave low 128 bits of rnd_a and rnd_b -> UUID[0] and UUID[1]
@@ -348,14 +327,14 @@ UUID UUIDGenerator::v7() noexcept {
     uint64_t counter;
     if (now_ms > tl_v7_state.last_ts_ms) [[likely]] {
         tl_v7_state.last_ts_ms = now_ms;
-        tl_v7_state.counter = tl_rng.next_u64() & 0x000003FFFFFFFFFFULL;
+        tl_v7_state.counter = detail::tl_rng.next_u64() & 0x000003FFFFFFFFFFULL;
         counter = tl_v7_state.counter;
     } else {
         counter = ++tl_v7_state.counter;
     }
 
     UUID uuid;
-    stamp_v7(uuid, now_ms, counter, static_cast<uint32_t>(tl_rng.next_u64()));
+    stamp_v7(uuid, now_ms, counter, static_cast<uint32_t>(detail::tl_rng.next_u64()));
     return uuid;
 }
 
@@ -385,7 +364,7 @@ void UUIDGenerator::v7_batch(std::span<UUID> out) noexcept {
     uint64_t base_counter;
     if (now_ms > tl_v7_state.last_ts_ms) {
         tl_v7_state.last_ts_ms = now_ms;
-        tl_v7_state.counter = tl_rng.next_u64() & 0x000003FFFFFFFFFFULL;
+        tl_v7_state.counter = detail::tl_rng.next_u64() & 0x000003FFFFFFFFFFULL;
         base_counter = tl_v7_state.counter;
     } else {
         base_counter = tl_v7_state.counter + 1;
@@ -396,7 +375,7 @@ void UUIDGenerator::v7_batch(std::span<UUID> out) noexcept {
     // Fill all UUIDs: monotonic counter increments, random tail per UUID
     for (size_t j = 0; j < n; ++j) {
         const uint64_t counter = base_counter + j;
-        const uint32_t random_tail = static_cast<uint32_t>(tl_rng.next_u64());
+        const uint32_t random_tail = static_cast<uint32_t>(detail::tl_rng.next_u64());
         stamp_v7(out[j], now_ms, counter, random_tail);
     }
 }
