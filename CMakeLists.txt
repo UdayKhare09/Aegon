@@ -182,6 +182,12 @@ add_executable(test_sql_relations
 )
 target_link_libraries(test_sql_relations PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
 
+add_executable(test_sql_advanced_queries
+    tests/test_sql_advanced_queries.cpp
+)
+target_link_libraries(test_sql_advanced_queries PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+
+
 
 
 

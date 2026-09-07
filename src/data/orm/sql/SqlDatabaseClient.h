@@ -111,6 +111,55 @@ public:
         co_return co_await tx.fetch_one(builder);
     }
 
+    template <typename Entity>
+    core::Task<uint64_t> count(const SelectBuilder<Entity>& builder) {
+        auto guard = pool_.acquire();
+        Transaction tx(*guard);
+        co_return co_await tx.count(builder);
+    }
+
+    template <typename Entity, typename FieldType>
+    core::Task<std::optional<unwrapped_type_t<FieldType>>> sum(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        auto guard = pool_.acquire();
+        Transaction tx(*guard);
+        co_return co_await tx.sum(builder, field);
+    }
+
+    template <typename ResultType, typename Entity, typename FieldType>
+    core::Task<std::optional<ResultType>> sum(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        auto guard = pool_.acquire();
+        Transaction tx(*guard);
+        co_return co_await tx.template sum<ResultType>(builder, field);
+    }
+
+    template <typename Entity, typename FieldType>
+    core::Task<std::optional<double>> avg(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        auto guard = pool_.acquire();
+        Transaction tx(*guard);
+        co_return co_await tx.avg(builder, field);
+    }
+
+    template <typename Entity, typename FieldType>
+    core::Task<std::optional<unwrapped_type_t<FieldType>>> min(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        auto guard = pool_.acquire();
+        Transaction tx(*guard);
+        co_return co_await tx.min(builder, field);
+    }
+
+    template <typename Entity, typename FieldType>
+    core::Task<std::optional<unwrapped_type_t<FieldType>>> max(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        auto guard = pool_.acquire();
+        Transaction tx(*guard);
+        co_return co_await tx.max(builder, field);
+    }
+
+    template <typename Entity>
+    core::Task<Page<Entity>> paginate(SelectBuilder<Entity> builder, size_t page = 1, size_t per_page = 20) {
+        auto guard = pool_.acquire();
+        Transaction tx(*guard);
+        co_return co_await tx.paginate(std::move(builder), page, per_page);
+    }
+
     core::Task<size_t> execute(const QueryResult& query) {
         auto guard = pool_.acquire();
         Transaction tx(*guard);

@@ -28,6 +28,19 @@ struct DialectTraits {
 
     static std::string quote_identifier(DatabaseDialect d, std::string_view id) {
         char q = quote_char(d);
+        auto dot = id.find('.');
+        if (dot != std::string_view::npos) {
+            std::string s;
+            s.reserve(id.size() + 4);
+            s.push_back(q);
+            s.append(id.substr(0, dot));
+            s.push_back(q);
+            s.push_back('.');
+            s.push_back(q);
+            s.append(id.substr(dot + 1));
+            s.push_back(q);
+            return s;
+        }
         std::string s;
         s.reserve(id.size() + 2);
         s.push_back(q);

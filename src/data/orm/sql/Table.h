@@ -46,6 +46,8 @@ public:
         std::function<core::Task<void>(std::span<Entity>, Connection&, DatabaseDialect)> eager_loader;
         std::function<void(Entity&, const std::string&)> install_lazy_loader;
         std::function<core::Task<void>(Entity&, Connection&, DatabaseDialect, const std::string&)> tree_inserter;
+        std::function<std::string(DatabaseDialect, bool, const std::string&, const std::vector<Condition>&, size_t&, std::vector<std::string>&)> exists_builder;
+        std::function<core::Task<void>(std::span<Entity>, Connection&, DatabaseDialect, const std::vector<Condition>&, const std::vector<OrderByClause>&, std::optional<size_t>)> scoped_eager_loader;
     };
 
 private:
@@ -427,7 +429,35 @@ public:
             co_await child_schema.insert_entity(child, conn);
         };
 
-        desc.eager_loader = [rel_ptr, fk_ptr, pk_ext = pk_extractor_](std::span<Entity> parents, Connection& conn, DatabaseDialect dialect) -> core::Task<void> {
+        desc.exists_builder = [fk_ptr, parent_pk = primary_key_name_](
+            DatabaseDialect dialect, bool negate, const std::string& parent_tbl,
+            const std::vector<Condition>& child_conditions, size_t& param_idx,
+            std::vector<std::string>& out_params) -> std::string {
+            auto child_schema = ChildEntity::schema();
+            std::string child_tbl = child_schema.table_name();
+            std::string fk_col = child_schema.resolve_column_name(fk_ptr);
+
+            std::string sql = negate ? "NOT EXISTS (SELECT 1 FROM " : "EXISTS (SELECT 1 FROM ";
+            sql.append(DialectTraits::quote_identifier(dialect, child_tbl));
+            sql.append(" WHERE ");
+            sql.append(DialectTraits::quote_identifier(dialect, child_tbl + "." + fk_col));
+            sql.append(" = ");
+            sql.append(DialectTraits::quote_identifier(dialect, parent_tbl + "." + parent_pk));
+
+            if (!child_conditions.empty()) {
+                sql.append(" AND (");
+                compile_conditions(child_conditions, dialect, param_idx, sql, out_params);
+                sql.push_back(')');
+            }
+            sql.push_back(')');
+            return sql;
+        };
+
+        desc.scoped_eager_loader = [rel_ptr, fk_ptr, pk_ext = pk_extractor_](
+            std::span<Entity> parents, Connection& conn, DatabaseDialect dialect,
+            const std::vector<Condition>& child_conditions,
+            const std::vector<OrderByClause>& order_bys,
+            std::optional<size_t> limit) -> core::Task<void> {
             if (parents.empty()) co_return;
 
             auto child_schema = ChildEntity::schema();
@@ -462,14 +492,33 @@ public:
             sql.append(" IN (");
 
             std::vector<std::string> params;
+            size_t param_idx = 1;
             for (size_t i = 0; i < parent_pks.size(); ++i) {
                 std::string p;
-                DialectTraits::format_placeholder(dialect, i + 1, p);
+                DialectTraits::format_placeholder(dialect, param_idx++, p);
                 sql.append(p);
                 if (i + 1 < parent_pks.size()) sql.append(", ");
                 params.push_back(parent_pks[i]);
             }
-            sql.append(");");
+            sql.push_back(')');
+
+            if (!child_conditions.empty()) {
+                sql.append(" AND (");
+                compile_conditions(child_conditions, dialect, param_idx, sql, params);
+                sql.push_back(')');
+            }
+
+            if (!order_bys.empty()) {
+                sql.append(" ORDER BY ");
+                for (size_t i = 0; i < order_bys.size(); ++i) {
+                    if (i > 0) sql.append(", ");
+                    sql.append(DialectTraits::quote_identifier(dialect, order_bys[i].column));
+                    sql.push_back(' ');
+                    sql.append(order_to_sql(order_bys[i].direction));
+                }
+            }
+
+            sql.push_back(';');
 
             auto rows = co_await conn.query(sql, params);
             for (const auto& r : rows) {
@@ -478,10 +527,16 @@ public:
                 auto it = parent_map.find(fk_val);
                 if (it != parent_map.end()) {
                     for (auto* parent_ptr : it->second) {
-                        (parent_ptr->*rel_ptr).set_value(child);
+                        if (!limit.has_value() || !(parent_ptr->*rel_ptr).has_value()) {
+                            (parent_ptr->*rel_ptr).set_value(child);
+                        }
                     }
                 }
             }
+        };
+
+        desc.eager_loader = [loader = desc.scoped_eager_loader](std::span<Entity> parents, Connection& conn, DatabaseDialect dialect) -> core::Task<void> {
+            co_await loader(parents, conn, dialect, {}, {}, std::nullopt);
         };
 
         relations_.push_back(std::move(desc));
@@ -575,7 +630,35 @@ public:
             }
         };
 
-        desc.eager_loader = [rel_ptr, fk_ptr, pk_ext = pk_extractor_](std::span<Entity> parents, Connection& conn, DatabaseDialect dialect) -> core::Task<void> {
+        desc.exists_builder = [fk_ptr, parent_pk = primary_key_name_](
+            DatabaseDialect dialect, bool negate, const std::string& parent_tbl,
+            const std::vector<Condition>& child_conditions, size_t& param_idx,
+            std::vector<std::string>& out_params) -> std::string {
+            auto child_schema = ChildEntity::schema();
+            std::string child_tbl = child_schema.table_name();
+            std::string fk_col = child_schema.resolve_column_name(fk_ptr);
+
+            std::string sql = negate ? "NOT EXISTS (SELECT 1 FROM " : "EXISTS (SELECT 1 FROM ";
+            sql.append(DialectTraits::quote_identifier(dialect, child_tbl));
+            sql.append(" WHERE ");
+            sql.append(DialectTraits::quote_identifier(dialect, child_tbl + "." + fk_col));
+            sql.append(" = ");
+            sql.append(DialectTraits::quote_identifier(dialect, parent_tbl + "." + parent_pk));
+
+            if (!child_conditions.empty()) {
+                sql.append(" AND (");
+                compile_conditions(child_conditions, dialect, param_idx, sql, out_params);
+                sql.push_back(')');
+            }
+            sql.push_back(')');
+            return sql;
+        };
+
+        desc.scoped_eager_loader = [rel_ptr, fk_ptr, pk_ext = pk_extractor_](
+            std::span<Entity> parents, Connection& conn, DatabaseDialect dialect,
+            const std::vector<Condition>& child_conditions,
+            const std::vector<OrderByClause>& order_bys,
+            std::optional<size_t> limit) -> core::Task<void> {
             if (parents.empty()) co_return;
 
             auto child_schema = ChildEntity::schema();
@@ -610,14 +693,33 @@ public:
             sql.append(" IN (");
 
             std::vector<std::string> params;
+            size_t param_idx = 1;
             for (size_t i = 0; i < parent_pks.size(); ++i) {
                 std::string p;
-                DialectTraits::format_placeholder(dialect, i + 1, p);
+                DialectTraits::format_placeholder(dialect, param_idx++, p);
                 sql.append(p);
                 if (i + 1 < parent_pks.size()) sql.append(", ");
                 params.push_back(parent_pks[i]);
             }
-            sql.append(");");
+            sql.push_back(')');
+
+            if (!child_conditions.empty()) {
+                sql.append(" AND (");
+                compile_conditions(child_conditions, dialect, param_idx, sql, params);
+                sql.push_back(')');
+            }
+
+            if (!order_bys.empty()) {
+                sql.append(" ORDER BY ");
+                for (size_t i = 0; i < order_bys.size(); ++i) {
+                    if (i > 0) sql.append(", ");
+                    sql.append(DialectTraits::quote_identifier(dialect, order_bys[i].column));
+                    sql.push_back(' ');
+                    sql.append(order_to_sql(order_bys[i].direction));
+                }
+            }
+
+            sql.push_back(';');
 
             auto rows = co_await conn.query(sql, params);
             for (const auto& r : rows) {
@@ -626,10 +728,16 @@ public:
                 auto it = parent_map.find(fk_val);
                 if (it != parent_map.end()) {
                     for (auto* parent_ptr : it->second) {
-                        (parent_ptr->*rel_ptr).push_back(child);
+                        if (!limit.has_value() || (parent_ptr->*rel_ptr).size() < *limit) {
+                            (parent_ptr->*rel_ptr).push_back(child);
+                        }
                     }
                 }
             }
+        };
+
+        desc.eager_loader = [loader = desc.scoped_eager_loader](std::span<Entity> parents, Connection& conn, DatabaseDialect dialect) -> core::Task<void> {
+            co_await loader(parents, conn, dialect, {}, {}, std::nullopt);
         };
 
         relations_.push_back(std::move(desc));
@@ -796,7 +904,57 @@ public:
             }
         };
 
-        desc.eager_loader = [rel_ptr, parent_fk, child_fk, pk_ext = pk_extractor_](std::span<Entity> parents, Connection& conn, DatabaseDialect dialect) -> core::Task<void> {
+        desc.exists_builder = [parent_fk, child_fk, parent_pk = primary_key_name_](
+            DatabaseDialect dialect, bool negate, const std::string& parent_tbl,
+            const std::vector<Condition>& child_conditions, size_t& param_idx,
+            std::vector<std::string>& out_params) -> std::string {
+            auto junction_schema = JunctionEntity::schema();
+            auto target_schema = TargetEntity::schema();
+
+            std::string junction_tbl = junction_schema.table_name();
+            std::string target_tbl = target_schema.table_name();
+            std::string parent_fk_col = junction_schema.resolve_column_name(parent_fk);
+            std::string child_fk_col = junction_schema.resolve_column_name(child_fk);
+            std::string target_pk_col = target_schema.primary_key_name();
+
+            std::string sql = negate ? "NOT EXISTS (" : "EXISTS (";
+            sql.append("SELECT 1 FROM ");
+            sql.append(DialectTraits::quote_identifier(dialect, target_tbl));
+            sql.append(" ");
+            sql.append(DialectTraits::quote_identifier(dialect, "t"));
+            sql.append(" INNER JOIN ");
+            sql.append(DialectTraits::quote_identifier(dialect, junction_tbl));
+            sql.append(" ");
+            sql.append(DialectTraits::quote_identifier(dialect, "j"));
+            sql.append(" ON ");
+            sql.append(DialectTraits::quote_identifier(dialect, "j." + child_fk_col));
+            sql.append(" = ");
+            sql.append(DialectTraits::quote_identifier(dialect, "t." + target_pk_col));
+            sql.append(" WHERE ");
+            sql.append(DialectTraits::quote_identifier(dialect, "j." + parent_fk_col));
+            sql.append(" = ");
+            sql.append(DialectTraits::quote_identifier(dialect, parent_tbl + "." + parent_pk));
+
+            if (!child_conditions.empty()) {
+                sql.append(" AND (");
+                std::vector<Condition> qualified = child_conditions;
+                for (auto& c : qualified) {
+                    if (!c.custom_compiler && c.column.find('.') == std::string::npos) {
+                        c.column = "t." + c.column;
+                    }
+                }
+                compile_conditions(qualified, dialect, param_idx, sql, out_params);
+                sql.push_back(')');
+            }
+            sql.push_back(')');
+            return sql;
+        };
+
+        desc.scoped_eager_loader = [rel_ptr, parent_fk, child_fk, pk_ext = pk_extractor_](
+            std::span<Entity> parents, Connection& conn, DatabaseDialect dialect,
+            const std::vector<Condition>& child_conditions,
+            const std::vector<OrderByClause>& order_bys,
+            std::optional<size_t> limit) -> core::Task<void> {
             if (parents.empty()) co_return;
 
             auto junction_schema = JunctionEntity::schema();
@@ -826,15 +984,11 @@ public:
             if (parent_pks.empty()) co_return;
 
             std::string sql = "SELECT ";
-            sql.append(DialectTraits::quote_identifier(dialect, "j"));
-            sql.push_back('.');
-            sql.append(DialectTraits::quote_identifier(dialect, parent_fk_col));
+            sql.append(DialectTraits::quote_identifier(dialect, "j." + parent_fk_col));
 
             for (const auto& col : target_schema.columns()) {
                 sql.append(", ");
-                sql.append(DialectTraits::quote_identifier(dialect, "t"));
-                sql.push_back('.');
-                sql.append(DialectTraits::quote_identifier(dialect, col.column_name));
+                sql.append(DialectTraits::quote_identifier(dialect, "t." + col.column_name));
             }
 
             sql.append(" FROM ");
@@ -846,29 +1000,52 @@ public:
             sql.append(" ");
             sql.append(DialectTraits::quote_identifier(dialect, "j"));
             sql.append(" ON ");
-            sql.append(DialectTraits::quote_identifier(dialect, "j"));
-            sql.push_back('.');
-            sql.append(DialectTraits::quote_identifier(dialect, child_fk_col));
+            sql.append(DialectTraits::quote_identifier(dialect, "j." + child_fk_col));
             sql.append(" = ");
-            sql.append(DialectTraits::quote_identifier(dialect, "t"));
-            sql.push_back('.');
-            sql.append(DialectTraits::quote_identifier(dialect, target_pk_col));
+            sql.append(DialectTraits::quote_identifier(dialect, "t." + target_pk_col));
 
             sql.append(" WHERE ");
-            sql.append(DialectTraits::quote_identifier(dialect, "j"));
-            sql.push_back('.');
-            sql.append(DialectTraits::quote_identifier(dialect, parent_fk_col));
+            sql.append(DialectTraits::quote_identifier(dialect, "j." + parent_fk_col));
             sql.append(" IN (");
 
             std::vector<std::string> params;
+            size_t param_idx = 1;
             for (size_t i = 0; i < parent_pks.size(); ++i) {
                 std::string p;
-                DialectTraits::format_placeholder(dialect, i + 1, p);
+                DialectTraits::format_placeholder(dialect, param_idx++, p);
                 sql.append(p);
                 if (i + 1 < parent_pks.size()) sql.append(", ");
                 params.push_back(parent_pks[i]);
             }
-            sql.append(");");
+            sql.push_back(')');
+
+            if (!child_conditions.empty()) {
+                sql.append(" AND (");
+                std::vector<Condition> qualified = child_conditions;
+                for (auto& c : qualified) {
+                    if (!c.custom_compiler && c.column.find('.') == std::string::npos) {
+                        c.column = "t." + c.column;
+                    }
+                }
+                compile_conditions(qualified, dialect, param_idx, sql, params);
+                sql.push_back(')');
+            }
+
+            if (!order_bys.empty()) {
+                sql.append(" ORDER BY ");
+                for (size_t i = 0; i < order_bys.size(); ++i) {
+                    if (i > 0) sql.append(", ");
+                    std::string col = order_bys[i].column;
+                    if (col.find('.') == std::string::npos) {
+                        col = "t." + col;
+                    }
+                    sql.append(DialectTraits::quote_identifier(dialect, col));
+                    sql.push_back(' ');
+                    sql.append(order_to_sql(order_bys[i].direction));
+                }
+            }
+
+            sql.push_back(';');
 
             auto rows = co_await conn.query(sql, params);
             for (const auto& r : rows) {
@@ -878,10 +1055,16 @@ public:
                 auto it = parent_map.find(parent_id_val);
                 if (it != parent_map.end()) {
                     for (auto* parent_ptr : it->second) {
-                        (parent_ptr->*rel_ptr).push_back(target);
+                        if (!limit.has_value() || (parent_ptr->*rel_ptr).size() < *limit) {
+                            (parent_ptr->*rel_ptr).push_back(target);
+                        }
                     }
                 }
             }
+        };
+
+        desc.eager_loader = [loader = desc.scoped_eager_loader](std::span<Entity> parents, Connection& conn, DatabaseDialect dialect) -> core::Task<void> {
+            co_await loader(parents, conn, dialect, {}, {}, std::nullopt);
         };
 
         relations_.push_back(std::move(desc));

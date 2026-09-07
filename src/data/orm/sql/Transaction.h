@@ -161,6 +161,91 @@ public:
         co_return item;
     }
 
+    template <typename Entity>
+    core::Task<uint64_t> count(const SelectBuilder<Entity>& builder) {
+        auto query = builder.to_count_sql(dialect_);
+        auto rows = co_await conn_.query(query.sql, query.params);
+        if (rows.empty() || rows[0].is_null(0)) {
+            co_return 0;
+        }
+        co_return rows[0].template get<uint64_t>(0);
+    }
+
+    template <typename Entity, typename FieldType>
+    core::Task<std::optional<unwrapped_type_t<FieldType>>> sum(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        using Target = unwrapped_type_t<FieldType>;
+        auto query = builder.to_aggregate_sql(dialect_, "SUM", field);
+        auto rows = co_await conn_.query(query.sql, query.params);
+        if (rows.empty() || rows[0].is_null(0)) {
+            co_return std::nullopt;
+        }
+        co_return rows[0].template get<Target>(0);
+    }
+
+    template <typename ResultType, typename Entity, typename FieldType>
+    core::Task<std::optional<ResultType>> sum(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        auto query = builder.to_aggregate_sql(dialect_, "SUM", field);
+        auto rows = co_await conn_.query(query.sql, query.params);
+        if (rows.empty() || rows[0].is_null(0)) {
+            co_return std::nullopt;
+        }
+        co_return rows[0].template get<ResultType>(0);
+    }
+
+    template <typename Entity, typename FieldType>
+    core::Task<std::optional<double>> avg(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        auto query = builder.to_aggregate_sql(dialect_, "AVG", field);
+        auto rows = co_await conn_.query(query.sql, query.params);
+        if (rows.empty() || rows[0].is_null(0)) {
+            co_return std::nullopt;
+        }
+        co_return rows[0].template get<double>(0);
+    }
+
+    template <typename Entity, typename FieldType>
+    core::Task<std::optional<unwrapped_type_t<FieldType>>> min(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        using Target = unwrapped_type_t<FieldType>;
+        auto query = builder.to_aggregate_sql(dialect_, "MIN", field);
+        auto rows = co_await conn_.query(query.sql, query.params);
+        if (rows.empty() || rows[0].is_null(0)) {
+            co_return std::nullopt;
+        }
+        co_return rows[0].template get<Target>(0);
+    }
+
+    template <typename Entity, typename FieldType>
+    core::Task<std::optional<unwrapped_type_t<FieldType>>> max(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
+        using Target = unwrapped_type_t<FieldType>;
+        auto query = builder.to_aggregate_sql(dialect_, "MAX", field);
+        auto rows = co_await conn_.query(query.sql, query.params);
+        if (rows.empty() || rows[0].is_null(0)) {
+            co_return std::nullopt;
+        }
+        co_return rows[0].template get<Target>(0);
+    }
+
+    template <typename Entity>
+    core::Task<Page<Entity>> paginate(SelectBuilder<Entity> builder, size_t page = 1, size_t per_page = 20) {
+        if (per_page == 0) per_page = 20;
+        if (page == 0) page = 1;
+
+        uint64_t total = co_await count(builder);
+
+        builder.limit(per_page).offset((page - 1) * per_page);
+        auto items = co_await fetch_all(builder);
+
+        Page<Entity> result;
+        result.items = std::move(items);
+        result.total_items = total;
+        result.current_page = page;
+        result.per_page = per_page;
+        result.total_pages = total == 0 ? 0 : (total + per_page - 1) / per_page;
+        result.has_next = page < result.total_pages;
+        result.has_prev = page > 1 && result.total_pages > 0;
+
+        co_return result;
+    }
+
     core::Task<size_t> execute(const QueryResult& query) {
         co_return co_await conn_.execute(query.sql, query.params);
     }
