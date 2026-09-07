@@ -114,6 +114,12 @@ public:
             rows.push_back(std::move(row));
         }
 
+        if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
+            std::string err = sqlite3_errmsg(db_);
+            sqlite3_finalize(stmt);
+            throw std::runtime_error("SqliteConnection query step error: " + err + " in SQL: " + std::string(sql));
+        }
+
         sqlite3_finalize(stmt);
         co_return rows;
     }

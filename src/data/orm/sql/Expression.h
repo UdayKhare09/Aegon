@@ -65,7 +65,8 @@ constexpr std::string_view order_to_sql(SortOrder ord) noexcept {
     return "ASC";
 }
 
-inline constexpr std::string_view SQL_NULL_SENTINEL = "\0__AEGON_NULL__";
+using namespace std::string_view_literals;
+inline constexpr std::string_view SQL_NULL_SENTINEL = "\0__AEGON_NULL__\0"sv;
 
 template <typename T>
 inline std::string format_param_value(const T& val) {

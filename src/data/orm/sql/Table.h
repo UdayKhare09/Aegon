@@ -7,6 +7,7 @@
 #include "Expression.h"
 #include "Relations.h"
 #include "Connection.h"
+#include "QueryResult.h"
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,6 +17,7 @@
 #include <functional>
 #include <unordered_map>
 #include <span>
+#include <algorithm>
 
 #if __has_include(<glaze/glaze.hpp>)
 #include <glaze/glaze.hpp>
@@ -43,11 +45,13 @@ public:
         std::string target_table;
         std::function<core::Task<void>(std::span<Entity>, Connection&, DatabaseDialect)> eager_loader;
         std::function<void(Entity&, const std::string&)> install_lazy_loader;
+        std::function<core::Task<void>(Entity&, Connection&, DatabaseDialect, const std::string&)> tree_inserter;
     };
 
 private:
     std::vector<RelationDescriptor> relations_;
     std::function<std::string(const Entity&)> pk_extractor_;
+    std::function<void(Entity&, std::string_view)> pk_setter_;
 
     ColumnMetadata& current_col() {
         if (columns_.empty()) {
@@ -105,8 +109,112 @@ public:
             return format_param_value(e.*ptr);
         });
 
+        pk_setter_ = [ptr](Entity& e, std::string_view val) {
+            e.*ptr = parse_field_value<FieldType>(val);
+        };
+
         columns_.push_back(std::move(meta));
         return *this;
+    }
+
+    [[nodiscard]] std::string get_primary_key(const Entity& entity) const {
+        if (pk_extractor_) {
+            return pk_extractor_(entity);
+        }
+        return "";
+    }
+
+    void set_primary_key(Entity& entity, std::string_view val) const {
+        if (pk_setter_) {
+            pk_setter_(entity, val);
+        }
+    }
+
+    void set_primary_key(Entity& entity, int64_t val) const {
+        if (pk_setter_) {
+            pk_setter_(entity, std::to_string(val));
+        }
+    }
+
+    void init_relations(Entity& entity) const {
+        std::string pk_val = get_primary_key(entity);
+        for (const auto& rel : relations_) {
+            if (rel.install_lazy_loader) {
+                rel.install_lazy_loader(entity, pk_val);
+            }
+        }
+    }
+
+    [[nodiscard]] bool has_auto_increment_pk() const noexcept {
+        for (const auto& col : columns_) {
+            if (col.is_auto_increment) return true;
+        }
+        return false;
+    }
+
+    QueryResult build_insert_sql(const Entity& entity, DatabaseDialect dialect) const {
+        QueryResult result;
+        std::string& sql = result.sql;
+        sql.reserve(256);
+
+        sql.append("INSERT INTO ");
+        sql.append(DialectTraits::quote_identifier(dialect, table_name_));
+        sql.append(" (");
+
+        std::vector<size_t> insert_col_indices;
+        bool auto_inc = false;
+
+        for (size_t i = 0; i < columns_.size(); ++i) {
+            if (columns_[i].is_auto_increment) {
+                auto_inc = true;
+                continue;
+            }
+            insert_col_indices.push_back(i);
+        }
+
+        for (size_t i = 0; i < insert_col_indices.size(); ++i) {
+            sql.append(DialectTraits::quote_identifier(dialect, columns_[insert_col_indices[i]].column_name));
+            if (i + 1 < insert_col_indices.size()) sql.append(", ");
+        }
+
+        sql.append(") VALUES (");
+
+        auto extracted = extract_values(entity, true);
+        for (size_t col_i = 0; col_i < extracted.size(); ++col_i) {
+            std::string p;
+            DialectTraits::format_placeholder(dialect, col_i + 1, p);
+            sql.append(p);
+            if (col_i + 1 < extracted.size()) sql.append(", ");
+            result.params.push_back(extracted[col_i].second);
+        }
+        sql.push_back(')');
+
+        if ((dialect == DatabaseDialect::PostgreSQL || dialect == DatabaseDialect::SQLite) && auto_inc) {
+            sql.append(" RETURNING ");
+            sql.append(DialectTraits::quote_identifier(dialect, primary_key_name_));
+        }
+
+        sql.push_back(';');
+        return result;
+    }
+
+    core::Task<int64_t> insert_entity(Entity& entity, Connection& conn) const {
+        auto dialect = conn.dialect();
+        auto query = build_insert_sql(entity, dialect);
+        int64_t generated_id = 0;
+        if ((dialect == DatabaseDialect::PostgreSQL || dialect == DatabaseDialect::SQLite) && has_auto_increment_pk()) {
+            auto rows = co_await conn.query(query.sql, query.params);
+            if (!rows.empty()) {
+                generated_id = rows[0].template get<int64_t>(0);
+                if (generated_id > 0) {
+                    set_primary_key(entity, generated_id);
+                }
+            }
+        } else {
+            co_await conn.execute(query.sql, query.params);
+        }
+        init_relations(entity);
+        co_return generated_id;
     }
 
     template <typename FieldType>
@@ -234,14 +342,7 @@ public:
         for (size_t i = 0; i < hydrators_.size() && i < row.column_count(); ++i) {
             hydrators_[i](e, row, i);
         }
-        if (pk_extractor_) {
-            std::string pk_val = pk_extractor_(e);
-            for (const auto& rel : relations_) {
-                if (rel.install_lazy_loader) {
-                    rel.install_lazy_loader(e, pk_val);
-                }
-            }
-        }
+        init_relations(e);
         return e;
     }
 
@@ -279,6 +380,51 @@ public:
                 if (rows.empty()) co_return std::nullopt;
                 co_return child_schema.map_row(rows[0]);
             });
+
+            (e.*rel_ptr).set_mutators(
+                [fk_ptr](Connection& conn, const std::string& owner_key, ChildEntity& val) -> core::Task<void> {
+                    val.*fk_ptr = parse_field_value<ForeignKeyField>(owner_key);
+                    auto dialect = conn.dialect();
+                    auto child_schema = ChildEntity::schema();
+
+                    std::string del_sql = "DELETE FROM ";
+                    del_sql.append(DialectTraits::quote_identifier(dialect, child_schema.table_name()));
+                    del_sql.append(" WHERE ");
+                    del_sql.append(DialectTraits::quote_identifier(dialect, child_schema.resolve_column_name(fk_ptr)));
+                    del_sql.append(" = ");
+                    std::string p;
+                    DialectTraits::format_placeholder(dialect, 1, p);
+                    del_sql.append(p);
+                    del_sql.push_back(';');
+                    co_await conn.execute(del_sql, {owner_key});
+
+                    co_await child_schema.insert_entity(val, conn);
+                },
+                [fk_ptr](Connection& conn, const std::string& owner_key) -> core::Task<void> {
+                    auto dialect = conn.dialect();
+                    auto child_schema = ChildEntity::schema();
+
+                    std::string del_sql = "DELETE FROM ";
+                    del_sql.append(DialectTraits::quote_identifier(dialect, child_schema.table_name()));
+                    del_sql.append(" WHERE ");
+                    del_sql.append(DialectTraits::quote_identifier(dialect, child_schema.resolve_column_name(fk_ptr)));
+                    del_sql.append(" = ");
+                    std::string p;
+                    DialectTraits::format_placeholder(dialect, 1, p);
+                    del_sql.append(p);
+                    del_sql.push_back(';');
+                    co_await conn.execute(del_sql, {owner_key});
+                }
+            );
+        };
+
+        desc.tree_inserter = [rel_ptr, fk_ptr](Entity& parent, Connection& conn, DatabaseDialect /*dialect*/, const std::string& parent_pk) -> core::Task<void> {
+            auto& rel = parent.*rel_ptr;
+            if (!rel.has_value()) co_return;
+            ChildEntity& child = rel.value();
+            child.*fk_ptr = parse_field_value<ForeignKeyField>(parent_pk);
+            auto child_schema = ChildEntity::schema();
+            co_await child_schema.insert_entity(child, conn);
         };
 
         desc.eager_loader = [rel_ptr, fk_ptr, pk_ext = pk_extractor_](std::span<Entity> parents, Connection& conn, DatabaseDialect dialect) -> core::Task<void> {
@@ -380,6 +526,53 @@ public:
                 }
                 co_return results;
             });
+
+            (e.*rel_ptr).set_one_to_many_mutators(
+                [fk_ptr](Connection& conn, const std::string& owner_key, ChildEntity& item) -> core::Task<int64_t> {
+                    item.*fk_ptr = parse_field_value<ForeignKeyField>(owner_key);
+                    auto child_schema = ChildEntity::schema();
+                    co_return co_await child_schema.insert_entity(item, conn);
+                },
+                [fk_ptr](Connection& conn, const std::string& owner_key, const std::string& item_id, std::vector<ChildEntity>& data) -> core::Task<bool> {
+                    auto dialect = conn.dialect();
+                    auto child_schema = ChildEntity::schema();
+                    std::string fk_col = child_schema.resolve_column_name(fk_ptr);
+                    std::string pk_col = child_schema.primary_key_name();
+
+                    std::string del_sql = "DELETE FROM ";
+                    del_sql.append(DialectTraits::quote_identifier(dialect, child_schema.table_name()));
+                    del_sql.append(" WHERE ");
+                    del_sql.append(DialectTraits::quote_identifier(dialect, fk_col));
+                    del_sql.append(" = ");
+                    std::string p1, p2;
+                    DialectTraits::format_placeholder(dialect, 1, p1);
+                    DialectTraits::format_placeholder(dialect, 2, p2);
+                    del_sql.append(p1);
+                    del_sql.append(" AND ");
+                    del_sql.append(DialectTraits::quote_identifier(dialect, pk_col));
+                    del_sql.append(" = ");
+                    del_sql.append(p2);
+                    del_sql.push_back(';');
+
+                    size_t n = co_await conn.execute(del_sql, {owner_key, item_id});
+                    if (n > 0) {
+                        auto it = std::remove_if(data.begin(), data.end(), [&](const ChildEntity& c) {
+                            return child_schema.get_primary_key(c) == item_id;
+                        });
+                        data.erase(it, data.end());
+                    }
+                    co_return n > 0;
+                }
+            );
+        };
+
+        desc.tree_inserter = [rel_ptr, fk_ptr](Entity& parent, Connection& conn, DatabaseDialect /*dialect*/, const std::string& parent_pk) -> core::Task<void> {
+            auto& rel = parent.*rel_ptr;
+            auto child_schema = ChildEntity::schema();
+            for (auto& item : rel) {
+                item.*fk_ptr = parse_field_value<ForeignKeyField>(parent_pk);
+                co_await child_schema.insert_entity(item, conn);
+            }
         };
 
         desc.eager_loader = [rel_ptr, fk_ptr, pk_ext = pk_extractor_](std::span<Entity> parents, Connection& conn, DatabaseDialect dialect) -> core::Task<void> {
@@ -513,6 +706,94 @@ public:
                 }
                 co_return results;
             });
+
+            (e.*rel_ptr).set_many_to_many_mutators(
+                [parent_fk, child_fk](Connection& conn, const std::string& owner_key, const TargetEntity& item, std::vector<TargetEntity>& data) -> core::Task<void> {
+                    auto junction_schema = JunctionEntity::schema();
+                    auto target_schema = TargetEntity::schema();
+                    auto dialect = conn.dialect();
+
+                    std::string child_pk_val = target_schema.get_primary_key(item);
+
+                    std::string sql = "INSERT INTO ";
+                    sql.append(DialectTraits::quote_identifier(dialect, junction_schema.table_name()));
+                    sql.append(" (");
+                    sql.append(DialectTraits::quote_identifier(dialect, junction_schema.resolve_column_name(parent_fk)));
+                    sql.append(", ");
+                    sql.append(DialectTraits::quote_identifier(dialect, junction_schema.resolve_column_name(child_fk)));
+                    sql.append(") VALUES (");
+                    std::string p1, p2;
+                    DialectTraits::format_placeholder(dialect, 1, p1);
+                    DialectTraits::format_placeholder(dialect, 2, p2);
+                    sql.append(p1);
+                    sql.append(", ");
+                    sql.append(p2);
+                    sql.append(");");
+
+                    co_await conn.execute(sql, {owner_key, child_pk_val});
+                    data.push_back(item);
+                },
+                [parent_fk, child_fk](Connection& conn, const std::string& owner_key, const std::string& item_id, std::vector<TargetEntity>& data) -> core::Task<bool> {
+                    auto junction_schema = JunctionEntity::schema();
+                    auto target_schema = TargetEntity::schema();
+                    auto dialect = conn.dialect();
+
+                    std::string sql = "DELETE FROM ";
+                    sql.append(DialectTraits::quote_identifier(dialect, junction_schema.table_name()));
+                    sql.append(" WHERE ");
+                    sql.append(DialectTraits::quote_identifier(dialect, junction_schema.resolve_column_name(parent_fk)));
+                    sql.append(" = ");
+                    std::string p1, p2;
+                    DialectTraits::format_placeholder(dialect, 1, p1);
+                    DialectTraits::format_placeholder(dialect, 2, p2);
+                    sql.append(p1);
+                    sql.append(" AND ");
+                    sql.append(DialectTraits::quote_identifier(dialect, junction_schema.resolve_column_name(child_fk)));
+                    sql.append(" = ");
+                    sql.append(p2);
+                    sql.push_back(';');
+
+                    size_t n = co_await conn.execute(sql, {owner_key, item_id});
+                    if (n > 0) {
+                        auto it = std::remove_if(data.begin(), data.end(), [&](const TargetEntity& t) {
+                            return target_schema.get_primary_key(t) == item_id;
+                        });
+                        data.erase(it, data.end());
+                    }
+                    co_return n > 0;
+                }
+            );
+        };
+
+        desc.tree_inserter = [rel_ptr, parent_fk, child_fk](Entity& parent, Connection& conn, DatabaseDialect dialect, const std::string& parent_pk) -> core::Task<void> {
+            auto& rel = parent.*rel_ptr;
+            auto junction_schema = JunctionEntity::schema();
+            auto target_schema = TargetEntity::schema();
+
+            for (auto& target : rel) {
+                std::string target_pk_val = target_schema.get_primary_key(target);
+                if (target_pk_val.empty() || target_pk_val == "0") {
+                    co_await target_schema.insert_entity(target, conn);
+                    target_pk_val = target_schema.get_primary_key(target);
+                }
+
+                std::string sql = "INSERT INTO ";
+                sql.append(DialectTraits::quote_identifier(dialect, junction_schema.table_name()));
+                sql.append(" (");
+                sql.append(DialectTraits::quote_identifier(dialect, junction_schema.resolve_column_name(parent_fk)));
+                sql.append(", ");
+                sql.append(DialectTraits::quote_identifier(dialect, junction_schema.resolve_column_name(child_fk)));
+                sql.append(") VALUES (");
+                std::string p1, p2;
+                DialectTraits::format_placeholder(dialect, 1, p1);
+                DialectTraits::format_placeholder(dialect, 2, p2);
+                sql.append(p1);
+                sql.append(", ");
+                sql.append(p2);
+                sql.append(");");
+
+                co_await conn.execute(sql, {parent_pk, target_pk_val});
+            }
         };
 
         desc.eager_loader = [rel_ptr, parent_fk, child_fk, pk_ext = pk_extractor_](std::span<Entity> parents, Connection& conn, DatabaseDialect dialect) -> core::Task<void> {

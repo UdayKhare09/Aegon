@@ -57,6 +57,13 @@ public:
     }
 
     template <typename Entity>
+    core::Task<int64_t> insert_get_id(Entity& entity) {
+        auto schema = Entity::schema();
+        int64_t pid = co_await schema.insert_entity(entity, conn_);
+        co_return pid;
+    }
+
+    template <typename Entity>
     core::Task<int64_t> insert_get_id(const Entity& entity) {
         auto query = insert_into<Entity>().values(entity).to_sql(dialect_);
         if (dialect_ == DatabaseDialect::PostgreSQL || dialect_ == DatabaseDialect::SQLite) {
@@ -68,6 +75,22 @@ public:
         } else {
             co_await conn_.execute(query.sql, query.params);
             co_return 0;
+        }
+    }
+
+    template <typename Entity>
+    core::Task<void> insert_tree(Entity& entity) {
+        auto schema = Entity::schema();
+        int64_t pid = co_await insert_get_id(entity);
+        std::string parent_pk = schema.get_primary_key(entity);
+        if (parent_pk.empty() && pid > 0) {
+            parent_pk = std::to_string(pid);
+        }
+
+        for (const auto& rel : schema.relations()) {
+            if (rel.tree_inserter) {
+                co_await rel.tree_inserter(entity, conn_, dialect_, parent_pk);
+            }
         }
     }
 

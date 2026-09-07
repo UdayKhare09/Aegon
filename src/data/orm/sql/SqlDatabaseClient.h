@@ -56,10 +56,24 @@ public:
     }
 
     template <typename Entity>
+    core::Task<int64_t> insert_get_id(Entity& entity) {
+        auto guard = pool_.acquire();
+        Transaction tx(*guard);
+        co_return co_await tx.template insert_get_id<Entity>(entity);
+    }
+
+    template <typename Entity>
     core::Task<int64_t> insert_get_id(const Entity& entity) {
         auto guard = pool_.acquire();
         Transaction tx(*guard);
         co_return co_await tx.template insert_get_id<Entity>(entity);
+    }
+
+    template <typename Entity>
+    core::Task<void> insert_tree(Entity& entity) {
+        co_await transaction([&](Transaction& tx) -> core::Task<void> {
+            co_await tx.insert_tree(entity);
+        });
     }
 
     template <typename Entity>
@@ -198,6 +212,76 @@ template <typename T>
 inline core::Task<void> HasMany<T>::load(SqlDatabaseClient* client) {
     if (!client) throw std::runtime_error("HasMany::load: client is null");
     co_await load(*client);
+}
+
+template <typename T>
+inline core::Task<void> HasOne<T>::set(SqlDatabaseClient& client, T child) {
+    co_await set(client.pool(), std::move(child));
+}
+
+template <typename T>
+inline core::Task<void> HasOne<T>::set(SqlDatabaseClient* client, T child) {
+    if (!client) throw std::runtime_error("HasOne::set: client is null");
+    co_await set(*client, std::move(child));
+}
+
+template <typename T>
+inline core::Task<void> HasOne<T>::clear(SqlDatabaseClient& client) {
+    co_await clear(client.pool());
+}
+
+template <typename T>
+inline core::Task<void> HasOne<T>::clear(SqlDatabaseClient* client) {
+    if (!client) throw std::runtime_error("HasOne::clear: client is null");
+    co_await clear(*client);
+}
+
+template <typename T>
+inline core::Task<void> HasMany<T>::add(SqlDatabaseClient& client, T item) {
+    co_await add(client.pool(), std::move(item));
+}
+
+template <typename T>
+inline core::Task<void> HasMany<T>::add(SqlDatabaseClient* client, T item) {
+    if (!client) throw std::runtime_error("HasMany::add: client is null");
+    co_await add(*client, std::move(item));
+}
+
+template <typename T>
+template <typename Arg>
+inline core::Task<bool> HasMany<T>::remove(SqlDatabaseClient& client, const Arg& arg) {
+    co_return co_await remove(client.pool(), arg);
+}
+
+template <typename T>
+template <typename Arg>
+inline core::Task<bool> HasMany<T>::remove(SqlDatabaseClient* client, const Arg& arg) {
+    if (!client) throw std::runtime_error("HasMany::remove: client is null");
+    co_return co_await remove(*client, arg);
+}
+
+template <typename T>
+inline core::Task<void> HasMany<T>::attach(SqlDatabaseClient& client, const T& item) {
+    co_await attach(client.pool(), item);
+}
+
+template <typename T>
+inline core::Task<void> HasMany<T>::attach(SqlDatabaseClient* client, const T& item) {
+    if (!client) throw std::runtime_error("HasMany::attach: client is null");
+    co_await attach(*client, item);
+}
+
+template <typename T>
+template <typename Arg>
+inline core::Task<bool> HasMany<T>::detach(SqlDatabaseClient& client, const Arg& arg) {
+    co_return co_await detach(client.pool(), arg);
+}
+
+template <typename T>
+template <typename Arg>
+inline core::Task<bool> HasMany<T>::detach(SqlDatabaseClient* client, const Arg& arg) {
+    if (!client) throw std::runtime_error("HasMany::detach: client is null");
+    co_return co_await detach(*client, arg);
 }
 
 } // namespace aegon::data::orm::sql

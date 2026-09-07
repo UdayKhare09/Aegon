@@ -12,6 +12,9 @@
 
 namespace aegon::data::orm::sql {
 
+template <typename T>
+T parse_field_value(std::string_view s);
+
 class RowView {
 public:
     virtual ~RowView() = default;
@@ -36,61 +39,64 @@ public:
             return T{};
         }
 
-        std::string_view s = get_raw(col_idx);
-
-        if constexpr (std::is_same_v<T, std::string>) {
-            return std::string(s);
-        } else if constexpr (std::is_same_v<T, std::string_view>) {
-            return s;
-        } else if constexpr (std::is_same_v<T, bool>) {
-            return (s == "1" || s == "true" || s == "TRUE" || s == "t" || s == "T");
-        } else if constexpr (std::is_integral_v<T>) {
-            T val{};
-            std::from_chars(s.data(), s.data() + s.size(), val);
-            return val;
-        } else if constexpr (std::is_floating_point_v<T>) {
-            T val{};
-            std::from_chars(s.data(), s.data() + s.size(), val);
-            return val;
-        } else if constexpr (std::is_same_v<T, types::UUID>) {
-            auto opt = types::UUID::from_string(s);
-            return opt ? *opt : types::UUID{};
-        } else if constexpr (std::is_same_v<T, types::DateTime>) {
-            auto opt = types::DateTime::from_iso8601(s);
-            return opt ? *opt : types::DateTime{};
-        } else if constexpr (std::is_same_v<T, types::Date>) {
-            auto opt = types::Date::from_string(s);
-            return opt ? *opt : types::Date{};
-        } else if constexpr (std::is_same_v<T, types::Time>) {
-            auto opt = types::Time::from_string(s);
-            return opt ? *opt : types::Time{};
-        } else if constexpr (requires { T::from_string(s); }) {
-            auto opt = T::from_string(s);
-            if constexpr (requires { *opt; }) {
-                return opt ? *opt : T{};
-            } else {
-                return opt;
-            }
-        } else if constexpr (std::is_same_v<T, types::Json>) {
-            return types::Json(std::string(s));
-        } else if constexpr (std::is_same_v<T, types::Blob>) {
-            if (s.starts_with("\\x") || s.starts_with("0x")) {
-                auto opt = types::Blob::from_hex(s);
-                return opt ? *opt : types::Blob{};
-            }
-            auto opt = types::Blob::from_base64(s);
-            return opt ? *opt : types::Blob{};
-        } else if constexpr (std::is_same_v<T, types::Hash256>) {
-            if (s.starts_with("\\x") || s.starts_with("0x")) {
-                s.remove_prefix(2);
-            }
-            auto opt = types::Hash256::from_hex(s);
-            return opt ? *opt : types::Hash256{};
-        } else {
-            return T{};
-        }
+        return parse_field_value<T>(get_raw(col_idx));
     }
 };
+
+template <typename T>
+inline T parse_field_value(std::string_view s) {
+    if constexpr (std::is_same_v<T, std::string>) {
+        return std::string(s);
+    } else if constexpr (std::is_same_v<T, std::string_view>) {
+        return s;
+    } else if constexpr (std::is_same_v<T, bool>) {
+        return (s == "1" || s == "true" || s == "TRUE" || s == "t" || s == "T");
+    } else if constexpr (std::is_integral_v<T>) {
+        T val{};
+        std::from_chars(s.data(), s.data() + s.size(), val);
+        return val;
+    } else if constexpr (std::is_floating_point_v<T>) {
+        T val{};
+        std::from_chars(s.data(), s.data() + s.size(), val);
+        return val;
+    } else if constexpr (std::is_same_v<T, types::UUID>) {
+        auto opt = types::UUID::from_string(s);
+        return opt ? *opt : types::UUID{};
+    } else if constexpr (std::is_same_v<T, types::DateTime>) {
+        auto opt = types::DateTime::from_iso8601(s);
+        return opt ? *opt : types::DateTime{};
+    } else if constexpr (std::is_same_v<T, types::Date>) {
+        auto opt = types::Date::from_string(s);
+        return opt ? *opt : types::Date{};
+    } else if constexpr (std::is_same_v<T, types::Time>) {
+        auto opt = types::Time::from_string(s);
+        return opt ? *opt : types::Time{};
+    } else if constexpr (requires { T::from_string(s); }) {
+        auto opt = T::from_string(s);
+        if constexpr (requires { *opt; }) {
+            return opt ? *opt : T{};
+        } else {
+            return opt;
+        }
+    } else if constexpr (std::is_same_v<T, types::Json>) {
+        return types::Json(std::string(s));
+    } else if constexpr (std::is_same_v<T, types::Blob>) {
+        if (s.starts_with("\\x") || s.starts_with("0x")) {
+            auto opt = types::Blob::from_hex(s);
+            return opt ? *opt : types::Blob{};
+        }
+        auto opt = types::Blob::from_base64(s);
+        return opt ? *opt : types::Blob{};
+    } else if constexpr (std::is_same_v<T, types::Hash256>) {
+        if (s.starts_with("\\x") || s.starts_with("0x")) {
+            s.remove_prefix(2);
+        }
+        auto opt = types::Hash256::from_hex(s);
+        return opt ? *opt : types::Hash256{};
+    } else {
+        return T{};
+    }
+}
 
 // In-memory MockRowView for testing and driver adaptation
 class MockRowView : public RowView {

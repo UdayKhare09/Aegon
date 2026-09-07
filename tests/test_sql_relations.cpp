@@ -309,6 +309,155 @@ Task<void> run_relations_test_suite(SqlDatabaseClient& db, DatabaseDialect diale
         std::cout << "    -> Link and unlink operations verified!\n";
     }
 
+    // =========================================================================
+    // TEST SECTION D: Active Relational Mutators
+    // =========================================================================
+    std::cout << "  [D] Testing Active Relational Mutators (.set, .clear, .add, .remove, .attach, .detach)...\n";
+    {
+        // Fetch Bob
+        auto opt_bob = co_await db.find_by_id<UserAccount>(u2_id);
+        TEST_CHECK(opt_bob.has_value());
+        auto& bob = *opt_bob;
+        co_await bob.profile.load(db);
+        co_await bob.orders.load(db);
+        co_await bob.roles.load(db);
+
+        // 1. 1:1 Mutators: set() and clear()
+        TEST_CHECK(bob.profile.has_value());
+        TEST_CHECK(bob.profile->bio == "Database Architect");
+
+        // Set a new profile
+        Profile new_prof{.bio = "Principal Lead Architect"};
+        co_await bob.profile.set(db, new_prof);
+        TEST_CHECK(bob.profile.has_value());
+        TEST_CHECK(bob.profile->bio == "Principal Lead Architect");
+
+        // Verify in DB directly
+        auto bob_verify = co_await db.fetch_one(db.from<UserAccount>().where(&UserAccount::id, Op::Eq, u2_id).include(&UserAccount::profile));
+        TEST_CHECK(bob_verify.has_value());
+        TEST_CHECK(bob_verify->profile.has_value());
+        TEST_CHECK(bob_verify->profile->bio == "Principal Lead Architect");
+
+        // Clear the profile
+        co_await bob.profile.clear(db);
+        TEST_CHECK(!bob.profile.has_value());
+
+        // Verify cleared in DB directly
+        auto bob_cleared = co_await db.fetch_one(db.from<UserAccount>().where(&UserAccount::id, Op::Eq, u2_id).include(&UserAccount::profile));
+        TEST_CHECK(bob_cleared.has_value());
+        TEST_CHECK(!bob_cleared->profile.has_value());
+
+        // 2. 1:N Mutators: add() and remove()
+        size_t initial_orders = bob.orders.size();
+        OrderRecord new_order{.item_name = "Ultrawide Monitor", .price = 799.99};
+        co_await bob.orders.add(db, new_order);
+        TEST_CHECK(bob.orders.size() == initial_orders + 1);
+        TEST_CHECK(bob.orders.back().item_name == "Ultrawide Monitor");
+        int64_t added_order_id = bob.orders.back().id;
+        TEST_CHECK(added_order_id > 0);
+
+        // Verify in DB
+        auto bob_orders_verify = co_await db.fetch_one(db.from<UserAccount>().where(&UserAccount::id, Op::Eq, u2_id).include(&UserAccount::orders));
+        TEST_CHECK(bob_orders_verify.has_value());
+        TEST_CHECK(bob_orders_verify->orders.size() == initial_orders + 1);
+
+        // Remove order by ID
+        bool removed = co_await bob.orders.remove(db, added_order_id);
+        TEST_CHECK(removed);
+        TEST_CHECK(bob.orders.size() == initial_orders);
+
+        // Verify removed in DB
+        auto bob_orders_removed = co_await db.fetch_one(db.from<UserAccount>().where(&UserAccount::id, Op::Eq, u2_id).include(&UserAccount::orders));
+        TEST_CHECK(bob_orders_removed.has_value());
+        TEST_CHECK(bob_orders_removed->orders.size() == initial_orders);
+
+        // 3. N:M Mutators: attach() and detach()
+        // Charlie currently has 1 role ("Support")
+        auto opt_charlie = co_await db.find_by_id<UserAccount>(u3_id);
+        TEST_CHECK(opt_charlie.has_value());
+        auto& charlie = *opt_charlie;
+        co_await charlie.roles.load(db);
+        TEST_CHECK(charlie.roles.size() == 1);
+
+        Role dev_role{.id = r_dev, .name = "Developer"};
+        co_await charlie.roles.attach(db, dev_role);
+        TEST_CHECK(charlie.roles.size() == 2);
+
+        // Verify in DB
+        auto charlie_roles_verify = co_await db.fetch_one(db.from<UserAccount>().where(&UserAccount::id, Op::Eq, u3_id).include(&UserAccount::roles));
+        TEST_CHECK(charlie_roles_verify.has_value());
+        TEST_CHECK(charlie_roles_verify->roles.size() == 2);
+
+        // Detach role by ID
+        bool detached = co_await charlie.roles.detach(db, r_dev);
+        TEST_CHECK(detached);
+        TEST_CHECK(charlie.roles.size() == 1);
+
+        // Verify detached in DB
+        auto charlie_roles_detached = co_await db.fetch_one(db.from<UserAccount>().where(&UserAccount::id, Op::Eq, u3_id).include(&UserAccount::roles));
+        TEST_CHECK(charlie_roles_detached.has_value());
+        TEST_CHECK(charlie_roles_detached->roles.size() == 1);
+
+        std::cout << "    -> Active relational mutators (.set, .clear, .add, .remove, .attach, .detach) verified!\n";
+    }
+
+    // =========================================================================
+    // TEST SECTION E: Deep Graph Insertion (co_await db.insert_tree(entity))
+    // =========================================================================
+    std::cout << "  [E] Testing Deep Graph Insertion (co_await db.insert_tree(entity))...\n";
+    {
+        UserAccount david{.username = "david", .email = "david@example.com"};
+        david.profile.set_value(Profile{.bio = "Staff Distributed Systems Architect"});
+        david.orders.push_back(OrderRecord{.item_name = "Split Ergonomic Keyboard", .price = 320.00});
+        david.orders.push_back(OrderRecord{.item_name = "Thunderbolt Dock", .price = 249.99});
+        david.roles.push_back(Role{.id = r_admin, .name = "Admin"});
+        david.roles.push_back(Role{.id = r_dev, .name = "Developer"});
+
+        // Insert entire entity graph in a single atomic transaction
+        co_await db.insert_tree(david);
+
+        // Verify in-memory mutations
+        TEST_CHECK(david.id > 0);
+        TEST_CHECK(david.profile.has_value());
+        TEST_CHECK(david.profile->id > 0);
+        TEST_CHECK(david.profile->user_id == david.id);
+        TEST_CHECK(david.orders.size() == 2);
+        TEST_CHECK(david.orders[0].id > 0);
+        TEST_CHECK(david.orders[0].user_id == david.id);
+        TEST_CHECK(david.orders[1].id > 0);
+        TEST_CHECK(david.orders[1].user_id == david.id);
+        TEST_CHECK(david.roles.size() == 2);
+
+        // Now query database directly with all 3 includes to verify complete atomic persistence
+        auto fetched = co_await db.fetch_one(db.from<UserAccount>()
+            .where(&UserAccount::id, Op::Eq, david.id)
+            .include(&UserAccount::profile)
+            .include(&UserAccount::orders)
+            .include(&UserAccount::roles));
+
+        TEST_CHECK(fetched.has_value());
+        TEST_CHECK(fetched->username == "david");
+        TEST_CHECK(fetched->email == "david@example.com");
+
+        // 1:1 verified
+        TEST_CHECK(fetched->profile.is_loaded());
+        TEST_CHECK(fetched->profile.has_value());
+        TEST_CHECK(fetched->profile->bio == "Staff Distributed Systems Architect");
+        TEST_CHECK(fetched->profile->user_id == david.id);
+
+        // 1:N verified
+        TEST_CHECK(fetched->orders.is_loaded());
+        TEST_CHECK(fetched->orders.size() == 2);
+        TEST_CHECK(fetched->orders[0].item_name == "Split Ergonomic Keyboard");
+        TEST_CHECK(fetched->orders[1].item_name == "Thunderbolt Dock");
+
+        // N:M verified
+        TEST_CHECK(fetched->roles.is_loaded());
+        TEST_CHECK(fetched->roles.size() == 2);
+
+        std::cout << "    -> Deep graph insertion (co_await db.insert_tree) verified atomically!\n";
+    }
+
     co_return;
 }
 
@@ -319,6 +468,7 @@ void test_relations_sqlite() {
 
     auto task = run_relations_test_suite(db, DatabaseDialect::SQLite);
     task.resume();
+    task.result();
     std::cout << " -> SQLite Relations Test Passed Successfully!\n";
 }
 
@@ -330,6 +480,7 @@ void test_relations_postgres() {
 
     auto task = run_relations_test_suite(db, DatabaseDialect::PostgreSQL);
     task.resume();
+    task.result();
     std::cout << " -> Live PostgreSQL 17 Relations Test Passed Successfully!\n";
 }
 
