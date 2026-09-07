@@ -5,6 +5,7 @@
 #include "http/v3/Http3Server.h"
 #include "core/EventLoop.h"
 #include "core/Task.h"
+#include "data/orm/sql/SqlConfig.h"
 #include <string>
 #include <string_view>
 #include <memory>
@@ -12,20 +13,41 @@
 #include <thread>
 #include <atomic>
 
+namespace aegon::data::orm::sql {
+class SqlDatabaseClient;
+class PerCoreConnectionPool;
+}
+
 namespace aegon::http {
 
 namespace v3 {
 class Http3Server;
 }
 
+class Server;
+
+/**
+ * @brief Fluent multi-database server configuration namespace (e.g. server.db.sql({...})).
+ */
+struct ServerDatabaseConfig {
+    Server& server;
+    explicit ServerDatabaseConfig(Server& s) : server(s) {}
+
+    Server& sql(const data::orm::sql::SqlConfig& config);
+    Server& sql(data::orm::sql::SqlDatabaseClient* client);
+};
+
 class Server {
 public:
+    // Multi-database configuration namespace
+    ServerDatabaseConfig db{*this};
+
     Server();
     explicit Server(Router router);
     ~Server();
 
-    Server(Server&&) noexcept = default;
-    Server& operator=(Server&&) noexcept = default;
+    Server(Server&&) noexcept;
+    Server& operator=(Server&&) noexcept;
     Server(const Server&) = delete;
     Server& operator=(const Server&) = delete;
 
@@ -75,6 +97,7 @@ public:
     [[nodiscard]] std::string_view host() const noexcept { return host_; }
     [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
     [[nodiscard]] bool is_http3_enabled() const noexcept { return http3_enabled_; }
+    [[nodiscard]] data::orm::sql::SqlDatabaseClient* sql_client() const noexcept { return sql_client_; }
 
 private:
     core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
@@ -95,6 +118,13 @@ private:
     bool http3_enabled_{true}; // Default to enabled when TLS is used
     std::unique_ptr<tls::TlsContext> tls_ctx_;
     std::unique_ptr<v3::Http3Server> h3_server_;
+
+    // SQL Connection Pool and Client
+    std::unique_ptr<data::orm::sql::PerCoreConnectionPool> sql_pool_;
+    std::unique_ptr<data::orm::sql::SqlDatabaseClient> owned_sql_client_;
+    data::orm::sql::SqlDatabaseClient* sql_client_{nullptr};
+
+    friend struct ServerDatabaseConfig;
 };
 
 } // namespace aegon::http

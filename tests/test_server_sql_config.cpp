@@ -1,0 +1,238 @@
+#include "http/Server.h"
+#include "data/orm/sql/Sql.h"
+#include "data/orm/sql/drivers/SqliteDriver.h"
+#include "data/orm/sql/drivers/PostgresDriver.h"
+#include <iostream>
+#include <cassert>
+#include <string>
+
+#define TEST_CHECK(expr) do { \
+    if (!(expr)) { \
+        std::cerr << "Assertion failed: " #expr << " at " << __FILE__ << ":" << __LINE__ << std::endl; \
+        std::abort(); \
+    } \
+} while (0)
+
+using namespace aegon::core;
+using namespace aegon::http;
+using namespace aegon::data::orm::sql;
+
+struct ServerItem {
+    int64_t id{0};
+    std::string name;
+    int32_t quantity{0};
+
+    static auto schema() {
+        return table<ServerItem>("server_items")
+            .id(&ServerItem::id)
+            .column(&ServerItem::name, "name")
+            .column(&ServerItem::quantity, "quantity");
+    }
+};
+
+void test_sqlite_in_memory_config() {
+    std::cout << "[TEST 1] Testing Server.db.sql with SQLite in-memory and Context auto-wiring...\n";
+
+    Server server;
+    server.db.sql({
+        .dialect = DatabaseDialect::SQLite,
+        .database = ":memory:",
+        .pool_per_core = 2
+    });
+
+    TEST_CHECK(server.sql_client() != nullptr);
+
+    Router router;
+    bool handler_called = false;
+
+    router.post("/items", [&](Context& ctx) -> Task<void> {
+        handler_called = true;
+        TEST_CHECK(ctx.db.sql.is_configured());
+
+        // 1. Create table
+        auto ddl = generate_ddl<ServerItem>(DatabaseDialect::SQLite);
+        co_await ctx.db.sql.execute(ddl);
+
+        // 2. Direct insert
+        ServerItem item1{.id = 1, .name = "Aegon Shield", .quantity = 10};
+        co_await ctx.db.sql.insert(item1);
+
+        // 3. Find by ID
+        auto found = co_await ctx.db.sql.find_by_id<ServerItem>(int64_t{1});
+        TEST_CHECK(found.has_value());
+        TEST_CHECK(found->name == "Aegon Shield");
+        TEST_CHECK(found->quantity == 10);
+
+        // 4. Option 4 Transaction
+        co_await ctx.db.sql.transaction([](Transaction& tx) -> Task<void> {
+            ServerItem item2{.id = 2, .name = "Dragon Helm", .quantity = 5};
+            co_await tx.insert(item2);
+            co_return;
+        });
+
+        // 5. Fetch all
+        auto all_items = co_await ctx.db.sql.fetch_all(ctx.db.sql.from<ServerItem>());
+        TEST_CHECK(all_items.size() == 2);
+
+        ctx.res().status(StatusCode::Ok).text("SUCCESS");
+        co_return;
+    });
+
+    server.set_router(std::move(router));
+
+    // Simulate request passing through server
+    Request req;
+    req.set_method(Method::POST);
+    req.set_path("/items");
+    Response res;
+
+    Context ctx(req, res, nullptr, server.sql_client());
+    auto match = server.router().match(req);
+    TEST_CHECK(match.route_found);
+    TEST_CHECK(match.handler != nullptr);
+
+    auto task = (*match.handler)(ctx);
+    task.resume();
+
+    TEST_CHECK(handler_called);
+    TEST_CHECK(res.status() == StatusCode::Ok);
+    TEST_CHECK(res.body() == "SUCCESS");
+
+    std::cout << " -> SQLite in-memory test passed successfully!\n";
+}
+
+void test_postgres_config() {
+    std::cout << "[TEST 2] Testing Server.db.sql with live PostgreSQL 17...\n";
+
+    Server server;
+    server.db.sql({
+        .dialect = DatabaseDialect::PostgreSQL,
+        .host = "127.0.0.1",
+        .port = 5432,
+        .database = "aegon_test",
+        .user = "postgres",
+        .password = "postgres",
+        .pool_per_core = 4
+    });
+
+    TEST_CHECK(server.sql_client() != nullptr);
+
+    Router router;
+    bool handler_called = false;
+
+    router.get("/pg-test", [&](Context& ctx) -> Task<void> {
+        handler_called = true;
+        TEST_CHECK(ctx.db.sql.is_configured());
+
+        // Recreate table in PostgreSQL
+        co_await ctx.db.sql.execute("DROP TABLE IF EXISTS server_items CASCADE;");
+        auto ddl = generate_ddl<ServerItem>(DatabaseDialect::PostgreSQL);
+        co_await ctx.db.sql.execute(ddl);
+
+        // Transaction block
+        co_await ctx.db.sql.transaction([](Transaction& tx) -> Task<void> {
+            ServerItem it1{.id = 0, .name = "Valyrian Blade", .quantity = 1};
+            ServerItem it2{.id = 0, .name = "Obsidian Arrow", .quantity = 50};
+            co_await tx.insert(it1);
+            co_await tx.insert(it2);
+            co_return;
+        });
+
+        auto items = co_await ctx.db.sql.fetch_all(
+            ctx.db.sql.from<ServerItem>().where(&ServerItem::quantity, Op::Gt, 5)
+        );
+        TEST_CHECK(items.size() == 1);
+        TEST_CHECK(items[0].id > 0);
+        TEST_CHECK(items[0].name == "Obsidian Arrow");
+        TEST_CHECK(items[0].quantity == 50);
+
+        ctx.res().status(StatusCode::Ok).text("PG_OK");
+        co_return;
+    });
+
+    server.set_router(std::move(router));
+
+    Request req;
+    req.set_method(Method::GET);
+    req.set_path("/pg-test");
+    Response res;
+
+    Context ctx(req, res, nullptr, server.sql_client());
+    auto match = server.router().match(req);
+    TEST_CHECK(match.route_found);
+
+    auto task = (*match.handler)(ctx);
+    task.resume();
+
+    TEST_CHECK(handler_called);
+    TEST_CHECK(res.status() == StatusCode::Ok);
+    TEST_CHECK(res.body() == "PG_OK");
+
+    std::cout << " -> Live PostgreSQL 17 test passed successfully!\n";
+}
+
+void test_server_move_and_reconfiguration() {
+    std::cout << "[TEST 3] Testing Server move operations and fluent chaining...\n";
+
+    Server server;
+    server.db.sql({
+        .dialect = DatabaseDialect::SQLite,
+        .database = ":memory:"
+    }).listen(9090).enable_http3(false);
+
+    TEST_CHECK(server.port() == 9090);
+    TEST_CHECK(!server.is_http3_enabled());
+    TEST_CHECK(server.sql_client() != nullptr);
+
+    // Move constructor
+    Server moved_server = std::move(server);
+    TEST_CHECK(moved_server.port() == 9090);
+    TEST_CHECK(moved_server.sql_client() != nullptr);
+    TEST_CHECK(server.sql_client() == nullptr);
+
+    // Reconfigure moved server's db to verify db{*this} is rebound
+    moved_server.db.sql({
+        .dialect = DatabaseDialect::SQLite,
+        .database = ":memory:"
+    });
+    TEST_CHECK(moved_server.sql_client() != nullptr);
+
+    // Move assignment
+    Server target_server;
+    target_server = std::move(moved_server);
+    TEST_CHECK(target_server.port() == 9090);
+    TEST_CHECK(target_server.sql_client() != nullptr);
+    TEST_CHECK(moved_server.sql_client() == nullptr);
+
+    std::cout << " -> Server move operations passed successfully!\n";
+}
+
+void test_external_sql_client_injection() {
+    std::cout << "[TEST 4] Testing external SqlDatabaseClient injection...\n";
+
+    auto ext_pool = drivers::create_sqlite_pool(":memory:", 2);
+    SqlDatabaseClient ext_client(*ext_pool);
+
+    Server server;
+    server.db.sql(&ext_client);
+
+    TEST_CHECK(server.sql_client() == &ext_client);
+
+    std::cout << " -> External client injection passed successfully!\n";
+}
+
+int main() {
+    std::cout << "========================================================\n";
+    std::cout << "      Aegon Server SQL Configuration Test Suite        \n";
+    std::cout << "========================================================\n";
+
+    test_sqlite_in_memory_config();
+    test_postgres_config();
+    test_server_move_and_reconfiguration();
+    test_external_sql_client_injection();
+
+    std::cout << "========================================================\n";
+    std::cout << "  ALL SERVER SQL CONFIGURATION TESTS PASSED!\n";
+    std::cout << "========================================================\n";
+    return 0;
+}

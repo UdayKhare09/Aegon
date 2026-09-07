@@ -18,6 +18,10 @@
 #include <span>
 #include <cstdint>
 
+namespace aegon::data::orm::sql {
+class SqlDatabaseClient;
+}
+
 namespace aegon::http::v3 {
 
 /**
@@ -42,7 +46,8 @@ class Http3Connection {
 public:
     Http3Connection(core::EventLoop& loop, int udp_fd, const sockaddr_storage& remote_addr,
                     socklen_t remote_addr_len, const Router& router, SSL_CTX* ssl_ctx,
-                    void* user_state = nullptr);
+                    void* user_state = nullptr,
+                    data::orm::sql::SqlDatabaseClient* sql_client = nullptr);
     ~Http3Connection();
 
     Http3Connection(const Http3Connection&) = delete;
@@ -109,6 +114,7 @@ private:
     const Router& router_;
     SSL_CTX* ssl_ctx_{nullptr};
     void* user_state_{nullptr};
+    data::orm::sql::SqlDatabaseClient* sql_client_{nullptr};
 
     SSL* ssl_{nullptr};
     ngtcp2_conn* qconn_{nullptr};

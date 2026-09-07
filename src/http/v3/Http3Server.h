@@ -15,7 +15,8 @@ namespace aegon::http::v3 {
 class Http3Server {
 public:
     Http3Server(core::EventLoop& loop, uint16_t port, const Router& router,
-                SSL_CTX* ssl_ctx, void* user_state = nullptr);
+                SSL_CTX* ssl_ctx, void* user_state = nullptr,
+                data::orm::sql::SqlDatabaseClient* sql_client = nullptr);
     ~Http3Server();
 
     Http3Server(const Http3Server&) = delete;
@@ -58,6 +59,7 @@ private:
     const Router& router_;
     SSL_CTX* ssl_ctx_{nullptr};
     void* user_state_{nullptr};
+    data::orm::sql::SqlDatabaseClient* sql_client_{nullptr};
 
     int udp_fd_{-1};
     bool running_{false};

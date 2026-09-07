@@ -33,9 +33,9 @@ public:
 
     Response& set_header_owned(std::string name, std::string value) {
         owned_strings_.push_back(std::move(name));
-        std::string_view n = owned_strings_.back();
         owned_strings_.push_back(std::move(value));
         std::string_view v = owned_strings_.back();
+        std::string_view n = *(owned_strings_.end() - 2);
         headers_.set(n, v);
         return *this;
     }

@@ -17,3 +17,4 @@
 #include "PerCoreConnectionPool.h"
 #include "Transaction.h"
 #include "SqlDatabaseClient.h"
+#include "SqlConfig.h"

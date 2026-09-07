@@ -5,6 +5,10 @@
 #include "http/tls/TlsContext.h"
 #include "http/tls/TlsStream.h"
 #include "http/v3/Http3Server.h"
+#include "data/orm/sql/SqlDatabaseClient.h"
+#include "data/orm/sql/PerCoreConnectionPool.h"
+#include "data/orm/sql/drivers/PostgresDriver.h"
+#include "data/orm/sql/drivers/SqliteDriver.h"
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
@@ -13,9 +17,73 @@
 
 namespace aegon::http {
 
+Server& ServerDatabaseConfig::sql(const data::orm::sql::SqlConfig& config) {
+    if (config.dialect == data::orm::sql::DatabaseDialect::PostgreSQL) {
+        server.sql_pool_ = data::orm::sql::drivers::create_postgres_pool(config.to_conninfo(), config.pool_per_core);
+    } else {
+        server.sql_pool_ = data::orm::sql::drivers::create_sqlite_pool(config.database, config.pool_per_core);
+    }
+    server.owned_sql_client_ = std::make_unique<data::orm::sql::SqlDatabaseClient>(*server.sql_pool_);
+    server.sql_client_ = server.owned_sql_client_.get();
+    return server;
+}
+
+Server& ServerDatabaseConfig::sql(data::orm::sql::SqlDatabaseClient* client) {
+    server.sql_client_ = client;
+    server.owned_sql_client_.reset();
+    server.sql_pool_.reset();
+    return server;
+}
+
 Server::Server() = default;
 Server::Server(Router router) : router_(std::move(router)) {}
 Server::~Server() = default;
+
+Server::Server(Server&& other) noexcept
+    : db{*this},
+      router_(std::move(other.router_)),
+      host_(std::move(other.host_)),
+      port_(other.port_),
+      user_state_(other.user_state_),
+      running_(other.running_.load()),
+      workers_(std::move(other.workers_)),
+      tls_enabled_(other.tls_enabled_),
+      http3_enabled_(other.http3_enabled_),
+      tls_ctx_(std::move(other.tls_ctx_)),
+      h3_server_(std::move(other.h3_server_)),
+      sql_pool_(std::move(other.sql_pool_)),
+      owned_sql_client_(std::move(other.owned_sql_client_)),
+      sql_client_(other.sql_client_)
+{
+    if (owned_sql_client_) {
+        sql_client_ = owned_sql_client_.get();
+    }
+    other.sql_client_ = nullptr;
+}
+
+Server& Server::operator=(Server&& other) noexcept {
+    if (this != &other) {
+        router_ = std::move(other.router_);
+        host_ = std::move(other.host_);
+        port_ = other.port_;
+        user_state_ = other.user_state_;
+        running_.store(other.running_.load());
+        workers_ = std::move(other.workers_);
+        tls_enabled_ = other.tls_enabled_;
+        http3_enabled_ = other.http3_enabled_;
+        tls_ctx_ = std::move(other.tls_ctx_);
+        h3_server_ = std::move(other.h3_server_);
+        sql_pool_ = std::move(other.sql_pool_);
+        owned_sql_client_ = std::move(other.owned_sql_client_);
+        if (owned_sql_client_) {
+            sql_client_ = owned_sql_client_.get();
+        } else {
+            sql_client_ = other.sql_client_;
+        }
+        other.sql_client_ = nullptr;
+    }
+    return *this;
+}
 
 Server& Server::enable_tls(const std::string& cert_file, const std::string& key_file) {
     tls_ctx_ = std::make_unique<tls::TlsContext>();
@@ -64,7 +132,7 @@ int Server::create_listen_socket() {
 }
 
 core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data) {
-    v2::Http2Connection h2(loop, client_fd, router_, user_state_);
+    v2::Http2Connection h2(loop, client_fd, router_, user_state_, nullptr, sql_client_);
     bool ok = co_await h2.init();
     if (!ok) {
         (void)(co_await loop.ring().close(client_fd));
@@ -98,7 +166,7 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
 }
 
 core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings, std::string initial_data) {
-    v2::Http2Connection h2(loop, client_fd, router_, user_state_);
+    v2::Http2Connection h2(loop, client_fd, router_, user_state_, nullptr, sql_client_);
     bool ok = co_await h2.init();
     if (!ok) {
         (void)(co_await loop.ring().close(client_fd));
@@ -153,7 +221,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
             co_return co_await tls_stream.write_plaintext(data.data(), data.size());
         };
 
-        v2::Http2Connection h2(loop, client_fd, router_, user_state_, std::move(sender));
+        v2::Http2Connection h2(loop, client_fd, router_, user_state_, std::move(sender), sql_client_);
         ok = co_await h2.init();
         if (!ok) {
             (void)(co_await loop.ring().close(client_fd));
@@ -215,7 +283,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
             auto match_res = router_.match(req);
 
             if (match_res.route_found && match_res.handler) {
-                Context ctx(req, res, user_state_);
+                Context ctx(req, res, user_state_, sql_client_);
                 co_await (*match_res.handler)(ctx);
             } else if (match_res.method_not_allowed) {
                 res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
@@ -331,7 +399,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
         auto match_res = router_.match(req);
 
         if (match_res.route_found && match_res.handler) {
-            Context ctx(req, res, user_state_);
+            Context ctx(req, res, user_state_, sql_client_);
             co_await (*match_res.handler)(ctx);
         } else if (match_res.method_not_allowed) {
             res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
@@ -385,7 +453,7 @@ void Server::run() {
     loop.spawn(accept_loop(loop, listen_fd));
 
     if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
-        h3_server_ = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), user_state_);
+        h3_server_ = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), user_state_, sql_client_);
         if (h3_server_->start()) {
             loop.spawn(h3_server_->run_receive_loop());
             loop.spawn(h3_server_->run_timer_loop());
@@ -414,7 +482,7 @@ void Server::run(size_t threads) {
 
                 std::unique_ptr<v3::Http3Server> h3_worker;
                 if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
-                    h3_worker = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), user_state_);
+                    h3_worker = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), user_state_, sql_client_);
                     if (h3_worker->start()) {
                         loop.spawn(h3_worker->run_receive_loop());
                         loop.spawn(h3_worker->run_timer_loop());

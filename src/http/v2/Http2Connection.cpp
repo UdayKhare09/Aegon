@@ -42,8 +42,9 @@ ssize_t data_source_read_cb(nghttp2_session*, int32_t stream_id,
 } // anonymous namespace
 
 Http2Connection::Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
-                                 void* user_state, OutputSender sender)
-    : loop_(loop), client_fd_(client_fd), router_(router), user_state_(user_state), sender_(std::move(sender)) {
+                                 void* user_state, OutputSender sender,
+                                 data::orm::sql::SqlDatabaseClient* sql_client)
+    : loop_(loop), client_fd_(client_fd), router_(router), user_state_(user_state), sql_client_(sql_client), sender_(std::move(sender)) {
     nghttp2_session_callbacks* callbacks;
     nghttp2_session_callbacks_new(&callbacks);
 
@@ -274,7 +275,7 @@ core::Task<bool> Http2Connection::upgrade_request(Request req, std::string_view 
 
     auto match_res = router_.match(stream->req);
     if (match_res.route_found && match_res.handler) {
-        Context ctx(stream->req, stream->res, user_state_);
+        Context ctx(stream->req, stream->res, user_state_, sql_client_);
         co_await (*match_res.handler)(ctx);
     } else if (match_res.method_not_allowed) {
         stream->res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
@@ -304,7 +305,7 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
 
         auto match_res = router_.match(stream->req);
         if (match_res.route_found && match_res.handler) {
-            Context ctx(stream->req, stream->res, user_state_);
+            Context ctx(stream->req, stream->res, user_state_, sql_client_);
             co_await (*match_res.handler)(ctx);
         } else if (match_res.method_not_allowed) {
             stream->res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");

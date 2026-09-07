@@ -11,6 +11,10 @@
 #include <string_view>
 #include <vector>
 
+namespace aegon::data::orm::sql {
+class SqlDatabaseClient;
+}
+
 namespace aegon::http::v2 {
 
 struct Http2Stream {
@@ -31,7 +35,8 @@ using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
 class Http2Connection {
 public:
     Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
-                    void* user_state = nullptr, OutputSender sender = nullptr);
+                    void* user_state = nullptr, OutputSender sender = nullptr,
+                    data::orm::sql::SqlDatabaseClient* sql_client = nullptr);
     ~Http2Connection();
 
     Http2Connection(const Http2Connection&) = delete;
@@ -82,6 +87,7 @@ private:
     int client_fd_;
     const Router& router_;
     void* user_state_{nullptr};
+    data::orm::sql::SqlDatabaseClient* sql_client_{nullptr};
 
     nghttp2_session* session_{nullptr};
     std::unordered_map<int32_t, std::unique_ptr<Http2Stream>> streams_;

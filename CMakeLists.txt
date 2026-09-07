@@ -25,6 +25,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wall
         -Wextra
         -Wpedantic
+        -Wno-missing-field-initializers
+        -Wno-missing-braces
     )
 endif()
 
@@ -90,6 +92,8 @@ target_link_libraries(aegon_http PUBLIC
     nghttp3
     ssl
     crypto
+    sqlite3
+    pq
 )
 
 # Test and Benchmark executables
@@ -167,6 +171,12 @@ add_executable(test_live_postgres
     tests/test_live_postgres.cpp
 )
 target_link_libraries(test_live_postgres PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+
+add_executable(test_server_sql_config
+    tests/test_server_sql_config.cpp
+)
+target_link_libraries(test_server_sql_config PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+
 
 
 

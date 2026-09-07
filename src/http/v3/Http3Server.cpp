@@ -13,8 +13,8 @@
 namespace aegon::http::v3 {
 
 Http3Server::Http3Server(core::EventLoop& loop, uint16_t port, const Router& router,
-                         SSL_CTX* ssl_ctx, void* user_state)
-    : loop_(loop), port_(port), router_(router), ssl_ctx_(ssl_ctx), user_state_(user_state) {}
+                         SSL_CTX* ssl_ctx, void* user_state, data::orm::sql::SqlDatabaseClient* sql_client)
+    : loop_(loop), port_(port), router_(router), ssl_ctx_(ssl_ctx), user_state_(user_state), sql_client_(sql_client) {}
 
 Http3Server::~Http3Server() {
     stop();
@@ -204,7 +204,7 @@ core::Task<void> Http3Server::run_receive_loop() {
         } else if (vc.version != 0 && vc.scidlen > 0) {
             // New connection triggered by client Initial packet
             auto new_conn = std::make_shared<Http3Connection>(
-                loop_, udp_fd_, remote_addr, msg.msg_namelen, router_, ssl_ctx_, user_state_);
+                loop_, udp_fd_, remote_addr, msg.msg_namelen, router_, ssl_ctx_, user_state_, sql_client_);
 
             if (new_conn->init(vc.dcid, vc.dcidlen, vc.scid, vc.scidlen)) {
                 conn = new_conn;

@@ -61,9 +61,9 @@ nghttp3_ssize h3_read_data(nghttp3_conn*, int64_t stream_id, nghttp3_vec* vec, s
 
 Http3Connection::Http3Connection(core::EventLoop& loop, int udp_fd, const sockaddr_storage& remote_addr,
                                  socklen_t remote_addr_len, const Router& router, SSL_CTX* ssl_ctx,
-                                 void* user_state)
+                                 void* user_state, data::orm::sql::SqlDatabaseClient* sql_client)
     : loop_(loop), udp_fd_(udp_fd), remote_addr_(remote_addr), remote_addr_len_(remote_addr_len),
-      router_(router), ssl_ctx_(ssl_ctx), user_state_(user_state) {}
+      router_(router), ssl_ctx_(ssl_ctx), user_state_(user_state), sql_client_(sql_client) {}
 
 Http3Connection::~Http3Connection() {
     if (h3conn_) {
@@ -486,7 +486,7 @@ core::Task<void> Http3Connection::dispatch_pending_requests() {
 
         auto match_res = router_.match(stream->req);
         if (match_res.route_found && match_res.handler) {
-            Context ctx(stream->req, stream->res, user_state_);
+            Context ctx(stream->req, stream->res, user_state_, sql_client_);
             co_await (*match_res.handler)(ctx);
         } else if (match_res.method_not_allowed) {
             stream->res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
