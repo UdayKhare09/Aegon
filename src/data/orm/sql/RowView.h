@@ -126,4 +126,25 @@ public:
     }
 };
 
+class OffsetRowView : public RowView {
+    const RowView& inner_;
+    size_t offset_;
+
+public:
+    OffsetRowView(const RowView& inner, size_t offset) : inner_(inner), offset_(offset) {}
+
+    [[nodiscard]] size_t column_count() const noexcept override {
+        size_t total = inner_.column_count();
+        return total > offset_ ? total - offset_ : 0;
+    }
+
+    [[nodiscard]] bool is_null(size_t col_idx) const override {
+        return inner_.is_null(col_idx + offset_);
+    }
+
+    [[nodiscard]] std::string_view get_raw(size_t col_idx) const override {
+        return inner_.get_raw(col_idx + offset_);
+    }
+};
+
 } // namespace aegon::data::orm::sql

@@ -80,7 +80,7 @@ public:
             if (row_idx + 1 < entities_.size()) sql.append(", ");
         }
 
-        if (dialect == DatabaseDialect::PostgreSQL && has_auto_inc_pk) {
+        if ((dialect == DatabaseDialect::PostgreSQL || dialect == DatabaseDialect::SQLite) && has_auto_inc_pk) {
             sql.append(" RETURNING ");
             sql.append(DialectTraits::quote_identifier(dialect, schema_.primary_key_name()));
         }

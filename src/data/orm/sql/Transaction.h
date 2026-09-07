@@ -59,7 +59,7 @@ public:
     template <typename Entity>
     core::Task<int64_t> insert_get_id(const Entity& entity) {
         auto query = insert_into<Entity>().values(entity).to_sql(dialect_);
-        if (dialect_ == DatabaseDialect::PostgreSQL) {
+        if (dialect_ == DatabaseDialect::PostgreSQL || dialect_ == DatabaseDialect::SQLite) {
             auto rows = co_await conn_.query(query.sql, query.params);
             if (!rows.empty()) {
                 co_return rows[0].template get<int64_t>(0);
@@ -114,7 +114,11 @@ public:
     core::Task<std::vector<Entity>> fetch_all(const SelectBuilder<Entity>& builder) {
         auto query = builder.to_sql(dialect_);
         auto rows = co_await conn_.query(query.sql, query.params);
-        co_return builder.map_rows(rows);
+        auto results = builder.map_rows(rows);
+        if (builder.has_includes() && !results.empty()) {
+            co_await builder.eager_load_includes(results, conn_, dialect_);
+        }
+        co_return results;
     }
 
     template <typename Entity>
@@ -124,7 +128,14 @@ public:
         if (rows.empty()) {
             co_return std::nullopt;
         }
-        co_return builder.map_row(rows[0]);
+        Entity item = builder.map_row(rows[0]);
+        if (builder.has_includes()) {
+            std::vector<Entity> vec;
+            vec.push_back(std::move(item));
+            co_await builder.eager_load_includes(vec, conn_, dialect_);
+            co_return std::move(vec[0]);
+        }
+        co_return item;
     }
 
     core::Task<size_t> execute(const QueryResult& query) {

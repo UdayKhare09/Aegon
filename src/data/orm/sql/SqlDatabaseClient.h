@@ -123,6 +123,81 @@ public:
     [[nodiscard]] DeleteBuilder<Entity> delete_from() const {
         return DeleteBuilder<Entity>();
     }
+
+    template <typename Relation>
+    core::Task<void> load(Relation& rel) {
+        co_await rel.load(*this);
+    }
+
+    template <typename JunctionEntity, typename ParentID, typename ChildID>
+    core::Task<void> link(const ParentID& parent_id, const ChildID& child_id) {
+        auto guard = pool_.acquire();
+        auto dialect = guard->dialect();
+        auto schema = JunctionEntity::schema();
+        std::string sql = "INSERT INTO ";
+        sql.append(DialectTraits::quote_identifier(dialect, schema.table_name()));
+        sql.append(" (");
+        sql.append(DialectTraits::quote_identifier(dialect, schema.columns()[0].column_name));
+        sql.append(", ");
+        sql.append(DialectTraits::quote_identifier(dialect, schema.columns()[1].column_name));
+        sql.append(") VALUES (");
+        std::string p1, p2;
+        DialectTraits::format_placeholder(dialect, 1, p1);
+        DialectTraits::format_placeholder(dialect, 2, p2);
+        sql.append(p1);
+        sql.append(", ");
+        sql.append(p2);
+        sql.append(");");
+
+        co_await guard->execute(sql, {format_param_value(parent_id), format_param_value(child_id)});
+    }
+
+    template <typename JunctionEntity, typename ParentID, typename ChildID>
+    core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id) {
+        auto guard = pool_.acquire();
+        auto dialect = guard->dialect();
+        auto schema = JunctionEntity::schema();
+        std::string sql = "DELETE FROM ";
+        sql.append(DialectTraits::quote_identifier(dialect, schema.table_name()));
+        sql.append(" WHERE ");
+        sql.append(DialectTraits::quote_identifier(dialect, schema.columns()[0].column_name));
+        sql.append(" = ");
+        std::string p1;
+        DialectTraits::format_placeholder(dialect, 1, p1);
+        sql.append(p1);
+        sql.append(" AND ");
+        sql.append(DialectTraits::quote_identifier(dialect, schema.columns()[1].column_name));
+        sql.append(" = ");
+        std::string p2;
+        DialectTraits::format_placeholder(dialect, 2, p2);
+        sql.append(p2);
+        sql.append(";");
+
+        size_t n = co_await guard->execute(sql, {format_param_value(parent_id), format_param_value(child_id)});
+        co_return n > 0;
+    }
 };
+
+template <typename T>
+inline core::Task<void> HasOne<T>::load(SqlDatabaseClient& client) {
+    co_await load(client.pool());
+}
+
+template <typename T>
+inline core::Task<void> HasOne<T>::load(SqlDatabaseClient* client) {
+    if (!client) throw std::runtime_error("HasOne::load: client is null");
+    co_await load(*client);
+}
+
+template <typename T>
+inline core::Task<void> HasMany<T>::load(SqlDatabaseClient& client) {
+    co_await load(client.pool());
+}
+
+template <typename T>
+inline core::Task<void> HasMany<T>::load(SqlDatabaseClient* client) {
+    if (!client) throw std::runtime_error("HasMany::load: client is null");
+    co_await load(*client);
+}
 
 } // namespace aegon::data::orm::sql

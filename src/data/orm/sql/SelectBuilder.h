@@ -20,10 +20,30 @@ class SelectBuilder {
     std::vector<OrderByClause> order_bys_;
     std::optional<size_t> limit_;
     std::optional<size_t> offset_;
+    std::vector<std::function<core::Task<void>(std::span<Entity>, Connection&, DatabaseDialect)>> includes_;
 
 public:
     SelectBuilder() : schema_(Entity::schema()) {}
     explicit SelectBuilder(TableDef<Entity> schema) : schema_(std::move(schema)) {}
+
+    template <typename TargetField>
+    SelectBuilder& include(TargetField Entity::* rel_ptr) {
+        const auto* desc = schema_.find_relation(rel_ptr);
+        if (desc && desc->eager_loader) {
+            includes_.push_back(desc->eager_loader);
+        }
+        return *this;
+    }
+
+    [[nodiscard]] bool has_includes() const noexcept {
+        return !includes_.empty();
+    }
+
+    core::Task<void> eager_load_includes(std::span<Entity> entities, Connection& conn, DatabaseDialect dialect) const {
+        for (const auto& loader : includes_) {
+            co_await loader(entities, conn, dialect);
+        }
+    }
 
     // Projections
     SelectBuilder& select() {
