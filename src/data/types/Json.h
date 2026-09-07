@@ -30,6 +30,7 @@ public:
     explicit Json(const char* raw) : data_(raw) {}
 
     [[nodiscard]] const std::string& str() const noexcept { return data_; }
+    [[nodiscard]] const std::string& raw() const noexcept { return data_; }
     [[nodiscard]] std::string_view view() const noexcept { return data_; }
     [[nodiscard]] const char* c_str() const noexcept { return data_.c_str(); }
     [[nodiscard]] bool empty() const noexcept { return data_.empty(); }

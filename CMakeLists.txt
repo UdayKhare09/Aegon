@@ -148,4 +148,22 @@ add_executable(test_sql_schema
 )
 target_link_libraries(test_sql_schema PRIVATE aegon_http aegon_core aegon_uuid)
 
+add_executable(test_sql_query_builder
+    tests/test_sql_query_builder.cpp
+)
+target_link_libraries(test_sql_query_builder PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_sql_transaction
+    tests/test_sql_transaction.cpp
+)
+target_link_libraries(test_sql_transaction PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_sql_drivers
+    tests/test_sql_drivers.cpp
+)
+target_link_libraries(test_sql_drivers PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+
+
+
+
 

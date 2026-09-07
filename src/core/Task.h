@@ -165,6 +165,13 @@ public:
         }
     }
 
+    decltype(auto) result() {
+        if (!coro_) [[unlikely]] {
+            throw std::runtime_error("Accessing result of an invalid Task");
+        }
+        return std::move(coro_.promise()).result();
+    }
+
 private:
     handle_type coro_;
 };

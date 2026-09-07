@@ -170,6 +170,10 @@ public:
     /**
      * @brief Parses an ISO 8601 string (e.g. 2026-09-07T15:05:48.123456Z or 2026-09-07 15:05:48+05:30)
      */
+    [[nodiscard]] static std::optional<DateTime> from_iso8601(std::string_view str) noexcept {
+        return from_string(str);
+    }
+
     [[nodiscard]] static std::optional<DateTime> from_string(std::string_view str) noexcept {
         if (str.size() < 19) return std::nullopt; // Minimum: YYYY-MM-DDTHH:MM:SS
 

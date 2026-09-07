@@ -45,6 +45,7 @@ struct ColumnMetadata {
     std::string default_value;
     bool is_created_at{false};
     bool is_updated_at{false};
+    size_t member_offset{0};
     std::optional<ForeignKeyMetadata> foreign_key;
 };
 
