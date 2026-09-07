@@ -8,6 +8,7 @@
 #include <string_view>
 #include <charconv>
 #include <type_traits>
+#include <sys/stat.h>
 
 namespace aegon::http {
 
@@ -72,6 +73,48 @@ public:
         return *this;
     }
 
+    static std::string_view infer_mime_type(std::string_view path) noexcept {
+        auto dot = path.rfind('.');
+        if (dot == std::string_view::npos) return "application/octet-stream";
+        std::string_view ext = path.substr(dot);
+        if (ext == ".html" || ext == ".htm") return "text/html; charset=utf-8";
+        if (ext == ".css") return "text/css; charset=utf-8";
+        if (ext == ".js" || ext == ".mjs") return "application/javascript; charset=utf-8";
+        if (ext == ".json") return "application/json; charset=utf-8";
+        if (ext == ".png") return "image/png";
+        if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+        if (ext == ".gif") return "image/gif";
+        if (ext == ".svg") return "image/svg+xml";
+        if (ext == ".ico") return "image/x-icon";
+        if (ext == ".txt") return "text/plain; charset=utf-8";
+        if (ext == ".pdf") return "application/pdf";
+        if (ext == ".wasm") return "application/wasm";
+        if (ext == ".xml") return "application/xml; charset=utf-8";
+        return "application/octet-stream";
+    }
+
+    Response& file(const std::string& filepath, std::string_view mime_type = "") {
+        is_file_ = true;
+        file_path_ = filepath;
+        struct stat st{};
+        if (::stat(filepath.c_str(), &st) == 0) {
+            file_size_ = static_cast<size_t>(st.st_size);
+        } else {
+            file_size_ = 0;
+            status_ = StatusCode::NotFound;
+        }
+
+        if (mime_type.empty()) {
+            mime_type = infer_mime_type(filepath);
+        }
+        headers_.set("Content-Type", mime_type);
+        return *this;
+    }
+
+    [[nodiscard]] bool has_file() const noexcept { return is_file_; }
+    [[nodiscard]] const std::string& file_path() const noexcept { return file_path_; }
+    [[nodiscard]] size_t file_size() const noexcept { return file_size_; }
+
     Response& uuid(const aegon::data::UUID& id) {
         headers_.set("Content-Type", "application/json; charset=utf-8");
         char buf[64];
@@ -117,11 +160,11 @@ public:
     }
 
     /**
-     * @brief Serialize complete HTTP/1.1 response into output string buffer.
+     * @brief Serialize only the status line and headers (ending in \r\n\r\n).
      */
-    void serialize_http1(std::string& out) const {
+    void serialize_http1_headers(std::string& out) const {
         out.clear();
-        out.reserve(256 + body_.size());
+        out.reserve(256);
 
         // Status line: HTTP/1.1 200 OK\r\n
         out.append("HTTP/1.1 ");
@@ -132,7 +175,6 @@ public:
         out.append(status_phrase(status_));
         out.append("\r\n");
 
-        // Content-Length header if body is present and not chunked
         if (is_chunked_) {
             if (!headers_.contains("Transfer-Encoding")) {
                 out.append("Transfer-Encoding: chunked\r\n");
@@ -140,13 +182,13 @@ public:
         } else if (!headers_.contains("Content-Length")) {
             out.append("Content-Length: ");
             char len_buf[24];
-            auto [lptr, unused] = std::to_chars(len_buf, len_buf + 24, body_.size());
+            size_t len = is_file_ ? file_size_ : body_.size();
+            auto [lptr, unused] = std::to_chars(len_buf, len_buf + 24, len);
             (void)unused;
             out.append(len_buf, lptr - len_buf);
             out.append("\r\n");
         }
 
-        // Custom headers
         for (const auto& h : headers_) {
             out.append(h.name);
             out.append(": ");
@@ -155,13 +197,20 @@ public:
         }
 
         out.append("\r\n");
+    }
+
+    /**
+     * @brief Serialize complete HTTP/1.1 response into output string buffer.
+     */
+    void serialize_http1(std::string& out) const {
+        serialize_http1_headers(out);
 
         if (is_chunked_) {
             if (!body_.empty()) {
                 serialize_chunk(body_, out);
             }
             serialize_chunk_end(out);
-        } else {
+        } else if (!is_file_) {
             out.append(body_);
         }
     }
@@ -171,6 +220,9 @@ private:
     HeaderMap headers_{};
     std::string body_{};
     bool is_chunked_{false};
+    bool is_file_{false};
+    std::string file_path_{};
+    size_t file_size_{0};
     std::vector<std::string> owned_strings_{};
 };
 

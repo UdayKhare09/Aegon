@@ -10,6 +10,10 @@ EventLoop::EventLoop(uint32_t ring_entries, uint16_t pbuf_entries, size_t buffer
     : ring_(ring_entries),
       buffer_pool_(ring_.raw_ring(), DEFAULT_BGID, pbuf_entries, buffer_size) {}
 
+EventLoop::EventLoop(const IoUringConfig& ring_config, uint16_t pbuf_entries, size_t buffer_size)
+    : ring_(ring_config),
+      buffer_pool_(ring_.raw_ring(), DEFAULT_BGID, pbuf_entries, buffer_size) {}
+
 void EventLoop::pin_to_core(int core_id) {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);

@@ -153,6 +153,13 @@ public:
         return req_.bind_path<T>(res_);
     }
 
+    /**
+     * @brief Serves a static file directly with zero-copy kernel streaming.
+     */
+    Response& send_file(const std::string& filepath, std::string_view mime_type = "") {
+        return res_.file(filepath, mime_type);
+    }
+
     // Typed user state / dependency injection
     template <typename T>
     [[nodiscard]] T* state() noexcept {

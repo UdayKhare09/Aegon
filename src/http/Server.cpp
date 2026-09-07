@@ -12,8 +12,11 @@
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <stdexcept>
 #include <iostream>
+#include <algorithm>
 
 namespace aegon::http {
 
@@ -421,9 +424,16 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
             res.header("Connection", "close");
         }
 
-        std::string out;
-        res.serialize_http1(out);
-        (void)(co_await loop.ring().send(client_fd, out));
+        if (res.has_file()) {
+            std::string header_out;
+            res.serialize_http1_headers(header_out);
+            (void)(co_await loop.ring().send(client_fd, header_out));
+            co_await stream_file_zero_copy(loop, client_fd, res.file_path(), res.file_size());
+        } else {
+            std::string out;
+            res.serialize_http1(out);
+            (void)(co_await loop.ring().send(client_fd, out));
+        }
 
         req_accum.erase(0, bytes_consumed);
 
@@ -435,9 +445,52 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
     (void)(co_await loop.ring().close(client_fd));
 }
 
+core::Task<bool> Server::stream_file_zero_copy(core::EventLoop& loop, int client_fd, const std::string& file_path, size_t file_size) {
+    if (file_size == 0) co_return true;
+
+    int file_fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (file_fd < 0) co_return false;
+
+    int pipefd[2];
+    if (::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) < 0) {
+        (void)(co_await loop.ring().close(file_fd));
+        co_return false;
+    }
+
+    int64_t in_off = 0;
+    size_t remaining = file_size;
+    constexpr unsigned int CHUNK_SIZE = 32768;
+    bool ok = true;
+
+    while (remaining > 0) {
+        unsigned int to_splice = static_cast<unsigned int>(std::min<size_t>(remaining, CHUNK_SIZE));
+        // 1. Splice file -> pipe[1] (disk page cache to kernel pipe buffer)
+        int n1 = co_await loop.ring().splice(file_fd, in_off, pipefd[1], -1, to_splice, 0);
+        if (n1 <= 0) {
+            ok = false;
+            break;
+        }
+        in_off += n1;
+
+        // 2. Splice pipe[0] -> socket_fd (kernel pipe buffer to network socket buffer)
+        int n2 = co_await loop.ring().splice(pipefd[0], -1, client_fd, -1, static_cast<unsigned int>(n1), 0);
+        if (n2 <= 0) {
+            ok = false;
+            break;
+        }
+        remaining -= static_cast<size_t>(n2);
+    }
+
+    ::close(pipefd[0]);
+    ::close(pipefd[1]);
+    (void)(co_await loop.ring().close(file_fd));
+    co_return ok;
+}
+
 core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd) {
+    auto stream = loop.ring().accept_multishot(listen_fd);
     while (running_) {
-        auto accept_res = co_await loop.ring().accept(listen_fd);
+        auto accept_res = co_await stream.next();
         if (accept_res.fd < 0) {
             break;
         }
@@ -449,7 +502,13 @@ void Server::run() {
     running_ = true;
     int listen_fd = create_listen_socket();
 
-    core::EventLoop loop(4096, 512, 4096);
+    core::IoUringConfig ring_cfg;
+    ring_cfg.entries = ring_entries_;
+    ring_cfg.enable_sqpoll = sqpoll_enabled_;
+    ring_cfg.sq_thread_idle_ms = sq_thread_idle_ms_;
+    ring_cfg.sq_thread_cpu = sq_thread_cpu_;
+
+    core::EventLoop loop(ring_cfg, 512, 4096);
     loop.spawn(accept_loop(loop, listen_fd));
 
     if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
@@ -476,7 +535,13 @@ void Server::run(size_t threads) {
         workers_.emplace_back([this, i]() {
             try {
                 int listen_fd = create_listen_socket();
-                core::EventLoop loop(4096, 512, 4096);
+                core::IoUringConfig ring_cfg;
+                ring_cfg.entries = ring_entries_;
+                ring_cfg.enable_sqpoll = sqpoll_enabled_;
+                ring_cfg.sq_thread_idle_ms = sq_thread_idle_ms_;
+                ring_cfg.sq_thread_cpu = sq_thread_cpu_ >= 0 ? sq_thread_cpu_ : static_cast<int>(i);
+
+                core::EventLoop loop(ring_cfg, 512, 4096);
                 loop.pin_to_core(i);
                 loop.spawn(accept_loop(loop, listen_fd));
 

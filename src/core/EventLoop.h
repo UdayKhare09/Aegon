@@ -21,6 +21,10 @@ public:
                        uint16_t pbuf_entries = 2048, 
                        size_t buffer_size = 4096);
 
+    explicit EventLoop(const IoUringConfig& ring_config,
+                       uint16_t pbuf_entries = 2048,
+                       size_t buffer_size = 4096);
+
     ~EventLoop() = default;
 
     EventLoop(const EventLoop&) = delete;

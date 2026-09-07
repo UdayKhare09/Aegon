@@ -23,7 +23,8 @@ public:
 
     BufferPool(struct io_uring* ring, uint16_t bgid, 
                uint16_t entries = DEFAULT_ENTRIES, 
-               size_t buffer_size = DEFAULT_BUFFER_SIZE);
+               size_t buffer_size = DEFAULT_BUFFER_SIZE,
+               bool register_buffers = true);
 
     ~BufferPool();
 
@@ -54,6 +55,10 @@ public:
     [[nodiscard]] uint16_t bgid() const noexcept { return bgid_; }
     [[nodiscard]] size_t buffer_size() const noexcept { return buffer_size_; }
     [[nodiscard]] uint16_t entries() const noexcept { return entries_; }
+    [[nodiscard]] bool is_registered() const noexcept { return buffers_registered_; }
+    [[nodiscard]] unsigned registered_buf_index() const noexcept { return 0; }
+    [[nodiscard]] uint8_t* raw_memory() noexcept { return memory_; }
+    [[nodiscard]] const uint8_t* raw_memory() const noexcept { return memory_; }
 
 private:
     struct io_uring* ring_{nullptr};
@@ -63,6 +68,7 @@ private:
     uint16_t entries_{0};
     size_t buffer_size_{0};
     size_t ring_size_bytes_{0};
+    bool buffers_registered_{false};
 };
 
 } // namespace aegon::core

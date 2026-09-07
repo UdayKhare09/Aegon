@@ -5,7 +5,7 @@
 
 namespace aegon::core {
 
-BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries, size_t buffer_size)
+BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries, size_t buffer_size, bool register_buffers)
     : ring_(ring), bgid_(bgid), entries_(entries), buffer_size_(buffer_size) {
     
     // Check power-of-two requirement for io_uring_buf_ring
@@ -28,6 +28,20 @@ BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries, s
     }
     memory_ = static_cast<uint8_t*>(mem_ptr);
 
+    // Pre-register memory slab with io_uring to avoid per-op page pinning & translation
+    if (register_buffers && ring_) {
+        struct iovec iov{};
+        iov.iov_base = memory_;
+        iov.iov_len = total_payload;
+        int reg_ret = io_uring_register_buffers(ring_, &iov, 1);
+        if (reg_ret == 0) {
+            buffers_registered_ = true;
+        } else {
+            // Graceful fallback: unprivileged containers or low RLIMIT_MEMLOCK
+            buffers_registered_ = false;
+        }
+    }
+
     // Populate the buffer ring with all buffer slots
     const int mask = io_uring_buf_ring_mask(entries_);
     for (uint16_t i = 0; i < entries_; ++i) {
@@ -38,6 +52,10 @@ BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries, s
 }
 
 BufferPool::~BufferPool() {
+    if (buffers_registered_ && ring_) {
+        io_uring_unregister_buffers(ring_);
+        buffers_registered_ = false;
+    }
     if (buf_ring_ && ring_) {
         io_uring_free_buf_ring(ring_, buf_ring_, entries_, bgid_);
         buf_ring_ = nullptr;
@@ -54,14 +72,19 @@ BufferPool::BufferPool(BufferPool&& other) noexcept
       memory_(other.memory_),
       bgid_(other.bgid_),
       entries_(other.entries_),
-      buffer_size_(other.buffer_size_) {
+      buffer_size_(other.buffer_size_),
+      buffers_registered_(other.buffers_registered_) {
     other.ring_ = nullptr;
     other.buf_ring_ = nullptr;
     other.memory_ = nullptr;
+    other.buffers_registered_ = false;
 }
 
 BufferPool& BufferPool::operator=(BufferPool&& other) noexcept {
     if (this != &other) {
+        if (buffers_registered_ && ring_) {
+            io_uring_unregister_buffers(ring_);
+        }
         if (buf_ring_ && ring_) {
             io_uring_free_buf_ring(ring_, buf_ring_, entries_, bgid_);
         }
@@ -74,10 +97,12 @@ BufferPool& BufferPool::operator=(BufferPool&& other) noexcept {
         bgid_ = other.bgid_;
         entries_ = other.entries_;
         buffer_size_ = other.buffer_size_;
+        buffers_registered_ = other.buffers_registered_;
 
         other.ring_ = nullptr;
         other.buf_ring_ = nullptr;
         other.memory_ = nullptr;
+        other.buffers_registered_ = false;
     }
     return *this;
 }

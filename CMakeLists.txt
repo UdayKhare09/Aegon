@@ -192,6 +192,11 @@ add_executable(test_simd_router
 )
 target_link_libraries(test_simd_router PRIVATE aegon_http aegon_core aegon_uuid)
 
+add_executable(test_advanced_io
+    tests/test_advanced_io.cpp
+)
+target_link_libraries(test_advanced_io PRIVATE aegon_http aegon_core aegon_uuid)
+
 
 
 
