@@ -187,6 +187,12 @@ add_executable(test_sql_advanced_queries
 )
 target_link_libraries(test_sql_advanced_queries PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
 
+add_executable(test_simd_router
+    tests/test_simd_router.cpp
+)
+target_link_libraries(test_simd_router PRIVATE aegon_http aegon_core aegon_uuid)
+
+
 
 
 

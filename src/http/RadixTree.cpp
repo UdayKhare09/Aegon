@@ -1,4 +1,5 @@
 #include "http/RadixTree.h"
+#include "http/SimdRouter.h"
 #include <algorithm>
 #include <iostream>
 
@@ -7,12 +8,7 @@ namespace aegon::http {
 namespace {
 
 size_t common_prefix_length(std::string_view a, std::string_view b) noexcept {
-    size_t len = 0;
-    size_t max_len = std::min(a.size(), b.size());
-    while (len < max_len && a[len] == b[len]) {
-        ++len;
-    }
-    return len;
+    return simd::simd_common_prefix(a, b);
 }
 
 std::string_view normalize_path(std::string_view p) noexcept {
@@ -53,7 +49,7 @@ void RadixTree::insert(Method method, std::string_view pattern, Handler handler)
         // Check for parameter segment ":name" or wildcard "*"
         if (remaining.starts_with(':')) {
             remaining.remove_prefix(1);
-            size_t end_param = remaining.find('/');
+            size_t end_param = simd::simd_find_char(remaining, '/');
             std::string_view param_name = (end_param == std::string_view::npos)
                                               ? remaining
                                               : remaining.substr(0, end_param);
@@ -163,7 +159,7 @@ bool RadixTree::match_node(const RadixNode* node, std::string_view path,
 
     if (node->type == RadixNodeType::Static) {
         if (!node->prefix.empty()) {
-            if (!path.starts_with(node->prefix)) {
+            if (!simd::simd_starts_with(path, node->prefix)) {
                 return false;
             }
             path.remove_prefix(node->prefix.size());
@@ -214,7 +210,7 @@ bool RadixTree::match_node(const RadixNode* node, std::string_view path,
     }
 
     if (node->type == RadixNodeType::Param) {
-        size_t slash = path.find('/');
+        size_t slash = simd::simd_find_char(path, '/');
         std::string_view val = (slash == std::string_view::npos) ? path : path.substr(0, slash);
         if (val.empty()) return false;
 
