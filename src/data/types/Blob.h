@@ -9,6 +9,7 @@
 #include <compare>
 #include <ostream>
 #include <istream>
+#include "Hex.h"
 
 namespace aegon::data::types {
 
@@ -111,6 +112,32 @@ public:
         auto dec = detail::base64_decode(b64);
         if (!dec) return std::nullopt;
         return Blob(std::move(*dec));
+    }
+
+    [[nodiscard]] std::string to_hex() const {
+        std::string s;
+        s.reserve(bytes_.size() * 2);
+        for (uint8_t b : bytes_) {
+            s.push_back(detail::HEX_DIGITS_LOWER[b >> 4]);
+            s.push_back(detail::HEX_DIGITS_LOWER[b & 0x0F]);
+        }
+        return s;
+    }
+
+    [[nodiscard]] static std::optional<Blob> from_hex(std::string_view hex) {
+        if (hex.starts_with("\\x") || hex.starts_with("0x")) {
+            hex.remove_prefix(2);
+        }
+        if (hex.size() % 2 != 0) return std::nullopt;
+        std::vector<uint8_t> out;
+        out.reserve(hex.size() / 2);
+        for (size_t i = 0; i < hex.size(); i += 2) {
+            uint8_t hi = detail::HEX_DECODE_TABLE[static_cast<uint8_t>(hex[i])];
+            uint8_t lo = detail::HEX_DECODE_TABLE[static_cast<uint8_t>(hex[i + 1])];
+            if ((hi | lo) & 0xF0) return std::nullopt;
+            out.push_back(static_cast<uint8_t>((hi << 4) | lo));
+        }
+        return Blob(std::move(out));
     }
 
     [[nodiscard]] auto operator<=>(const Blob& other) const noexcept = default;

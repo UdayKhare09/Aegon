@@ -56,6 +56,13 @@ public:
     }
 
     template <typename Entity>
+    core::Task<int64_t> insert_get_id(const Entity& entity) {
+        auto guard = pool_.acquire();
+        Transaction tx(*guard);
+        co_return co_await tx.template insert_get_id<Entity>(entity);
+    }
+
+    template <typename Entity>
     core::Task<size_t> update_entity(const Entity& entity) {
         auto guard = pool_.acquire();
         Transaction tx(*guard);

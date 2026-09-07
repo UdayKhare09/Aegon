@@ -55,6 +55,9 @@ public:
     }
 
     [[nodiscard]] static std::optional<Hash256> from_hex(std::string_view hex) noexcept {
+        if (hex.starts_with("\\x") || hex.starts_with("0x")) {
+            hex.remove_prefix(2);
+        }
         if (hex.size() != 64) return std::nullopt;
         Hash256 h;
         for (size_t i = 0; i < 32; ++i) {

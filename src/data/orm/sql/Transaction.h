@@ -57,6 +57,21 @@ public:
     }
 
     template <typename Entity>
+    core::Task<int64_t> insert_get_id(const Entity& entity) {
+        auto query = insert_into<Entity>().values(entity).to_sql(dialect_);
+        if (dialect_ == DatabaseDialect::PostgreSQL) {
+            auto rows = co_await conn_.query(query.sql, query.params);
+            if (!rows.empty()) {
+                co_return rows[0].template get<int64_t>(0);
+            }
+            co_return 0;
+        } else {
+            co_await conn_.execute(query.sql, query.params);
+            co_return 0;
+        }
+    }
+
+    template <typename Entity>
     core::Task<size_t> update_entity(const Entity& entity) {
         auto schema = Entity::schema();
         const auto& pk_name = schema.primary_key_name();

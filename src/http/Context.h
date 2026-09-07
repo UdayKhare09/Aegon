@@ -45,6 +45,11 @@ public:
     }
 
     template <typename Entity>
+    auto insert_get_id(const Entity& entity) {
+        return (*this)->template insert_get_id<Entity>(entity);
+    }
+
+    template <typename Entity>
     auto update_entity(const Entity& entity) {
         return (*this)->update_entity(entity);
     }

@@ -80,6 +80,12 @@ public:
     [[nodiscard]] static std::optional<IpAddress> from_string(std::string_view str) noexcept {
         if (str.empty()) return std::nullopt;
 
+        // Strip CIDR netmask if present (e.g., "192.168.1.1/32" or "2001:db8::1/128" from Postgres INET)
+        size_t slash = str.find('/');
+        if (slash != std::string_view::npos) {
+            str = str.substr(0, slash);
+        }
+
         // Null-terminated copy for inet_pton (short stack buffer)
         char buf[64];
         if (str.size() >= sizeof(buf)) return std::nullopt;

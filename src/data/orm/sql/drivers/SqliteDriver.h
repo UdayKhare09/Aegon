@@ -2,6 +2,7 @@
 
 #include "data/orm/sql/Connection.h"
 #include "data/orm/sql/PerCoreConnectionPool.h"
+#include "data/orm/sql/Expression.h"
 #include <sqlite3.h>
 #include <string>
 #include <vector>
@@ -61,7 +62,11 @@ public:
         }
 
         for (size_t i = 0; i < params.size(); ++i) {
-            sqlite3_bind_text(stmt, static_cast<int>(i + 1), params[i].data(), static_cast<int>(params[i].size()), SQLITE_TRANSIENT);
+            if (params[i] == SQL_NULL_SENTINEL) {
+                sqlite3_bind_null(stmt, static_cast<int>(i + 1));
+            } else {
+                sqlite3_bind_text(stmt, static_cast<int>(i + 1), params[i].data(), static_cast<int>(params[i].size()), SQLITE_TRANSIENT);
+            }
         }
 
         rc = sqlite3_step(stmt);
@@ -86,7 +91,11 @@ public:
         }
 
         for (size_t i = 0; i < params.size(); ++i) {
-            sqlite3_bind_text(stmt, static_cast<int>(i + 1), params[i].data(), static_cast<int>(params[i].size()), SQLITE_TRANSIENT);
+            if (params[i] == SQL_NULL_SENTINEL) {
+                sqlite3_bind_null(stmt, static_cast<int>(i + 1));
+            } else {
+                sqlite3_bind_text(stmt, static_cast<int>(i + 1), params[i].data(), static_cast<int>(params[i].size()), SQLITE_TRANSIENT);
+            }
         }
 
         std::vector<MockRowView> rows;

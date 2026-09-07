@@ -163,6 +163,11 @@ add_executable(test_sql_drivers
 )
 target_link_libraries(test_sql_drivers PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
 
+add_executable(test_live_postgres
+    tests/test_live_postgres.cpp
+)
+target_link_libraries(test_live_postgres PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+
 
 
 

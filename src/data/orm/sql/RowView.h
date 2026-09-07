@@ -1,6 +1,7 @@
 #pragma once
 
 #include "data/types/Types.h"
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -73,8 +74,16 @@ public:
         } else if constexpr (std::is_same_v<T, types::Json>) {
             return types::Json(std::string(s));
         } else if constexpr (std::is_same_v<T, types::Blob>) {
-            return types::Blob::from_base64(s);
+            if (s.starts_with("\\x") || s.starts_with("0x")) {
+                auto opt = types::Blob::from_hex(s);
+                return opt ? *opt : types::Blob{};
+            }
+            auto opt = types::Blob::from_base64(s);
+            return opt ? *opt : types::Blob{};
         } else if constexpr (std::is_same_v<T, types::Hash256>) {
+            if (s.starts_with("\\x") || s.starts_with("0x")) {
+                s.remove_prefix(2);
+            }
             auto opt = types::Hash256::from_hex(s);
             return opt ? *opt : types::Hash256{};
         } else {

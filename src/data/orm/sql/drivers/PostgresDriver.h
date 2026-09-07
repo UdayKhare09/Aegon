@@ -2,6 +2,7 @@
 
 #include "data/orm/sql/Connection.h"
 #include "data/orm/sql/PerCoreConnectionPool.h"
+#include "data/orm/sql/Expression.h"
 #include <libpq-fe.h>
 #include <string>
 #include <vector>
@@ -51,7 +52,11 @@ public:
         std::vector<const char*> param_ptrs;
         param_ptrs.reserve(params.size());
         for (const auto& p : params) {
-            param_ptrs.push_back(p.c_str());
+            if (p == SQL_NULL_SENTINEL) {
+                param_ptrs.push_back(nullptr);
+            } else {
+                param_ptrs.push_back(p.c_str());
+            }
         }
 
         std::string sql_str(sql);
@@ -81,7 +86,11 @@ public:
         std::vector<const char*> param_ptrs;
         param_ptrs.reserve(params.size());
         for (const auto& p : params) {
-            param_ptrs.push_back(p.c_str());
+            if (p == SQL_NULL_SENTINEL) {
+                param_ptrs.push_back(nullptr);
+            } else {
+                param_ptrs.push_back(p.c_str());
+            }
         }
 
         std::string sql_str(sql);

@@ -335,5 +335,26 @@ co_await db.delete_by_id<User>(user.id);
 - [x] `MockConnection` driver for deterministic asynchronous unit testing.
 - [x] `tests/test_sql_transaction.cpp`: 5 unit tests validating transaction commits, rollbacks, `ctx.db.sql`, direct CRUD, and lock-free pool reuse with zero warnings.
 
+### Option A: Real Database Engine Drivers (COMPLETED - 100% Header-Only)
+- [x] `SqliteDriver.h` (`aegon::data::orm::sql::drivers::SqliteConnection` & `SqliteRowView`):
+  - Native SQLite3 asynchronous/non-blocking C API wrapper.
+  - Live in-memory (`:memory:`) or persistent file database support.
+  - Direct execution of DDL (`CREATE TABLE`, foreign keys, triggers).
+  - Prepared statement parameter binding (`sqlite3_bind_text`) and typed column extraction.
+  - `create_sqlite_pool(db_path, connections_per_core)` helper.
+- [x] `PostgresDriver.h` (`aegon::data::orm::sql::drivers::PostgresConnection` & `PostgresRowView`):
+  - Native PostgreSQL `libpq` driver.
+  - Asynchronous pipeline-ready non-blocking queries via `PQsendQueryParams` & `PQconsumeInput`.
+  - `$1, $2` parameter binding and `RowView` column mapping.
+  - `create_postgres_pool(conninfo, connections_per_core)` helper.
+- [x] `tests/test_sql_drivers.cpp`: Live SQLite integration test running DDL generation, entity insertion, transactional commits, rollback on failure, and foreign key cascade deletion with zero warnings.
+- [x] `tests/test_live_postgres.cpp`: Full live PostgreSQL 17 integration test verifying:
+  - Complex multi-tier relations: `Tenant` -> `UserAccount` -> `OrderRecord` with `ON DELETE CASCADE`.
+  - All 10 custom data types: `UUID`, `MacAddress` (MACADDR), `Json` (JSONB), `DateTime` (TIMESTAMPTZ), `Date` (DATE), `Time` (TIME), `Decimal128` (NUMERIC), `IpAddress` (INET v4/v6), `Blob` (BYTEA), and `Hash256` (BYTEA).
+  - Option 4 atomic Unit of Work multi-entity transactions with auto-commit.
+  - Automatic rollback on exception with zero side-effects in PostgreSQL.
+  - Foreign key cascading deletion across 3 relational tiers.
+  - `ctx.db.sql` direct integration in route Context.
+
 
 

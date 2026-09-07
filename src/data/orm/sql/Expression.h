@@ -65,10 +65,17 @@ constexpr std::string_view order_to_sql(SortOrder ord) noexcept {
     return "ASC";
 }
 
+inline constexpr std::string_view SQL_NULL_SENTINEL = "\0__AEGON_NULL__";
+
 template <typename T>
 inline std::string format_param_value(const T& val) {
     using Decayed = std::decay_t<T>;
-    if constexpr (std::is_convertible_v<T, std::string_view>) {
+    if constexpr (requires { val.has_value(); }) {
+        if (val.has_value()) {
+            return format_param_value(*val);
+        }
+        return std::string(SQL_NULL_SENTINEL);
+    } else if constexpr (std::is_convertible_v<T, std::string_view>) {
         return std::string(std::string_view(val));
     } else if constexpr (std::is_same_v<Decayed, bool>) {
         return val ? "true" : "false";
@@ -82,19 +89,14 @@ inline std::string format_param_value(const T& val) {
         return val.to_string();
     } else if constexpr (std::is_same_v<Decayed, types::Time>) {
         return val.to_string();
-    } else if constexpr (requires { val.to_string(); }) {
-        return val.to_string();
     } else if constexpr (std::is_same_v<Decayed, types::Json>) {
         return val.str();
     } else if constexpr (std::is_same_v<Decayed, types::Blob>) {
-        return val.to_base64();
+        return "\\x" + val.to_hex();
     } else if constexpr (std::is_same_v<Decayed, types::Hash256>) {
-        return val.to_hex();
-    } else if constexpr (requires { val.has_value(); }) {
-        if (val.has_value()) {
-            return format_param_value(*val);
-        }
-        return "NULL";
+        return "\\x" + val.to_hex();
+    } else if constexpr (requires { val.to_string(); }) {
+        return val.to_string();
     } else {
         return "";
     }
