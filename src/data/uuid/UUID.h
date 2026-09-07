@@ -308,3 +308,25 @@ struct std::hash<aegon::data::UUID> {
 #endif
     }
 };
+
+#if __has_include(<glaze/glaze.hpp>)
+#include <glaze/glaze.hpp>
+
+template <>
+struct glz::meta<aegon::data::UUID> {
+    static constexpr auto value = glz::custom<
+        [](aegon::data::UUID& u, const std::string_view s, glz::context& ctx) {
+            auto parsed = aegon::data::UUID::from_string(s);
+            if (!parsed) {
+                ctx.error = glz::error_code::syntax_error;
+                return;
+            }
+            u = *parsed;
+        },
+        [](const aegon::data::UUID& u) -> std::string {
+            return u.to_string();
+        }
+    >;
+};
+#endif
+

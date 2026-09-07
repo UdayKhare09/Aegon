@@ -3,6 +3,7 @@
 #include "http/Response.h"
 #include "http/Router.h"
 #include "data/validation/Validator.h"
+#include "data/uuid/UUID.h"
 #include <iostream>
 #include <cassert>
 #include <string>
@@ -83,6 +84,20 @@ struct UserPostPathDTO {
     void validate(ValidationRules& v) const {
         v.field("user_id", user_id).min(1);
         v.field("post_id", post_id).min(1);
+    }
+};
+
+// 6. UUID Entity DTO with UUID, optional<UUID>, and vector<UUID>
+struct AccountDTO {
+    data::UUID id;
+    std::string name;
+    std::optional<data::UUID> tenant_id;
+    std::vector<data::UUID> role_ids;
+
+    void validate(ValidationRules& v) const {
+        v.field("name", name).required();
+        v.field("id", id).not_nil("Account id cannot be nil");
+        v.field("tenant_id", tenant_id).not_nil("Tenant id cannot be nil");
     }
 };
 
@@ -307,6 +322,94 @@ void test_outbound_dto_serialization() {
     std::cout << "  -> PASS: Outbound DTO with nested struct and vector serialized cleanly.\n";
 }
 
+void test_dto_uuid_binding_and_serialization() {
+    std::cout << "[Test 7] Testing UUID DTO binding and serialization (UUID, optional<UUID>, vector<UUID>)...\n";
+
+    Request req;
+    req.set_method(Method::POST);
+    req.set_path("/accounts");
+    req.set_body(R"({
+        "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        "name": "Production Org",
+        "tenant_id": "c9a646d3-9c61-4cd7-bf5c-ff189fc48281",
+        "role_ids": [
+            "a0000000-0000-0000-0000-000000000001",
+            "a0000000-0000-0000-0000-000000000002"
+        ]
+    })");
+
+    Response res;
+    Context ctx(req, res);
+
+    auto dto = ctx.bind_json<AccountDTO>();
+    TEST_CHECK(dto.has_value());
+    TEST_CHECK(dto->id.to_string() == "f47ac10b-58cc-4372-a567-0e02b2c3d479");
+    TEST_CHECK(dto->name == "Production Org");
+    TEST_CHECK(dto->tenant_id.has_value());
+    TEST_CHECK(dto->tenant_id->to_string() == "c9a646d3-9c61-4cd7-bf5c-ff189fc48281");
+    TEST_CHECK(dto->role_ids.size() == 2);
+    TEST_CHECK(dto->role_ids[0].to_string() == "a0000000-0000-0000-0000-000000000001");
+    TEST_CHECK(dto->role_ids[1].to_string() == "a0000000-0000-0000-0000-000000000002");
+
+    // Outbound serialization of the parsed DTO
+    Response out_res;
+    out_res.status(StatusCode::Ok).json(*dto);
+    TEST_CHECK(out_res.status() == StatusCode::Ok);
+    std::string out_body = std::string(out_res.body());
+    TEST_CHECK(out_body.find("\"id\":\"f47ac10b-58cc-4372-a567-0e02b2c3d479\"") != std::string::npos);
+    TEST_CHECK(out_body.find("\"tenant_id\":\"c9a646d3-9c61-4cd7-bf5c-ff189fc48281\"") != std::string::npos);
+    TEST_CHECK(out_body.find("\"a0000000-0000-0000-0000-000000000001\"") != std::string::npos);
+    TEST_CHECK(out_body.find("\"a0000000-0000-0000-0000-000000000002\"") != std::string::npos);
+
+    std::cout << "  -> PASS: UUID, optional<UUID>, and vector<UUID> bound and serialized seamlessly.\n";
+}
+
+void test_dto_uuid_validation_and_syntax_error() {
+    std::cout << "[Test 8] Testing UUID syntax auto-rejection (400) and nil UUID validation (422)...\n";
+
+    // 1. Malformed UUID string in JSON -> auto 400 Bad Request
+    {
+        Request req;
+        req.set_method(Method::POST);
+        req.set_body(R"({
+            "id": "not-a-valid-uuid-format",
+            "name": "Acme Corp"
+        })");
+
+        Response res;
+        Context ctx(req, res);
+
+        auto dto = ctx.bind_json<AccountDTO>();
+        TEST_CHECK(!dto.has_value());
+        TEST_CHECK(res.status() == StatusCode::BadRequest);
+        TEST_CHECK(res.body().find("Malformed JSON") != std::string::npos);
+    }
+
+    // 2. Nil UUID violating .not_nil() validator -> auto 422 Unprocessable Entity
+    {
+        Request req;
+        req.set_method(Method::POST);
+        req.set_body(R"({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "name": "Acme Corp",
+            "tenant_id": "00000000-0000-0000-0000-000000000000"
+        })");
+
+        Response res;
+        Context ctx(req, res);
+
+        auto dto = ctx.bind_json<AccountDTO>();
+        TEST_CHECK(!dto.has_value());
+        TEST_CHECK(res.status() == StatusCode::UnprocessableEntity);
+        TEST_CHECK(res.body().find("\"id\"") != std::string::npos);
+        TEST_CHECK(res.body().find("Account id cannot be nil") != std::string::npos);
+        TEST_CHECK(res.body().find("\"tenant_id\"") != std::string::npos);
+        TEST_CHECK(res.body().find("Tenant id cannot be nil") != std::string::npos);
+    }
+
+    std::cout << "  -> PASS: Invalid UUID string correctly yields 400, and nil UUID yields 422.\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "     AEGON C++26 DTO BINDING & VALIDATION TEST SUITE    \n";
@@ -318,9 +421,12 @@ int main() {
     test_dto_query_binding();
     test_dto_path_binding();
     test_outbound_dto_serialization();
+    test_dto_uuid_binding_and_serialization();
+    test_dto_uuid_validation_and_syntax_error();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL DTO VALIDATION TESTS PASSED SUCCESSFULLY! <<<\n";
     std::cout << "=======================================================\n\n";
     return 0;
 }
+

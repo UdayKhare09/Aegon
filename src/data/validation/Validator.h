@@ -172,6 +172,23 @@ public:
             return *this;
         }
 
+        FieldValidator& not_nil(std::string msg = "Must not be nil") {
+            if constexpr (is_optional_v<T>) {
+                if (val_.has_value()) {
+                    if constexpr (requires { val_->is_nil(); }) {
+                        if (val_->is_nil()) {
+                            parent_.add_violation(name_, std::move(msg));
+                        }
+                    }
+                }
+            } else if constexpr (requires { val_.is_nil(); }) {
+                if (val_.is_nil()) {
+                    parent_.add_violation(name_, std::move(msg));
+                }
+            }
+            return *this;
+        }
+
     private:
         ValidationRules& parent_;
         std::string_view name_;
