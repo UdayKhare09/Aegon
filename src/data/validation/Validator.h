@@ -189,6 +189,57 @@ public:
             return *this;
         }
 
+        FieldValidator& positive(std::string msg = "Must be positive") {
+            if constexpr (is_optional_v<T>) {
+                if (val_.has_value()) {
+                    if constexpr (requires { val_->is_positive(); }) {
+                        if (!val_->is_positive()) parent_.add_violation(name_, std::move(msg));
+                    } else if constexpr (std::is_arithmetic_v<typename T::value_type>) {
+                        if (*val_ <= 0) parent_.add_violation(name_, std::move(msg));
+                    }
+                }
+            } else if constexpr (requires { val_.is_positive(); }) {
+                if (!val_.is_positive()) {
+                    parent_.add_violation(name_, std::move(msg));
+                }
+            } else if constexpr (std::is_arithmetic_v<T>) {
+                if (val_ <= 0) {
+                    parent_.add_violation(name_, std::move(msg));
+                }
+            }
+            return *this;
+        }
+
+        FieldValidator& past(std::string msg = "Must be in the past") {
+            if constexpr (is_optional_v<T>) {
+                if (val_.has_value()) {
+                    if constexpr (requires { *val_ < T::value_type::now(); }) {
+                        if (!(*val_ < T::value_type::now())) parent_.add_violation(name_, std::move(msg));
+                    }
+                }
+            } else if constexpr (requires { val_ < T::now(); }) {
+                if (!(val_ < T::now())) {
+                    parent_.add_violation(name_, std::move(msg));
+                }
+            }
+            return *this;
+        }
+
+        FieldValidator& future(std::string msg = "Must be in the future") {
+            if constexpr (is_optional_v<T>) {
+                if (val_.has_value()) {
+                    if constexpr (requires { *val_ > T::value_type::now(); }) {
+                        if (!(*val_ > T::value_type::now())) parent_.add_violation(name_, std::move(msg));
+                    }
+                }
+            } else if constexpr (requires { val_ > T::now(); }) {
+                if (!(val_ > T::now())) {
+                    parent_.add_violation(name_, std::move(msg));
+                }
+            }
+            return *this;
+        }
+
     private:
         ValidationRules& parent_;
         std::string_view name_;

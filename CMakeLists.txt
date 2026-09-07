@@ -138,7 +138,7 @@ add_executable(test_dto_validation
 )
 target_link_libraries(test_dto_validation PRIVATE aegon_http aegon_core aegon_uuid)
 
-
-
-
-
+add_executable(test_foundational_types
+    tests/test_foundational_types.cpp
+)
+target_link_libraries(test_foundational_types PRIVATE aegon_http aegon_core aegon_uuid)
