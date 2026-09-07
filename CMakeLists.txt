@@ -54,6 +54,16 @@ target_link_libraries(aegon_core PUBLIC
     pthread
 )
 
+# Third-party dependencies
+include(FetchContent)
+FetchContent_Declare(
+    glaze
+    GIT_REPOSITORY https://github.com/stephenberry/glaze.git
+    GIT_TAG v8.3.0
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(glaze)
+
 # HTTP Server and Routing library
 add_library(aegon_http
     src/http/RadixTree.cpp
@@ -73,6 +83,7 @@ target_include_directories(aegon_http PUBLIC
 target_link_libraries(aegon_http PUBLIC
     aegon_core
     aegon_uuid
+    glaze::glaze
     nghttp2
     ngtcp2_crypto_ossl
     ngtcp2
@@ -121,6 +132,11 @@ add_executable(test_radix_router
     tests/test_radix_router.cpp
 )
 target_link_libraries(test_radix_router PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_dto_validation
+    tests/test_dto_validation.cpp
+)
+target_link_libraries(test_dto_validation PRIVATE aegon_http aegon_core aegon_uuid)
 
 
 

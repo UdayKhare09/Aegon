@@ -23,6 +23,30 @@ public:
     [[nodiscard]] Response& res() noexcept { return res_; }
     [[nodiscard]] const Response& res() const noexcept { return res_; }
 
+    /**
+     * @brief Binds inbound JSON body into typed DTO T with automatic validation & 422 error response.
+     */
+    template <typename T>
+    [[nodiscard]] std::optional<T> bind_json() {
+        return req_.bind_json<T>(res_);
+    }
+
+    /**
+     * @brief Binds URL query string into typed DTO T with automatic validation & 422 error response.
+     */
+    template <typename T>
+    [[nodiscard]] std::optional<T> bind_query() {
+        return req_.bind_query<T>(res_);
+    }
+
+    /**
+     * @brief Binds route parameters into typed DTO T with automatic validation & 422 error response.
+     */
+    template <typename T>
+    [[nodiscard]] std::optional<T> bind_path() {
+        return req_.bind_path<T>(res_);
+    }
+
     // Typed user state / database connection pool accessor (zero-cost DI)
     template <typename T>
     [[nodiscard]] T* state() noexcept {

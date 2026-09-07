@@ -3,9 +3,11 @@
 #include "http/Protocol.h"
 #include "http/HeaderMap.h"
 #include "data/uuid/UUID.h"
+#include <glaze/glaze.hpp>
 #include <string>
 #include <string_view>
 #include <charconv>
+#include <type_traits>
 
 namespace aegon::http {
 
@@ -52,6 +54,15 @@ public:
     Response& json(std::string_view j) {
         headers_.set("Content-Type", "application/json; charset=utf-8");
         body_ = std::string(j);
+        return *this;
+    }
+
+    template <typename T>
+        requires (!std::is_convertible_v<T, std::string_view>)
+    Response& json(const T& val) {
+        headers_.set("Content-Type", "application/json; charset=utf-8");
+        body_.clear();
+        (void)glz::write_json(val, body_);
         return *this;
     }
 
