@@ -142,3 +142,10 @@ add_executable(test_foundational_types
     tests/test_foundational_types.cpp
 )
 target_link_libraries(test_foundational_types PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_sql_schema
+    tests/test_sql_schema.cpp
+)
+target_link_libraries(test_sql_schema PRIVATE aegon_http aegon_core aegon_uuid)
+
+

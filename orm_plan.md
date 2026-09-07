@@ -32,11 +32,12 @@ In enterprise frameworks like Java's JPA/Hibernate, entity mapping relies on a r
 | Category | JPA / SQL Type | Standard C++ | Aegon Status | Role in Aegon ORM |
 | :--- | :--- | :--- | :--- | :--- |
 | **Primary Keys** | `UUID` / `GUID` | None | **Implemented** (`aegon::data::UUID`) | Primary keys, v4 random, v7 time-ordered, SIMD accelerated, Glaze JSON registered. |
-| **Temporal / Audit** | `TIMESTAMP`, `TIMESTAMPTZ` | `std::chrono::time_point` | **To Implement** (`aegon::data::DateTime`) | Crucial for `@CreationTimestamp` and `@UpdateTimestamp` audit fields. Zero-alloc ISO 8601 string formatting + SQL wire parsing. |
-| **Date & Time** | `DATE`, `TIME` | `std::chrono::year_month_day` | **To Implement** (`aegon::data::Date`, `Time`) | Calendar dates and wall-clock time without timezone offsets. |
-| **Fixed-Point / Money** | `NUMERIC(p, s)`, `DECIMAL` | `double` (causes precision loss) | **To Implement** (`aegon::data::Decimal<P, S>`) | Critical for financial/e-commerce data (`0.1 + 0.2 != 0.3` floating point bugs eliminated). |
-| **Semi-Structured** | `JSON`, `JSONB` | `std::string` | **To Implement** (`aegon::data::Json`) | Hibernate `@Type(JsonType.class)` / Postgres `JSONB`. Embeds arbitrary JSON objects or nested DTOs into table columns. |
-| **Raw Binary** | `BYTEA`, `BLOB` | `std::vector<uint8_t>` | **Built-in** (`std::vector<uint8_t>`) | File data, cryptographic hashes, raw byte buffers. |
+| **Temporal / Audit** | `TIMESTAMP`, `TIMESTAMPTZ` | `std::chrono::time_point` | **Implemented** (`aegon::data::DateTime`) | Crucial for `@CreationTimestamp` and `@UpdateTimestamp` audit fields. Zero-alloc ISO 8601 string formatting + SQL wire parsing. |
+| **Date & Time** | `DATE`, `TIME` | `std::chrono::year_month_day` | **Implemented** (`aegon::data::Date`, `Time`) | Calendar dates and wall-clock time without timezone offsets. |
+| **Fixed-Point / Money** | `NUMERIC(p, s)`, `DECIMAL` | `double` (causes precision loss) | **Implemented** (`aegon::data::Decimal<P, S>`) | Critical for financial/e-commerce data (`0.1 + 0.2 == 0.3` floating point bugs eliminated). |
+| **Semi-Structured** | `JSON`, `JSONB` | `std::string` | **Implemented** (`aegon::data::Json`) | Hibernate `@Type(JsonType.class)` / Postgres `JSONB`. Embeds arbitrary JSON objects or nested DTOs into table columns. |
+| **Network** | `INET`, `MACADDR` | None | **Implemented** (`aegon::data::IpAddress`, `MacAddress`) | Dual IPv4/IPv6 address with CIDR subnet matching + 48-bit MAC address. |
+| **Binary & Crypto** | `BYTEA`, `BLOB`, `CHAR(64)` | `std::vector<uint8_t>` | **Implemented** (`aegon::data::Blob`, `Hash256`) | Binary data with Base64 JSON support + 32-byte hash with constant-time equality check. |
 | **Enums** | `@Enumerated(STRING/ORDINAL)` | `enum class` | **Glaze Built-in** | String or integer mapped enums via compile-time reflection. |
 
 ### Conclusion
@@ -276,21 +277,51 @@ co_await db.delete_by_id<User>(user.id);
 
 ## 6. Implementation Roadmap
 
-### Phase 1: Foundational Data Types
-- [ ] `aegon::data::DateTime`: Microsecond precision, Unix epoch timestamp, zero-allocation ISO 8601 formatting/parsing, Glaze JSON specialization, SQL wire format support.
-- [ ] `aegon::data::Decimal<P, S>`: 64-bit / 128-bit fixed-point arithmetic without floating point inaccuracy.
-- [ ] `aegon::data::Json`: Type-safe wrapper for structured JSON column storage.
+### Phase 1: Foundational Data Types (COMPLETED - 100% Header-Only)
+- [x] `aegon::data::types::UUID`: 128-bit RFC 9562 v4 & v7 SIMD accelerated, Glaze JSON registered.
+- [x] `aegon::data::types::DateTime`: Microsecond precision UTC timestamp, zero-allocation ISO 8601 formatting/parsing, Glaze JSON, timezone offsets (`+05:30`).
+- [x] `aegon::data::types::Date`: Gregorian calendar date (`YYYY-MM-DD`), leap year check, comparison, Glaze JSON.
+- [x] `aegon::data::types::Time`: 24-hour wall-clock time (`HH:MM:SS.ffffff`), microsecond resolution, Glaze JSON.
+- [x] `aegon::data::types::Decimal<P, S>`: 128-bit fixed-point arithmetic without binary float errors (`0.10 + 0.20 == 0.30`).
+- [x] `aegon::data::types::Json`: Validated JSON column wrapper with lazy `.get<T>()` and raw unquoted JSON embedding.
+- [x] `aegon::data::types::IpAddress`: Dual IPv4 & IPv6 with CIDR subnet matching (`in_subnet`).
+- [x] `aegon::data::types::MacAddress`: 48-bit IEEE 802 hardware address.
+- [x] `aegon::data::types::Blob`: Binary buffer with Base64 JSON conversion.
+- [x] `aegon::data::types::Hash256`: 32-byte cryptographic token with constant-time equality comparisons.
+- [x] `aegon::data::types::Types.h`: Umbrella header exporting all types.
+- [x] `aegon::validation::Validator`: Enhanced with `.positive()`, `.past()`, `.future()`, `.not_nil()`.
+- [x] `test_foundational_types.cpp`: Comprehensive 11-test suite passing with 0 warnings.
 
-### Phase 2: Dialects & Schema Mapping Core
-- [ ] `aegon::data::orm::sql::DatabaseDialect` enum (`PostgreSQL`, `MySQL`, `SQLite`).
-- [ ] `aegon::data::orm::sql::TypeMapper<T>` traits for all primitives and custom types.
-- [ ] `aegon::data::orm::sql::Table<Entity>` and `Column<Entity, T>` compile-time metadata builder.
-- [ ] `aegon::data::orm::sql::generate_ddl<Entity>(dialect)` for automatic schema migration.
+### Phase 2: Dialects & Schema Mapping Core (`aegon::data::orm::sql`) (COMPLETED - 100% Header-Only)
+- [x] `aegon::data::orm::sql::DatabaseDialect` enum (`PostgreSQL`, `MySQL`, `SQLite`).
+- [x] `aegon::data::orm::sql::DialectTraits`: Quoting, parameter placeholders, auto-increment PK idioms, and timestamp expressions.
+- [x] `aegon::data::orm::sql::TypeMapper<T>` traits specializing primitives, `std::optional<T>`, `std::vector<uint8_t>`, and all foundational data types (`UUID`, `DateTime`, `Date`, `Time`, `Decimal<P, S>`, `Json`, `IpAddress`, `MacAddress`, `Blob`, `Hash256`).
+- [x] `aegon::data::orm::sql::TableDef<Entity>` fluent builder with compile-time member pointers (`&Entity::field`), primary keys, auto-increment detection, lengths, uniqueness, nullability, foreign keys (`references<TargetEntity>()`), cascade rules, and audit timestamps.
+- [x] `aegon::data::orm::sql::generate_ddl<Entity>(dialect)` producing production-grade, dialect-native DDL strings with foreign keys, constraints, and audit timestamp triggers/defaults.
+- [x] `aegon::data::orm::sql::generate_indexes<Entity>(dialect)` and `generate_drop_table<Entity>(dialect)`.
+- [x] `tests/test_sql_schema.cpp`: 6 comprehensive multi-dialect DDL and type mapping unit tests passing with 0 warnings.
+- [x] `tests/test_live_db.cpp`: Live engine test suite executing generated DDLs, native column type introspection, insertions, and cascade deletions against both **SQLite 3** and **`postgres:17-alpine` Docker** container.
 
-### Phase 3: Query Builder & Prepared Statements
-- [ ] Dialect-aware SQL AST & parameter binder (`$1` for Postgres, `?` for MySQL/SQLite).
-- [ ] Type-safe query builder (`from<T>()`, `.where()`, `.join()`, `.order_by()`, `.limit()`).
+### Phase 3: Compile-Time Type-Safe SQL Query Builder [ACTIVE NEXT]
+- [ ] Expression Tree & Operator Model (`Op::Eq`, `Op::Neq`, `Op::Gt`, `Op::Gte`, `Op::Lt`, `Op::Lte`, `Op::Like`, `Op::In`, `Op::IsNull`, `Op::IsNotNull`).
+- [ ] Type-safe field resolution via compile-time member pointer mapping (`&Entity::field` -> SQL column name).
+- [ ] `SelectBuilder<Entity>`:
+  - `.select(&Entity::col1, &Entity::col2)` or full entity projection `from<Entity>()`.
+  - `.where(&Entity::field, Op, value)`, `.and_where(...)`, `.or_where(...)`.
+  - `.order_by(&Entity::field, Order::Asc | Order::Desc)`.
+  - `.limit(n)`, `.offset(n)`.
+  - `.to_sql(dialect)` returning the parameterized SQL string and bound parameter vector.
+- [ ] `InsertBuilder<Entity>`:
+  - Generates parameterized `INSERT INTO ... VALUES (...)` with dialect-specific placeholders (`$1, $2` vs `?, ?`).
+  - Automatic handling of auto-increment IDs (e.g., `RETURNING id` for PostgreSQL).
+- [ ] `UpdateBuilder<Entity>`:
+  - `.set(&Entity::field, value)` partial column updates.
+  - `.where(...)` conditional updates.
+- [ ] `DeleteBuilder<Entity>`:
+  - `.where(...)` conditional deletions.
+- [ ] Unit tests for multi-dialect SQL query builder (`test_sql_query_builder.cpp`).
 
 ### Phase 4: Thread-per-Core Connection Pool & Async Coroutines
 - [ ] Shared-nothing, lock-free connection pool integrated with `core::Task<T>`.
 - [ ] Driver adapters (Postgres `libpq`/raw socket, MySQL, SQLite3).
+
