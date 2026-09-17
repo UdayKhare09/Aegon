@@ -18,6 +18,7 @@ public:
     std::vector<std::string> executed_sqls_;
     std::vector<std::vector<std::string>> executed_params_;
     std::vector<MockRowView> mock_results_;
+    size_t next_execute_result_{1};
 
     explicit MockConnection(DatabaseDialect dialect = DatabaseDialect::PostgreSQL)
         : dialect_(dialect) {}
@@ -25,7 +26,7 @@ public:
     core::Task<size_t> execute(std::string_view sql, const std::vector<std::string>& params) override {
         executed_sqls_.emplace_back(sql);
         executed_params_.push_back(params);
-        co_return 1;
+        co_return next_execute_result_;
     }
 
     core::Task<std::vector<MockRowView>> query(std::string_view sql, const std::vector<std::string>& params) override {

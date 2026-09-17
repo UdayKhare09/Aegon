@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RedisConnectionPool.h"
+#include "RedisCluster.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -8,13 +9,17 @@
 #include <memory>
 #include <optional>
 #include <chrono>
+#include <unordered_map>
 
 namespace aegon::data::redis {
 
 class RedisPipeline {
 public:
     explicit RedisPipeline(RedisConnectionPool& pool)
-        : pool_(pool) {}
+        : pool_(&pool), cluster_router_(nullptr) {}
+
+    explicit RedisPipeline(RedisClusterRouter& router)
+        : pool_(nullptr), cluster_router_(&router) {}
 
     RedisPipeline& set(std::string_view key, std::string_view val, std::optional<std::chrono::seconds> ttl = std::nullopt) {
         std::vector<std::string_view> cmd = {"SET", key, val};
@@ -47,6 +52,16 @@ public:
         return *this;
     }
 
+    RedisPipeline& hget(std::string_view key, std::string_view field) {
+        commands_.push_back(copy_cmd({"HGET", key, field}));
+        return *this;
+    }
+
+    RedisPipeline& hset(std::string_view key, std::string_view field, std::string_view val) {
+        commands_.push_back(copy_cmd({"HSET", key, field, val}));
+        return *this;
+    }
+
     RedisPipeline& command(std::vector<std::string_view> cmd) {
         commands_.push_back(copy_cmd(cmd));
         return *this;
@@ -61,7 +76,63 @@ public:
             co_return std::vector<RespValue>{};
         }
 
-        auto guard = co_await pool_.acquire();
+        if (cluster_router_ != nullptr) {
+            std::vector<RespValue> final_results(commands_.size());
+
+            struct PoolBatch {
+                std::shared_ptr<RedisConnectionPool> pool;
+                std::vector<size_t> indices;
+                std::vector<std::vector<std::string_view>> wire_cmds;
+            };
+
+            std::unordered_map<RedisConnectionPool*, PoolBatch> batches;
+            for (size_t i = 0; i < commands_.size(); ++i) {
+                const auto& cmd = commands_[i];
+                std::string_view key = cmd.size() > 1 ? cmd[1] : "";
+                auto pool = cluster_router_->pool_for_key(key);
+                if (!pool) {
+                    RespValue err;
+                    err.type = RespType::Error;
+                    err.data = std::string("No cluster pool for key");
+                    final_results[i] = std::move(err);
+                    continue;
+                }
+
+                auto& b = batches[pool.get()];
+                if (!b.pool) b.pool = pool;
+                b.indices.push_back(i);
+
+                std::vector<std::string_view> views;
+                views.reserve(cmd.size());
+                for (const auto& s : cmd) views.push_back(s);
+                b.wire_cmds.push_back(std::move(views));
+            }
+
+            for (auto& [_, batch] : batches) {
+                auto guard = co_await batch.pool->acquire();
+                if (!guard.conn) {
+                    for (size_t idx : batch.indices) {
+                        RespValue err;
+                        err.type = RespType::Error;
+                        err.data = std::string("Failed to acquire connection");
+                        final_results[idx] = std::move(err);
+                    }
+                    continue;
+                }
+                auto results = co_await guard->execute_pipeline(batch.wire_cmds);
+                for (size_t j = 0; j < results.size() && j < batch.indices.size(); ++j) {
+                    final_results[batch.indices[j]] = std::move(results[j]);
+                }
+            }
+
+            co_return final_results;
+        }
+
+        if (!pool_) {
+            co_return std::vector<RespValue>{};
+        }
+
+        auto guard = co_await pool_->acquire();
         if (!guard.conn) {
             co_return std::vector<RespValue>{};
         }
@@ -88,7 +159,8 @@ private:
         return res;
     }
 
-    RedisConnectionPool& pool_;
+    RedisConnectionPool* pool_{nullptr};
+    RedisClusterRouter* cluster_router_{nullptr};
     std::vector<std::vector<std::string>> commands_;
     std::vector<std::string> ttl_storage_;
 };

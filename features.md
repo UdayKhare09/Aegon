@@ -1116,3 +1116,141 @@ All mutations executed through `SqlDatabaseClient` / `ctx.db.sql` automatically 
   - Purges `<table_name>:id:<pk>`.
   - Increments table or partition epoch counter.
 
+---
+
+## 7. Advanced Redis Primitives (`aegon::data::redis`)
+
+### Distributed Mutex (`RedisLock`)
+Provides an asynchronous, non-blocking distributed lock implementation using cryptographically secure random tokens and atomic Lua script releases to prevent split-brain releases.
+
+```cpp
+auto lock = co_await redis.acquire_lock("resource:lock", std::chrono::milliseconds(5000));
+if (lock.is_locked()) {
+    // Critical distributed section
+    co_await lock.extend(std::chrono::milliseconds(2000)); // Heartbeat extension
+    co_await lock.release();
+}
+```
+
+### Lua Scripting Engine
+Execute atomic scripts directly on the Redis engine with automatic SHA1 caching (`EVALSHA` fallback to `EVAL`).
+
+```cpp
+// 1. Raw EVAL
+auto res = co_await redis.eval("return ARGV[1] * 2", {}, {"21"});
+
+// 2. Cached Script Execution
+auto sha = co_await redis.script_load("return redis.call('get', KEYS[1])");
+auto val = co_await redis.evalsha(sha, {"my_key"}, {});
+```
+
+### Sorted Sets Range & Inspection APIs
+```cpp
+co_await redis.zadd("leaderboard", 1500, "alice");
+co_await redis.zadd("leaderboard", 2300, "bob");
+
+auto top_players = co_await redis.zrevrange_with_scores("leaderboard", 0, 10);
+auto count = co_await redis.zcount("leaderboard", 1000, 2000);
+auto rank = co_await redis.zrevrank("leaderboard", "bob"); // 0
+```
+
+### Redis Streams API
+Full event-sourcing and streaming event bus support:
+```cpp
+// Append message
+auto msg_id = co_await redis.xadd("events:orders", {{"order_id", "42"}, {"status", "PAID"}});
+
+// Consume messages
+auto events = co_await redis.xrange("events:orders", "-", "+", 50);
+
+// Consumer Groups
+co_await redis.xgroup_create("events:orders", "workers", "$", true);
+auto results = co_await redis.xreadgroup("workers", "worker-1", {"events:orders"}, {">"}, 10);
+for (const auto& msg : results[0].messages) {
+    // Process message
+    co_await redis.xack("events:orders", "workers", {msg.id});
+}
+```
+
+---
+
+## 8. Compile-Time ORM Enhancements (`aegon::data::orm::sql`)
+
+### Optimistic Concurrency Control (OCC)
+Prevents lost updates and race conditions across concurrent transactions without heavyweight table/row database locks.
+
+```cpp
+struct Product {
+    int64_t id{0};
+    std::string name;
+    int64_t price{0};
+    int64_t version{1}; // Version counter
+
+    static auto schema() {
+        return table<Product>("products")
+            .id(&Product::id, "id")
+            .column(&Product::name, "name")
+            .column(&Product::price, "price")
+            .version(&Product::version, "version"); // Declare OCC version
+    }
+};
+
+// Generates CAS SQL: UPDATE "products" SET ..., "version" = 2 WHERE "id" = 42 AND "version" = 1;
+// Throws OptimisticLockException if another process modified the row in the interim
+co_await db.update_entity(product);
+```
+
+### Fine-Grained `PredicateAware` Cache Invalidation
+Invalidates queries matching specific mutated column predicates instead of invalidating the entire table or partition.
+
+```cpp
+struct Ticket {
+    int64_t id{0};
+    std::string status;
+    std::string priority;
+
+    static auto schema() {
+        return table<Ticket>("tickets")
+            .id(&Ticket::id, "id")
+            .column(&Ticket::status, "status")
+            .column(&Ticket::priority, "priority")
+            .cache_by_id()
+            .invalidation_mode(InvalidationMode::PredicateAware);
+    }
+};
+
+// Cached query tracks tickets:pred:status:open:epoch
+auto open_tickets = co_await db.from<Ticket>()
+    .where(&Ticket::status, Op::Eq, "open")
+    .cached(InvalidationMode::PredicateAware)
+    .fetch_all();
+
+// Modifying an open ticket bumps ONLY tickets:pred:status:open:epoch
+// Cached queries for status="closed" remain 100% valid!
+co_await db.update_entity(open_ticket);
+```
+
+### Primary / Read Replica Splitting
+Transparently balances read workload across read replicas while preserving write-to-primary and transaction consistency.
+
+```cpp
+PerCoreConnectionPool primary_pool([] { return std::make_unique<PostgresConnection>(primary_conn_str); });
+PerCoreConnectionPool replica1_pool([] { return std::make_unique<PostgresConnection>(replica1_conn_str); });
+PerCoreConnectionPool replica2_pool([] { return std::make_unique<PostgresConnection>(replica2_conn_str); });
+
+SqlDatabaseClient db(primary_pool, {replica1_pool, replica2_pool});
+
+// Writes route to primary
+co_await db.insert(user);
+
+// Reads balance across replicas
+auto user = co_await db.find_by_id<User>(1);
+
+// Transactions strictly run 100% on primary
+co_await db.transaction([&](Transaction& tx) -> Task<void> {
+    auto u = co_await tx.find_by_id<User>(1);
+    u.balance += 50;
+    co_await tx.update_entity(u);
+});
+```
+

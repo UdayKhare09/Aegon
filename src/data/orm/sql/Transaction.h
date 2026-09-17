@@ -7,6 +7,7 @@
 #include "UpdateBuilder.h"
 #include "DeleteBuilder.h"
 #include "core/Task.h"
+#include "OptimisticLockException.h"
 #include <string>
 #include <vector>
 #include <optional>
@@ -57,6 +58,13 @@ public:
     }
 
     template <typename Entity>
+    core::Task<void> insert_all(std::span<Entity> entities) {
+        for (const auto& entity : entities) {
+            co_await insert(entity);
+        }
+    }
+
+    template <typename Entity>
     core::Task<int64_t> insert_get_id(Entity& entity) {
         auto schema = Entity::schema();
         int64_t pid = co_await schema.insert_entity(entity, conn_);
@@ -95,6 +103,41 @@ public:
     }
 
     template <typename Entity>
+    core::Task<size_t> update_entity(Entity& entity) {
+        auto schema = Entity::schema();
+        const auto& pk_name = schema.primary_key_name();
+        auto extracted = schema.extract_values(entity, false);
+
+        std::string pk_val;
+        for (const auto& [col, val] : extracted) {
+            if (col == pk_name) {
+                pk_val = val;
+                break;
+            }
+        }
+
+        auto builder = update<Entity>().set_entity(entity).where(pk_name, Op::Eq, pk_val);
+        int64_t curr_ver = 0;
+        int64_t next_ver = 0;
+        if (schema.has_version()) {
+            curr_ver = schema.get_version(entity);
+            next_ver = curr_ver + 1;
+            builder.set(schema.version_column(), next_ver);
+            builder.where(schema.version_column(), Op::Eq, curr_ver);
+        }
+
+        auto query = builder.to_sql(dialect_);
+        size_t n = co_await conn_.execute(query.sql, query.params);
+        if (schema.has_version()) {
+            if (n == 0) {
+                throw OptimisticLockException("Optimistic lock failure: entity was modified concurrently");
+            }
+            schema.set_version(entity, next_ver);
+        }
+        co_return n;
+    }
+
+    template <typename Entity>
     core::Task<size_t> update_entity(const Entity& entity) {
         auto schema = Entity::schema();
         const auto& pk_name = schema.primary_key_name();
@@ -109,8 +152,24 @@ public:
         }
 
         auto builder = update<Entity>().set_entity(entity).where(pk_name, Op::Eq, pk_val);
+        int64_t curr_ver = 0;
+        int64_t next_ver = 0;
+        if (schema.has_version()) {
+            curr_ver = schema.get_version(entity);
+            next_ver = curr_ver + 1;
+            builder.set(schema.version_column(), next_ver);
+            builder.where(schema.version_column(), Op::Eq, curr_ver);
+        }
+
         auto query = builder.to_sql(dialect_);
-        co_return co_await conn_.execute(query.sql, query.params);
+        size_t n = co_await conn_.execute(query.sql, query.params);
+        if (schema.has_version()) {
+            if (n == 0) {
+                throw OptimisticLockException("Optimistic lock failure: entity was modified concurrently");
+            }
+            schema.set_version(const_cast<Entity&>(entity), next_ver);
+        }
+        co_return n;
     }
 
     template <typename Entity, typename ID>

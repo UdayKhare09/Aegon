@@ -66,6 +66,17 @@ public:
 
     [[nodiscard]] const TableDef<Entity>& schema() const noexcept { return schema_; }
     [[nodiscard]] const std::vector<Condition>& conditions() const noexcept { return conditions_; }
+
+    [[nodiscard]] std::vector<std::pair<std::string, std::string>> extract_equality_predicates() const {
+        std::vector<std::pair<std::string, std::string>> preds;
+        for (const auto& cond : conditions_) {
+            if (cond.conj == Conjunction::And && cond.op == Op::Eq && !cond.values.empty()) {
+                preds.emplace_back(cond.column, cond.values[0]);
+            }
+        }
+        return preds;
+    }
+
     [[nodiscard]] const std::vector<OrderByClause>& order_bys() const noexcept { return order_bys_; }
     [[nodiscard]] const std::vector<std::string>& group_bys() const noexcept { return group_bys_; }
     [[nodiscard]] const std::vector<Condition>& havings() const noexcept { return havings_; }

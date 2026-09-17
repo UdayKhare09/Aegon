@@ -6,6 +6,7 @@
 #include "RedisPipeline.h"
 #include "RedisTransaction.h"
 #include "RedisSubscriber.h"
+#include "RedisStreamTypes.h"
 #include "core/IoUring.h"
 #include "core/Task.h"
 #include <string>
@@ -16,6 +17,8 @@
 #include <chrono>
 
 namespace aegon::data::redis {
+
+class RedisLock;
 
 enum class RedisMode {
     Standalone,
@@ -68,6 +71,37 @@ public:
     // --- Sorted Sets API ---
     core::Task<bool> zadd(std::string_view key, std::string_view member, double score);
     core::Task<bool> zrem(std::string_view key, std::string_view member);
+    core::Task<std::vector<std::string>> zrange(std::string_view key, int64_t start, int64_t stop);
+    core::Task<std::vector<std::pair<std::string, double>>> zrange_with_scores(std::string_view key, int64_t start, int64_t stop);
+    core::Task<std::vector<std::string>> zrevrange(std::string_view key, int64_t start, int64_t stop);
+    core::Task<std::vector<std::pair<std::string, double>>> zrevrange_with_scores(std::string_view key, int64_t start, int64_t stop);
+    core::Task<std::vector<std::string>> zrangebyscore(std::string_view key, std::string_view min, std::string_view max, int64_t offset = 0, int64_t count = -1);
+    core::Task<std::vector<std::pair<std::string, double>>> zrangebyscore_with_scores(std::string_view key, std::string_view min, std::string_view max, int64_t offset = 0, int64_t count = -1);
+    core::Task<int64_t> zcard(std::string_view key);
+    core::Task<int64_t> zcount(std::string_view key, std::string_view min, std::string_view max);
+    core::Task<std::optional<double>> zscore(std::string_view key, std::string_view member);
+    core::Task<std::optional<int64_t>> zrank(std::string_view key, std::string_view member);
+    core::Task<std::optional<int64_t>> zrevrank(std::string_view key, std::string_view member);
+
+    // --- Streams API ---
+    core::Task<std::string> xadd(std::string_view key, std::string_view id, const std::vector<std::pair<std::string, std::string>>& fields, std::optional<size_t> maxlen = std::nullopt);
+    core::Task<std::vector<StreamReadResult>> xread(const std::vector<std::string>& streams, const std::vector<std::string>& ids, std::optional<size_t> count = std::nullopt, std::optional<std::chrono::milliseconds> block_ms = std::nullopt);
+    core::Task<std::vector<StreamMessage>> xrange(std::string_view key, std::string_view start, std::string_view end, std::optional<size_t> count = std::nullopt);
+    core::Task<std::vector<StreamMessage>> xrevrange(std::string_view key, std::string_view end, std::string_view start, std::optional<size_t> count = std::nullopt);
+    core::Task<int64_t> xlen(std::string_view key);
+    core::Task<bool> xgroup_create(std::string_view key, std::string_view group, std::string_view id = "$", bool mkstream = false);
+    core::Task<std::vector<StreamReadResult>> xreadgroup(std::string_view group, std::string_view consumer, const std::vector<std::string>& streams, const std::vector<std::string>& ids, std::optional<size_t> count = std::nullopt, std::optional<std::chrono::milliseconds> block_ms = std::nullopt, bool noack = false);
+    core::Task<int64_t> xack(std::string_view key, std::string_view group, const std::vector<std::string>& ids);
+    core::Task<int64_t> xdel(std::string_view key, const std::vector<std::string>& ids);
+
+    // --- Lua Scripting API ---
+    core::Task<RespValue> eval(std::string_view script, const std::vector<std::string_view>& keys = {}, const std::vector<std::string_view>& args = {});
+    core::Task<RespValue> evalsha(std::string_view sha1, const std::vector<std::string_view>& keys = {}, const std::vector<std::string_view>& args = {});
+    core::Task<std::string> script_load(std::string_view script);
+    core::Task<RespValue> eval_script(std::string_view script, const std::vector<std::string_view>& keys = {}, const std::vector<std::string_view>& args = {});
+
+    // --- Distributed Locking API ---
+    core::Task<std::optional<RedisLock>> lock(std::string_view key, std::chrono::milliseconds ttl, std::chrono::milliseconds retry_delay = std::chrono::milliseconds(50), size_t max_retries = 0);
 
     // --- Key Expiry & Lifecycle API ---
     core::Task<bool> expire(std::string_view key, std::chrono::seconds seconds);

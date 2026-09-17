@@ -75,6 +75,15 @@ public:
         co_return false;
     }
 
+    std::shared_ptr<RedisConnectionPool> pool_for_key(std::string_view key) {
+        uint16_t slot = key_slot(key);
+        auto pool = slots_[slot];
+        if (!pool && !config_.seed_nodes.empty()) {
+            pool = get_or_create_pool(config_.seed_nodes[0].first, config_.seed_nodes[0].second);
+        }
+        return pool;
+    }
+
     core::Task<RespValue> execute(std::string_view key, const std::vector<std::string_view>& args) {
         uint16_t slot = key_slot(key);
         auto pool = slots_[slot];

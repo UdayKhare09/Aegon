@@ -401,6 +401,7 @@ core::Task<void> run_cache_test_for_topology(
     std::cout << "  [I] Testing delete_by_id Cache Purge...\n";
     bool deleted = co_await client.delete_by_id<User>(u2.id);
     assert(deleted);
+    (void)deleted;
 
     auto u2_purged = co_await cache_backend->get("users:id:" + std::to_string(u2.id));
     assert(!u2_purged.has_value());
@@ -418,10 +419,12 @@ core::Task<void> run_postgres_orm_cache_all_topologies(core::IoUring& ring) {
     std::cout << " (Testing Standalone, Sentinel, and Cluster Modes)     \n";
     std::cout << "=======================================================\n";
 
-    // 1. Connect to PostgreSQL 17 Pool
+    // 1. Connect to PostgreSQL 17 Pools (Primary + 2 Read Replicas)
     std::string conninfo = "host=127.0.0.1 port=5432 dbname=aegon_test user=aegon password=aegon_secret";
-    auto pg_pool = create_postgres_pool(conninfo, 4);
-    SqlDatabaseClient client(*pg_pool);
+    auto pg_primary = create_postgres_pool(conninfo, 4);
+    auto pg_replica1 = create_postgres_pool(conninfo, 4);
+    auto pg_replica2 = create_postgres_pool(conninfo, 4);
+    SqlDatabaseClient client(*pg_primary, {*pg_replica1, *pg_replica2});
 
     // -------------------------------------------------------------
     // TOPOLOGY 1: Redis Standalone (Port 6379)

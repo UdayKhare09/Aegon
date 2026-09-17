@@ -80,6 +80,10 @@ private:
     std::vector<RelationDescriptor> relations_;
     std::function<std::string(const Entity&)> pk_extractor_;
     std::function<void(Entity&, std::string_view)> pk_setter_;
+    bool has_version_{false};
+    std::string version_column_{"version"};
+    std::function<int64_t(const Entity&)> version_extractor_;
+    std::function<void(Entity&, int64_t)> version_setter_;
 
     ColumnMetadata& current_col() {
         if (columns_.empty()) {
@@ -268,6 +272,43 @@ public:
 
         columns_.push_back(std::move(meta));
         return *this;
+    }
+
+    template <typename FieldType>
+    TableDef& version(FieldType Entity::* ptr, std::string col_name = "version") {
+        static_assert(std::is_integral_v<FieldType>, "Version column must be an integral type");
+        has_version_ = true;
+        version_column_ = col_name.empty() ? "version" : col_name;
+
+        version_extractor_ = [ptr](const Entity& e) -> int64_t {
+            return static_cast<int64_t>(e.*ptr);
+        };
+
+        version_setter_ = [ptr](Entity& e, int64_t val) {
+            e.*ptr = static_cast<FieldType>(val);
+        };
+
+        bool already_added = false;
+        for (const auto& col : columns_) {
+            if (col.column_name == version_column_) {
+                already_added = true;
+                break;
+            }
+        }
+        if (!already_added) {
+            column(ptr, version_column_);
+        }
+        return *this;
+    }
+
+    [[nodiscard]] bool has_version() const noexcept { return has_version_; }
+    [[nodiscard]] const std::string& version_column() const noexcept { return version_column_; }
+    [[nodiscard]] int64_t get_version(const Entity& entity) const {
+        if (version_extractor_) return version_extractor_(entity);
+        return 0;
+    }
+    void set_version(Entity& entity, int64_t val) const {
+        if (version_setter_) version_setter_(entity, val);
     }
 
     TableDef& unique(bool val = true) {

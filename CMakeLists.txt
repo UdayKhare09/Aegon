@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(Aegon LANGUAGES CXX)
 
+enable_testing()
+
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -71,6 +73,7 @@ add_library(aegon_redis
     src/data/redis/Resp3.cpp
     src/data/redis/RedisConnection.cpp
     src/data/redis/RedisClient.cpp
+    src/data/redis/RedisLock.cpp
 )
 
 target_include_directories(aegon_redis PUBLIC
@@ -79,6 +82,8 @@ target_include_directories(aegon_redis PUBLIC
 
 target_link_libraries(aegon_redis PUBLIC
     aegon_core
+    aegon_uuid
+    crypto
 )
 
 # HTTP Server and Routing library
@@ -232,6 +237,37 @@ add_executable(test_live_postgres_orm_cache
     tests/test_live_postgres_orm_cache.cpp
 )
 target_link_libraries(test_live_postgres_orm_cache PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+
+add_executable(test_redis_advanced
+    tests/test_redis_advanced.cpp
+)
+target_link_libraries(test_redis_advanced PRIVATE aegon_redis aegon_core crypto)
+
+add_executable(test_orm_advanced
+    tests/test_orm_advanced.cpp
+)
+target_link_libraries(test_orm_advanced PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+
+# Test Registrations for CTest
+add_test(NAME foundational_types COMMAND test_foundational_types)
+add_test(NAME dto_validation COMMAND test_dto_validation)
+add_test(NAME simd_router COMMAND test_simd_router)
+add_test(NAME radix_router COMMAND test_radix_router)
+add_test(NAME advanced_io COMMAND test_advanced_io)
+add_test(NAME redis_protocol COMMAND test_redis_protocol)
+add_test(NAME sql_schema COMMAND test_sql_schema)
+add_test(NAME sql_query_builder COMMAND test_sql_query_builder)
+add_test(NAME sql_transaction COMMAND test_sql_transaction)
+add_test(NAME sql_relations COMMAND test_sql_relations)
+add_test(NAME sql_advanced_queries COMMAND test_sql_advanced_queries)
+add_test(NAME sql_drivers COMMAND test_sql_drivers)
+add_test(NAME server_sql_config COMMAND test_server_sql_config)
+add_test(NAME orm_cache COMMAND test_orm_cache)
+add_test(NAME live_postgres COMMAND test_live_postgres)
+add_test(NAME live_redis_topologies COMMAND test_live_redis_topologies)
+add_test(NAME live_postgres_orm_cache COMMAND test_live_postgres_orm_cache)
+add_test(NAME redis_advanced COMMAND test_redis_advanced)
+add_test(NAME orm_advanced COMMAND test_orm_advanced)
 
 
 
