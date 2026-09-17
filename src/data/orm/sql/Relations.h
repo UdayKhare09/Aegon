@@ -79,6 +79,13 @@ public:
         loaded_ = false;
     }
 
+    template <typename... Args>
+    T& emplace(Args&&... args) {
+        data_.emplace(std::forward<Args>(args)...);
+        loaded_ = true;
+        return *data_;
+    }
+
     void set_loaded(bool l = true) noexcept { loaded_ = l; }
     [[nodiscard]] bool is_loaded() const noexcept { return loaded_; }
     [[nodiscard]] bool has_value() const noexcept { return data_.has_value(); }

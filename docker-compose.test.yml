@@ -1,0 +1,120 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: aegon-test-postgres
+    network_mode: host
+    environment:
+      POSTGRES_USER: aegon
+      POSTGRES_PASSWORD: aegon_secret
+      POSTGRES_DB: aegon_test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegon -d aegon_test"]
+      interval: 1s
+      timeout: 2s
+      retries: 15
+
+  redis-standalone:
+    image: redis:7-alpine
+    container_name: aegon-test-redis-standalone
+    network_mode: host
+    command: ["redis-server", "--port", "6379", "--requirepass", "redis_secret"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_secret", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 15
+
+  redis-sentinel-master:
+    image: redis:7-alpine
+    container_name: aegon-test-sentinel-master
+    network_mode: host
+    command: ["redis-server", "--port", "6380", "--requirepass", "sentinel_secret", "--masterauth", "sentinel_secret"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6380", "-a", "sentinel_secret", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 15
+
+  redis-sentinel-replica:
+    image: redis:7-alpine
+    container_name: aegon-test-sentinel-replica
+    command: ["redis-server", "--port", "6381", "--replicaof", "127.0.0.1", "6380", "--requirepass", "sentinel_secret", "--masterauth", "sentinel_secret"]
+    network_mode: host
+    depends_on:
+      redis-sentinel-master:
+        condition: service_healthy
+
+  redis-sentinel:
+    image: redis:7-alpine
+    container_name: aegon-test-sentinel
+    network_mode: host
+    entrypoint:
+      - sh
+      - -c
+      - |
+        cat <<EOF > /tmp/sentinel.conf
+        port 26379
+        sentinel monitor mymaster 127.0.0.1 6380 1
+        sentinel auth-pass mymaster sentinel_secret
+        sentinel down-after-milliseconds mymaster 2000
+        sentinel failover-timeout mymaster 3000
+        EOF
+        exec redis-sentinel /tmp/sentinel.conf
+    depends_on:
+      redis-sentinel-master:
+        condition: service_healthy
+
+  # Redis Cluster 6 Nodes (3 masters, 3 replicas) using host network mode for direct slot mapping
+  redis-cluster-node-0:
+    image: redis:7-alpine
+    container_name: aegon-test-cluster-node-0
+    network_mode: host
+    command: ["redis-server", "--port", "7000", "--cluster-enabled", "yes", "--cluster-config-file", "nodes-7000.conf", "--cluster-node-timeout", "2000", "--appendonly", "no"]
+
+  redis-cluster-node-1:
+    image: redis:7-alpine
+    container_name: aegon-test-cluster-node-1
+    network_mode: host
+    command: ["redis-server", "--port", "7001", "--cluster-enabled", "yes", "--cluster-config-file", "nodes-7001.conf", "--cluster-node-timeout", "2000", "--appendonly", "no"]
+
+  redis-cluster-node-2:
+    image: redis:7-alpine
+    container_name: aegon-test-cluster-node-2
+    network_mode: host
+    command: ["redis-server", "--port", "7002", "--cluster-enabled", "yes", "--cluster-config-file", "nodes-7002.conf", "--cluster-node-timeout", "2000", "--appendonly", "no"]
+
+  redis-cluster-node-3:
+    image: redis:7-alpine
+    container_name: aegon-test-cluster-node-3
+    network_mode: host
+    command: ["redis-server", "--port", "7003", "--cluster-enabled", "yes", "--cluster-config-file", "nodes-7003.conf", "--cluster-node-timeout", "2000", "--appendonly", "no"]
+
+  redis-cluster-node-4:
+    image: redis:7-alpine
+    container_name: aegon-test-cluster-node-4
+    network_mode: host
+    command: ["redis-server", "--port", "7004", "--cluster-enabled", "yes", "--cluster-config-file", "nodes-7004.conf", "--cluster-node-timeout", "2000", "--appendonly", "no"]
+
+  redis-cluster-node-5:
+    image: redis:7-alpine
+    container_name: aegon-test-cluster-node-5
+    network_mode: host
+    command: ["redis-server", "--port", "7005", "--cluster-enabled", "yes", "--cluster-config-file", "nodes-7005.conf", "--cluster-node-timeout", "2000", "--appendonly", "no"]
+
+  redis-cluster-init:
+    image: redis:7-alpine
+    container_name: aegon-test-cluster-init
+    network_mode: host
+    depends_on:
+      - redis-cluster-node-0
+      - redis-cluster-node-1
+      - redis-cluster-node-2
+      - redis-cluster-node-3
+      - redis-cluster-node-4
+      - redis-cluster-node-5
+    command: >
+      sh -c "
+        sleep 2
+        redis-cli --cluster create 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 127.0.0.1:7003 127.0.0.1:7004 127.0.0.1:7005 --cluster-replicas 1 --cluster-yes || true
+        echo 'Redis Cluster Initialized!'
+      "

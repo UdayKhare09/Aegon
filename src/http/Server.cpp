@@ -286,7 +286,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
             auto match_res = router_.match(req);
 
             if (match_res.route_found && match_res.handler) {
-                Context ctx(req, res, user_state_, sql_client_);
+                Context ctx(req, res, user_state_, sql_client_, redis_client_);
                 co_await (*match_res.handler)(ctx);
             } else if (match_res.method_not_allowed) {
                 res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
@@ -402,7 +402,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
         auto match_res = router_.match(req);
 
         if (match_res.route_found && match_res.handler) {
-            Context ctx(req, res, user_state_, sql_client_);
+            Context ctx(req, res, user_state_, sql_client_, redis_client_);
             co_await (*match_res.handler)(ctx);
         } else if (match_res.method_not_allowed) {
             res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");

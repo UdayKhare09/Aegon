@@ -159,6 +159,34 @@ RecvResult IoUring::MultishotRecvAwaiter::await_resume() noexcept {
     return res;
 }
 
+void IoUring::RecvAwaiter::submit() noexcept {
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    if (!sqe) [[unlikely]] {
+        ring.submit_and_wait(0);
+        sqe = io_uring_get_sqe(&ring.ring_);
+    }
+    io_uring_prep_recv(sqe, socket_fd, buf, len, flags);
+    io_uring_sqe_set_data(sqe, this);
+}
+
+int IoUring::RecvAwaiter::await_resume() noexcept {
+    return result;
+}
+
+void IoUring::ConnectAwaiter::submit() noexcept {
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    if (!sqe) [[unlikely]] {
+        ring.submit_and_wait(0);
+        sqe = io_uring_get_sqe(&ring.ring_);
+    }
+    io_uring_prep_connect(sqe, socket_fd, addr, addr_len);
+    io_uring_sqe_set_data(sqe, this);
+}
+
+int IoUring::ConnectAwaiter::await_resume() noexcept {
+    return result;
+}
+
 void IoUring::SendAwaiter::submit() noexcept {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
     if (!sqe) [[unlikely]] {

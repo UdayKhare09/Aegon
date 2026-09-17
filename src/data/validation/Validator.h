@@ -35,22 +35,27 @@ public:
         return violations_;
     }
 
+#include <glaze/glaze.hpp>
+#include <unordered_map>
+
+    struct ValidationReport {
+        int status{422};
+        std::string error{"Unprocessable Entity"};
+        std::string message{"Validation failed"};
+        std::unordered_map<std::string, std::string> violations;
+    };
+
     /**
      * @brief Generates RFC 7807 / Spring Boot style structured 422 JSON error report.
      */
     [[nodiscard]] std::string to_json() const {
-        std::string out = "{\"status\":422,\"error\":\"Unprocessable Entity\",\"message\":\"Validation failed\",\"violations\":{";
-        bool first = true;
+        ValidationReport report;
+        report.violations.reserve(violations_.size());
         for (const auto& [field, msg] : violations_) {
-            if (!first) out.push_back(',');
-            first = false;
-            out.push_back('"');
-            escape_json_string(field, out);
-            out.append("\":\"");
-            escape_json_string(msg, out);
-            out.push_back('"');
+            report.violations[field] = msg;
         }
-        out.append("}}");
+        std::string out;
+        std::ignore = glz::write_json(report, out);
         return out;
     }
 
@@ -300,17 +305,6 @@ public:
 private:
     std::string prefix_;
     std::vector<std::pair<std::string, std::string>> violations_;
-
-    static void escape_json_string(std::string_view in, std::string& out) {
-        for (char c : in) {
-            if (c == '"') out.append("\\\"");
-            else if (c == '\\') out.append("\\\\");
-            else if (c == '\n') out.append("\\n");
-            else if (c == '\r') out.append("\\r");
-            else if (c == '\t') out.append("\\t");
-            else out.push_back(c);
-        }
-    }
 };
 
 } // namespace aegon::validation

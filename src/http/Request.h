@@ -112,16 +112,18 @@ public:
         T val{};
         auto parse_err = glz::read<glz::opts{.error_on_unknown_keys = false}>(val, body_);
         if (parse_err) {
-            std::string err_desc = glz::format_error(parse_err, body_);
-            std::string err_json = "{\"status\":400,\"error\":\"Bad Request\",\"message\":\"Malformed JSON payload: ";
-            for (char c : err_desc) {
-                if (c == '"') err_json += "\\\"";
-                else if (c == '\\') err_json += "\\\\";
-                else if (c == '\n') err_json += " ";
-                else if (c == '\r') continue;
-                else err_json += c;
-            }
-            err_json += "\"}";
+            struct HttpError {
+                int status{400};
+                std::string error{"Bad Request"};
+                std::string message;
+            };
+            HttpError err{
+                .status = 400,
+                .error = "Bad Request",
+                .message = "Malformed JSON payload: " + glz::format_error(parse_err, body_)
+            };
+            std::string err_json;
+            std::ignore = glz::write_json(err, err_json);
             res.status(StatusCode::BadRequest).json(err_json);
             return std::nullopt;
         }
@@ -143,10 +145,10 @@ public:
      */
     template <typename T>
     [[nodiscard]] std::optional<T> bind_query(Response& res) const {
-        std::string json_doc = "{";
+        glz::generic doc;
+        doc.data = glz::generic::object_t{};
         if (!query_.empty()) {
             std::string_view q = query_;
-            bool first = true;
             while (!q.empty()) {
                 size_t amp = q.find('&');
                 std::string_view pair = (amp != std::string_view::npos) ? q.substr(0, amp) : q;
@@ -155,16 +157,18 @@ public:
                     std::string k = url_decode_string(pair.substr(0, eq));
                     std::string v = url_decode_string(pair.substr(eq + 1));
                     if (!k.empty()) {
-                        if (!first) json_doc.push_back(',');
-                        first = false;
-                        append_escaped_json(k, json_doc);
-                        json_doc.push_back(':');
-                        if (v == "true" || v == "false") {
-                            json_doc.append(v);
+                        if (v == "true") {
+                            doc[k] = true;
+                        } else if (v == "false") {
+                            doc[k] = false;
                         } else if (is_numeric_literal(v)) {
-                            json_doc.append(v);
+                            if (v.find('.') != std::string_view::npos) {
+                                doc[k] = std::strtod(v.c_str(), nullptr);
+                            } else {
+                                doc[k] = static_cast<int64_t>(std::strtoll(v.c_str(), nullptr, 10));
+                            }
                         } else {
-                            append_escaped_json(v, json_doc);
+                            doc[k] = v;
                         }
                     }
                 }
@@ -172,21 +176,24 @@ public:
                 q.remove_prefix(amp + 1);
             }
         }
-        json_doc.push_back('}');
+        std::string json_doc;
+        std::ignore = glz::write_json(doc, json_doc);
 
         T val{};
         auto parse_err = glz::read<glz::opts{.error_on_unknown_keys = false}>(val, json_doc);
         if (parse_err) {
-            std::string err_desc = glz::format_error(parse_err, json_doc);
-            std::string err_json = "{\"status\":400,\"error\":\"Bad Request\",\"message\":\"Invalid query parameters: ";
-            for (char c : err_desc) {
-                if (c == '"') err_json += "\\\"";
-                else if (c == '\\') err_json += "\\\\";
-                else if (c == '\n') err_json += " ";
-                else if (c == '\r') continue;
-                else err_json += c;
-            }
-            err_json += "\"}";
+            struct HttpError {
+                int status{400};
+                std::string error{"Bad Request"};
+                std::string message;
+            };
+            HttpError err{
+                .status = 400,
+                .error = "Bad Request",
+                .message = "Invalid query parameters: " + glz::format_error(parse_err, json_doc)
+            };
+            std::string err_json;
+            std::ignore = glz::write_json(err, err_json);
             res.status(StatusCode::BadRequest).json(err_json);
             return std::nullopt;
         }
@@ -208,37 +215,43 @@ public:
      */
     template <typename T>
     [[nodiscard]] std::optional<T> bind_path(Response& res) const {
-        std::string json_doc = "{";
-        bool first = true;
+        glz::generic doc;
+        doc.data = glz::generic::object_t{};
         for (size_t i = 0; i < param_count_; ++i) {
-            if (!first) json_doc.push_back(',');
-            first = false;
-            append_escaped_json(params_[i].key, json_doc);
-            json_doc.push_back(':');
+            std::string_view k = params_[i].key;
             std::string_view v = params_[i].value;
-            if (v == "true" || v == "false") {
-                json_doc.append(v);
+            if (v == "true") {
+                doc[k] = true;
+            } else if (v == "false") {
+                doc[k] = false;
             } else if (is_numeric_literal(v)) {
-                json_doc.append(v);
+                if (v.find('.') != std::string_view::npos) {
+                    doc[k] = std::strtod(std::string(v).c_str(), nullptr);
+                } else {
+                    doc[k] = static_cast<int64_t>(std::strtoll(std::string(v).c_str(), nullptr, 10));
+                }
             } else {
-                append_escaped_json(v, json_doc);
+                doc[k] = std::string(v);
             }
         }
-        json_doc.push_back('}');
+        std::string json_doc;
+        std::ignore = glz::write_json(doc, json_doc);
 
         T val{};
         auto parse_err = glz::read<glz::opts{.error_on_unknown_keys = false}>(val, json_doc);
         if (parse_err) {
-            std::string err_desc = glz::format_error(parse_err, json_doc);
-            std::string err_json = "{\"status\":400,\"error\":\"Bad Request\",\"message\":\"Invalid path parameters: ";
-            for (char c : err_desc) {
-                if (c == '"') err_json += "\\\"";
-                else if (c == '\\') err_json += "\\\\";
-                else if (c == '\n') err_json += " ";
-                else if (c == '\r') continue;
-                else err_json += c;
-            }
-            err_json += "\"}";
+            struct HttpError {
+                int status{400};
+                std::string error{"Bad Request"};
+                std::string message;
+            };
+            HttpError err{
+                .status = 400,
+                .error = "Bad Request",
+                .message = "Invalid path parameters: " + glz::format_error(parse_err, json_doc)
+            };
+            std::string err_json;
+            std::ignore = glz::write_json(err, err_json);
             res.status(StatusCode::BadRequest).json(err_json);
             return std::nullopt;
         }
@@ -268,18 +281,6 @@ public:
     }
 
 private:
-    static inline void append_escaped_json(std::string_view val, std::string& out) {
-        out.push_back('"');
-        for (char c : val) {
-            if (c == '"') out.append("\\\"");
-            else if (c == '\\') out.append("\\\\");
-            else if (c == '\n') out.append("\\n");
-            else if (c == '\r') out.append("\\r");
-            else if (c == '\t') out.append("\\t");
-            else out.push_back(c);
-        }
-        out.push_back('"');
-    }
 
     static inline bool is_numeric_literal(std::string_view s) noexcept {
         if (s.empty()) return false;

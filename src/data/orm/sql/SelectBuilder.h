@@ -36,10 +36,33 @@ class SelectBuilder {
     std::optional<size_t> limit_;
     std::optional<size_t> offset_;
     std::vector<std::function<core::Task<void>(std::span<Entity>, Connection&, DatabaseDialect)>> includes_;
+    bool is_cached_{false};
+    std::optional<std::chrono::seconds> cache_ttl_{std::nullopt};
+    std::optional<InvalidationMode> cache_invalidation_override_{std::nullopt};
+    std::optional<std::string> partition_value_{std::nullopt};
 
 public:
     SelectBuilder() : schema_(Entity::schema()) {}
     explicit SelectBuilder(TableDef<Entity> schema) : schema_(std::move(schema)) {}
+
+    template <typename Val>
+    SelectBuilder& partition(const Val& v) {
+        partition_value_ = format_param_value(v);
+        return *this;
+    }
+
+    [[nodiscard]] std::optional<std::string> resolve_partition_value() const {
+        if (partition_value_) return partition_value_;
+        if (schema_.cache_config().partition_column) {
+            const auto& target_col = *schema_.cache_config().partition_column;
+            for (const auto& cond : conditions_) {
+                if (cond.conj == Conjunction::And && cond.column == target_col && cond.op == Op::Eq && !cond.values.empty()) {
+                    return cond.values[0];
+                }
+            }
+        }
+        return std::nullopt;
+    }
 
     [[nodiscard]] const TableDef<Entity>& schema() const noexcept { return schema_; }
     [[nodiscard]] const std::vector<Condition>& conditions() const noexcept { return conditions_; }
@@ -62,6 +85,52 @@ public:
     SelectBuilder& clear_order_by() noexcept {
         order_bys_.clear();
         return *this;
+    }
+
+    // --- Caching ---
+    SelectBuilder& cached(std::optional<std::chrono::seconds> ttl = std::nullopt) {
+        is_cached_ = true;
+        cache_ttl_ = ttl;
+        return *this;
+    }
+
+    SelectBuilder& cached(InvalidationMode mode, std::optional<std::chrono::seconds> ttl = std::nullopt) {
+        is_cached_ = true;
+        cache_invalidation_override_ = mode;
+        cache_ttl_ = ttl;
+        return *this;
+    }
+
+    [[nodiscard]] bool is_cached() const noexcept {
+        return is_cached_ || schema_.is_cached();
+    }
+
+    [[nodiscard]] std::optional<std::chrono::seconds> cache_ttl() const noexcept {
+        if (cache_ttl_) return cache_ttl_;
+        if (schema_.is_cached()) return schema_.cache_config().ttl;
+        return std::nullopt;
+    }
+
+    [[nodiscard]] InvalidationMode invalidation_mode() const noexcept {
+        if (cache_invalidation_override_) return *cache_invalidation_override_;
+        return schema_.cache_config().invalidation;
+    }
+
+    [[nodiscard]] std::string compute_query_fingerprint(const QueryResult& q) const {
+        uint64_t h = 14695981039346656037ULL;
+        for (char c : q.sql) {
+            h ^= static_cast<uint8_t>(c);
+            h *= 1099511628211ULL;
+        }
+        for (const auto& p : q.params) {
+            h ^= 0x5c;
+            h *= 1099511628211ULL;
+            for (char c : p) {
+                h ^= static_cast<uint8_t>(c);
+                h *= 1099511628211ULL;
+            }
+        }
+        return std::to_string(h);
     }
 
     // Includes (Unscoped)

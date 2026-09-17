@@ -98,6 +98,36 @@ public:
     }
 };
 
+} // namespace aegon::http
+
+namespace aegon::data::redis {
+    class RedisClient;
+}
+
+namespace aegon::http {
+
+class RedisAccessor {
+    aegon::data::redis::RedisClient* client_{nullptr};
+
+public:
+    constexpr RedisAccessor() noexcept = default;
+    explicit RedisAccessor(aegon::data::redis::RedisClient* c) noexcept : client_(c) {}
+
+    [[nodiscard]] aegon::data::redis::RedisClient* operator->() const {
+        if (!client_) throw std::runtime_error("ctx.redis: Redis client not configured.");
+        return client_;
+    }
+
+    [[nodiscard]] aegon::data::redis::RedisClient& operator*() const {
+        if (!client_) throw std::runtime_error("ctx.redis: Redis client not configured.");
+        return *client_;
+    }
+
+    [[nodiscard]] bool is_configured() const noexcept {
+        return client_ != nullptr;
+    }
+};
+
 struct DatabaseContext {
     SqlAccessor sql;
     // Future: MongoAccessor mongo;
@@ -107,7 +137,7 @@ struct DatabaseContext {
  * @brief Zero-overhead compile-time Context passed to all route handlers.
  *
  * Provides direct access to inbound request data, response builder, route parameters,
- * multi-database client (ctx.db.sql), SIMD UUID extraction, and dependency injection.
+ * multi-database client (ctx.db.sql), Redis client (ctx.redis), SIMD UUID extraction, and dependency injection.
  */
 class Context {
 private:
@@ -118,9 +148,14 @@ private:
 public:
     // Multi-database namespace
     DatabaseContext db;
+    // Standalone Redis client namespace
+    RedisAccessor redis;
 
-    Context(Request& req, Response& res, void* user_state = nullptr, data::orm::sql::SqlDatabaseClient* sql_client = nullptr) noexcept
-        : req_(req), res_(res), user_state_(user_state), db{SqlAccessor(sql_client)} {}
+    Context(Request& req, Response& res, void* user_state = nullptr, 
+            data::orm::sql::SqlDatabaseClient* sql_client = nullptr,
+            aegon::data::redis::RedisClient* redis_client = nullptr) noexcept
+        : req_(req), res_(res), user_state_(user_state), 
+          db{SqlAccessor(sql_client)}, redis{RedisAccessor(redis_client)} {}
 
     // Core accessors
     [[nodiscard]] Request& req() noexcept { return req_; }

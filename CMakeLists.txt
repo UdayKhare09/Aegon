@@ -66,6 +66,21 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glaze)
 
+# Redis Client library
+add_library(aegon_redis
+    src/data/redis/Resp3.cpp
+    src/data/redis/RedisConnection.cpp
+    src/data/redis/RedisClient.cpp
+)
+
+target_include_directories(aegon_redis PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(aegon_redis PUBLIC
+    aegon_core
+)
+
 # HTTP Server and Routing library
 add_library(aegon_http
     src/http/RadixTree.cpp
@@ -85,6 +100,7 @@ target_include_directories(aegon_http PUBLIC
 target_link_libraries(aegon_http PUBLIC
     aegon_core
     aegon_uuid
+    aegon_redis
     glaze::glaze
     nghttp2
     ngtcp2_crypto_ossl
@@ -196,6 +212,26 @@ add_executable(test_advanced_io
     tests/test_advanced_io.cpp
 )
 target_link_libraries(test_advanced_io PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_redis_protocol
+    tests/test_redis_protocol.cpp
+)
+target_link_libraries(test_redis_protocol PRIVATE aegon_redis aegon_core)
+
+add_executable(test_orm_cache
+    tests/test_orm_cache.cpp
+)
+target_link_libraries(test_orm_cache PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+
+add_executable(test_live_redis_topologies
+    tests/test_live_redis_topologies.cpp
+)
+target_link_libraries(test_live_redis_topologies PRIVATE aegon_redis aegon_core)
+
+add_executable(test_live_postgres_orm_cache
+    tests/test_live_postgres_orm_cache.cpp
+)
+target_link_libraries(test_live_postgres_orm_cache PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
 
 
 

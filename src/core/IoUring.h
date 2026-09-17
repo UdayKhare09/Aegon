@@ -121,6 +121,35 @@ public:
         [[nodiscard]] RecvResult await_resume() noexcept;
     };
 
+    // Direct Recv
+    struct RecvAwaiter : IoAwaiter {
+        IoUring& ring;
+        int socket_fd;
+        void* buf;
+        size_t len;
+        int flags{0};
+
+        RecvAwaiter(IoUring& r, int fd, void* b, size_t l, int fl = 0) noexcept
+            : ring(r), socket_fd(fd), buf(b), len(l), flags(fl) {}
+
+        void submit() noexcept override;
+        [[nodiscard]] int await_resume() noexcept;
+    };
+
+    // Connect
+    struct ConnectAwaiter : IoAwaiter {
+        IoUring& ring;
+        int socket_fd;
+        const sockaddr* addr;
+        socklen_t addr_len;
+
+        ConnectAwaiter(IoUring& r, int fd, const sockaddr* a, socklen_t l) noexcept
+            : ring(r), socket_fd(fd), addr(a), addr_len(l) {}
+
+        void submit() noexcept override;
+        [[nodiscard]] int await_resume() noexcept;
+    };
+
     // Standard Send
     struct SendAwaiter : IoAwaiter {
         IoUring& ring;
@@ -230,6 +259,14 @@ public:
 
     [[nodiscard]] MultishotRecvAwaiter recv_multishot(int fd, uint16_t bgid) noexcept {
         return MultishotRecvAwaiter{*this, fd, bgid};
+    }
+
+    [[nodiscard]] RecvAwaiter recv(int fd, void* buf, size_t len, int flags = 0) noexcept {
+        return RecvAwaiter{*this, fd, buf, len, flags};
+    }
+
+    [[nodiscard]] ConnectAwaiter connect(int fd, const sockaddr* addr, socklen_t addr_len) noexcept {
+        return ConnectAwaiter{*this, fd, addr, addr_len};
     }
 
     [[nodiscard]] SendAwaiter send(int fd, std::span<const uint8_t> data) noexcept {

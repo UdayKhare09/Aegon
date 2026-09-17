@@ -116,13 +116,10 @@ public:
     [[nodiscard]] size_t file_size() const noexcept { return file_size_; }
 
     Response& uuid(const aegon::data::UUID& id) {
-        headers_.set("Content-Type", "application/json; charset=utf-8");
-        char buf[64];
-        std::memcpy(buf, "{\"uuid\":\"", 9);
-        id.to_chars(buf + 9);
-        std::memcpy(buf + 9 + 36, "\"}", 2);
-        body_.assign(buf, 47);
-        return *this;
+        struct UuidPayload {
+            aegon::data::UUID uuid;
+        };
+        return json(UuidPayload{id});
     }
 
     Response& chunked() {

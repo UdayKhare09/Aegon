@@ -39,6 +39,19 @@ A comprehensive, production-grade guide to every developer-facing feature, class
    - [Per-Core Connection Pool (`PerCoreConnectionPool`)](#per-core-connection-pool-percoreconnectionpool)
    - [Schema Generation (`SchemaGenerator`)](#schema-generation-schemagenerator)
    - [Pagination Results (`Page<T>`)](#pagination-results-paget)
+5. [Native Asynchronous Redis Client (`aegon::data::redis`)](#5-native-asynchronous-redis-client-aegondataredis)
+   - [Deployment Topologies (Standalone, Sentinel, Cluster)](#deployment-topologies-standalone-sentinel-cluster)
+   - [RESP2 & RESP3 Parser/Serializer (`Resp3Parser`, `Resp3Serializer`)](#resp2--resp3-parserserializer-resp3parser-resp3serializer)
+   - [Connection Pool & RAII Guard (`RedisConnectionPool`, `Guard`)](#connection-pool--raii-guard-redisconnectionpool-guard)
+   - [CRC16 & Redis Cluster Router (`Crc16`, `RedisClusterRouter`)](#crc16--redis-cluster-router-crc16-redisclusterrouter)
+   - [Developer Redis API (`RedisClient`)](#developer-redis-api-redisclient)
+   - [HTTP Context Accessor (`ctx.redis`)](#http-context-accessor-ctxredis)
+6. [Smart Distributed Cache & Declarative ORM Caching (`aegon::data::cache` & `aegon::data::orm::sql`)](#6-smart-distributed-cache--declarative-orm-caching-aegondatacache--aegondataormsql)
+   - [Pluggable Cache Backend (`CacheBackend`, `RedisCacheBackend`)](#pluggable-cache-backend-cachebackend-rediscachebackend)
+   - [Declarative `TableDef` Cache Configuration](#declarative-tabledef-cache-configuration)
+   - [Invalidation Strategies (`StrictEpoch`, `Partitioned`, `TtlOnly`)](#invalidation-strategies-strictepoch-partitioned-ttlonly)
+   - [Normalized Two-Phase Query Pointer Caching (`.cached()`)](#normalized-two-phase-query-pointer-caching-cached)
+   - [Automated Mutation Invalidation (`insert`, `update_entity`, `delete_by_id`)](#automated-mutation-invalidation-insert-update_entity-delete_by_id)
 
 ---
 
@@ -845,3 +858,261 @@ int main() {
     server.run(std::thread::hardware_concurrency());
 }
 ```
+
+---
+
+## 5. Native Asynchronous Redis Client (`aegon::data::redis`)
+
+Header files: `<aegon/data/redis/RedisClient.hpp>`, `<aegon/data/redis/Resp3.hpp>`, `<aegon/data/redis/RedisConnectionPool.hpp>`, `<aegon/data/redis/RedisSentinel.hpp>`, `<aegon/data/redis/RedisCluster.hpp>`
+
+Aegon incorporates a zero-dependency, ultra-high-throughput Redis client built directly on top of Linux `io_uring` and C++26 coroutines (`Task<T>`).
+
+### Deployment Topologies (Standalone, Sentinel, Cluster)
+
+The client natively supports three operational modes without requiring external proxy layers:
+
+1. **Standalone Mode**: Single node connection pool.
+2. **Sentinel Mode**: Automatic master discovery and failover re-resolution via `SENTINEL get-master-addr-by-name <group>`.
+3. **Cluster Mode**: High-availability 16,384 hash-slot sharding with automatic CRC16 calculation, `{hash_tag}` extraction, dynamic slot cache refresh on `-MOVED`, and redirect routing on `-ASK` (with preceding `ASKING` dispatch).
+
+```cpp
+// Standalone Configuration
+RedisNodeConfig config{
+    .host = "127.0.0.1",
+    .port = 6379,
+    .password = "secret"
+};
+RedisClient client(ring, config, /*pool_size=*/16);
+
+// Cluster Configuration
+ClusterConfig cluster_cfg{
+    .seed_nodes = {{"10.0.0.1", 7000}, {"10.0.0.2", 7000}},
+    .password = "secret"
+};
+RedisClient cluster_client(ring, cluster_cfg);
+```
+
+### RESP2 & RESP3 Parser/Serializer (`Resp3Parser`, `Resp3Serializer`)
+
+Streaming zero-allocation parser and serializer conforming to RESP2 and RESP3 specifications.
+
+#### Data Model (`RespValue`)
+
+Supports Simple Strings, Errors, Integers, Bulk Strings, Arrays, Nulls, Booleans, Doubles, and Maps.
+
+| Method | Signature | Description |
+|---|---|---|
+| `is_null()` | `bool is_null() const noexcept` | True if nil representation (`$-1\r\n` or `_\r\n`). |
+| `is_string()` | `bool is_string() const noexcept` | Checks for simple string or bulk string. |
+| `is_integer()` | `bool is_integer() const noexcept` | Checks if integer type (`:123\r\n`). |
+| `is_error()` | `bool is_error() const noexcept` | Checks if error type (`-ERR ...`). |
+| `is_array()` | `bool is_array() const noexcept` | Checks if array type (`*...`). |
+| `as_string()` | `std::string as_string() const` | Returns string content. |
+| `as_integer()` | `int64_t as_integer() const` | Returns 64-bit integer value. |
+| `as_array()` | `const std::vector<RespValue>& as_array() const` | Returns nested elements vector. |
+
+### Connection Pool & RAII Guard (`RedisConnectionPool`, `Guard`)
+
+Per-core connection pooling ensuring zero contention across threads. Connections are leased via move-only `Guard` objects that automatically return the socket to the pool when dropped.
+
+### CRC16 & Redis Cluster Router (`Crc16`, `RedisClusterRouter`)
+
+- `crc16(std::string_view buf)`: Hardware-accelerated lookup table implementation of XMODEM polynomial `0x1021`.
+- `key_slot(std::string_view key)`: Computes hash slot in `[0, 16383]`. Automatically parses hash tags `{...}` (e.g. `{user:101}:orders` and `{user:101}:profile` evaluate to the exact same hash slot).
+
+### Developer Redis API (`RedisClient`)
+
+Direct asynchronous operations exposed for high-frequency key-value, string, list, set, sorted set, hash, and pub/sub workflows.
+
+| Method | Signature | Description |
+|---|---|---|
+| `get()` | `Task<std::optional<std::string>> get(std::string_view key)` | Retrieves string value for key. |
+| `set()` | `Task<bool> set(std::string_view key, std::string_view val, std::optional<chrono::seconds> ttl = nullopt)` | Stores key-value pair with optional TTL. |
+| `mget()` | `Task<std::vector<std::optional<std::string>>> mget(const std::vector<std::string>& keys)` | Batch-fetches multiple keys in single roundtrip. |
+| `mset()` | `Task<bool> mset(const std::vector<std::pair<std::string, std::string>>& kvs)` | Batch-sets multiple keys. |
+| `del()` | `Task<bool> del(std::string_view key)` | Deletes single key. |
+| `del_many()` | `Task<int64_t> del_many(const std::vector<std::string>& keys)` | Deletes list of keys, returns count deleted. |
+| `incr()` | `Task<int64_t> incr(std::string_view key)` | Increments integer key by 1. |
+| `decr()` | `Task<int64_t> decr(std::string_view key)` | Decrements integer key by 1. |
+| `hget()` | `Task<std::optional<std::string>> hget(std::string_view key, std::string_view field)` | Retrieves field from hash. |
+| `hset()` | `Task<bool> hset(std::string_view key, std::string_view field, std::string_view val)` | Sets field in hash. |
+| `lpush()` | `Task<int64_t> lpush(std::string_view key, std::string_view val)` | Prepend element to list. |
+| `rpop()` | `Task<std::optional<std::string>> rpop(std::string_view key)` | Pop element from tail of list. |
+| `sadd()` | `Task<bool> sadd(std::string_view key, std::string_view member)` | Adds member to set. |
+| `zadd()` | `Task<bool> zadd(std::string_view key, double score, std::string_view member)` | Adds element with score to sorted set. |
+| `publish()` | `Task<int64_t> publish(std::string_view channel, std::string_view msg)` | Publishes message to channel. |
+| `exists()` | `Task<bool> exists(std::string_view key)` | Checks if key exists. |
+| `expire()` | `Task<bool> expire(std::string_view key, std::chrono::seconds seconds)` | Sets timeout on key in seconds. |
+| `pexpire()` | `Task<bool> pexpire(std::string_view key, std::chrono::milliseconds ms)` | Sets timeout on key in milliseconds. |
+| `ttl()` | `Task<int64_t> ttl(std::string_view key)` | Returns remaining TTL in seconds (-2 if not exists, -1 if no TTL). |
+| `pttl()` | `Task<int64_t> pttl(std::string_view key)` | Returns remaining TTL in milliseconds. |
+| `persist()` | `Task<bool> persist(std::string_view key)` | Removes expiration timeout from key. |
+| `select_db()` | `Task<bool> select_db(int index)` | Selects Redis logical database index. |
+| `pipeline()` | `RedisPipeline pipeline()` | Creates a fluent batch pipeline reducing N roundtrips into 1. |
+| `multi()` | `RedisTransaction multi()` | Creates an atomic MULTI/EXEC transaction block. |
+| `subscriber()` | `RedisSubscriber subscriber()` | Creates a dedicated Pub/Sub subscription reader stream. |
+| `execute()` | `Task<RespValue> execute(std::vector<std::string_view> args)` | Executes arbitrary raw Redis command. |
+
+### Pipelines, Transactions, and Subscriptions
+
+#### Fluent Pipeline (`RedisPipeline`)
+Batches arbitrary commands into a single roundtrip io_uring write and reads multiple responses sequentially:
+```cpp
+auto pipe = client.pipeline();
+pipe.set("p1", "v1")
+    .set("p2", "v2")
+    .get("p1")
+    .incr("counter");
+std::vector<RespValue> responses = co_await pipe.execute();
+```
+
+#### Atomic Transactions (`RedisTransaction`)
+Guarantees serializable isolation via Redis `MULTI` / `EXEC`:
+```cpp
+auto tx = client.multi();
+tx.set("bank:from", "100")
+  .set("bank:to", "500")
+  .incr("bank:tx_count");
+std::vector<RespValue> results = co_await tx.exec();
+```
+
+#### Pub/Sub Subscriber Stream (`RedisSubscriber`)
+Dedicated connection mode for real-time push message streaming:
+```cpp
+auto sub = client.subscriber();
+co_await sub.subscribe({"events:orders", "events:users"});
+while (true) {
+    auto msg_opt = co_await sub.next_message();
+    if (!msg_opt) break;
+    std::println("Channel: {} Message: {}", msg_opt->channel, msg_opt->payload);
+}
+```
+
+### HTTP Context Accessor (`ctx.redis`)
+
+Available directly on every route handler:
+
+```cpp
+app.get("/cache-stat", [](aegon::http::Context& ctx) -> aegon::core::Task<void> {
+    auto visits = co_await ctx.redis.incr("analytics:page_visits");
+    ctx.res().text("Total visits: " + std::to_string(visits));
+});
+```
+
+---
+
+## 6. Smart Distributed Cache & Declarative ORM Caching (`aegon::data::cache` & `aegon::data::orm::sql`)
+
+Header files: `<aegon/data/cache/CacheBackend.hpp>`, `<aegon/data/cache/RedisCacheBackend.hpp>`, `<aegon/data/orm/sql/Table.hpp>`, `<aegon/data/orm/sql/SelectBuilder.hpp>`
+
+Aegon features an enterprise-grade, Spring Data-inspired declarative caching engine built into the compile-time SQL ORM.
+
+### Pluggable Cache Backend (`CacheBackend`, `RedisCacheBackend`)
+
+Abstract distributed caching contract allowing seamless substitution between Redis, Memcached, or custom clusters.
+
+```cpp
+class CacheBackend {
+public:
+    virtual ~CacheBackend() = default;
+    virtual Task<std::optional<std::string>> get(std::string_view key) = 0;
+    virtual Task<std::vector<std::optional<std::string>>> mget(const std::vector<std::string>& keys) = 0;
+    virtual Task<bool> set(std::string_view key, std::string_view val, std::optional<std::chrono::seconds> ttl = std::nullopt) = 0;
+    virtual Task<bool> del(std::string_view key) = 0;
+    virtual Task<int64_t> del_many(const std::vector<std::string>& keys) = 0;
+    virtual Task<int64_t> incr(std::string_view key) = 0;
+};
+```
+
+Configure on server startup:
+```cpp
+server.cache_backend(std::make_shared<RedisCacheBackend>(redis_client, "app_prod:"));
+```
+
+### Declarative `TableDef` Cache Configuration
+
+Entity caching rules are configured directly in the entity's compile-time schema definition:
+
+```cpp
+struct User {
+    int id{0};
+    std::string email;
+    std::string username;
+    int tenant_id{0};
+
+    static const auto& schema() {
+        static const auto s = TableDef<User>("users")
+            .id(&User::id, "id")
+            .column(&User::email, "email").unique()
+            .column(&User::username, "username")
+            .column(&User::tenant_id, "tenant_id")
+            .cache({
+                .ttl = std::chrono::seconds(300),
+                .by_id = true,
+                .invalidation = InvalidationMode::Partitioned
+            })
+            .by_unique(&User::email)
+            .partition_by(&User::tenant_id);
+        return s;
+    }
+};
+```
+
+#### Cache Configuration Options
+
+| Option | Method / Field | Description |
+|---|---|---|
+| `ttl` | `std::chrono::seconds` | Expiration time for cached entity rows and query pointers. |
+| `by_id` | `bool` | Enables automatic key caching under `<table_name>:id:<primary_key>`. |
+| `by_unique()` | `.by_unique(&Entity::field)` | Sets up unique-column alias pointers pointing to the primary key. |
+| `partition_by()` | `.partition_by(&Entity::parent_id)` | Scopes cache epoch invalidations to parent/tenant IDs instead of global table eviction. |
+| `invalidation` | `InvalidationMode` | Selected invalidation strategy for mutations. |
+
+### Invalidation Strategies (`StrictEpoch`, `Partitioned`, `TtlOnly`)
+
+1. **`InvalidationMode::StrictEpoch`**:
+   - Table maintains an atomic version counter: `<table_name>:epoch`.
+   - Any `insert`, `update`, or `delete` issues an atomic `INCR <table_name>:epoch`.
+   - Query cache keys embed the epoch (`q:<table_name>:<epoch>:<query_hash>`). Invalidates all table queries in $O(1)$ without scanning keys.
+
+2. **`InvalidationMode::Partitioned`**:
+   - For multi-tenant or parent-child structures (e.g. `tenant_id`, `org_id`, `project_id`).
+   - Maintains an atomic version counter per partition: `<table_name>:part:<partition_id>:epoch`.
+   - Writes to tenant A increment only tenant A's epoch; query caches for tenant B remain completely untouched and valid.
+
+3. **`InvalidationMode::TtlOnly`**:
+   - Zero write penalty on high-frequency tables (e.g. telemetry, logs, audit trails).
+   - Queries and records expire naturally via Redis TTL (stale-while-revalidate pattern).
+
+### Normalized Two-Phase Query Pointer Caching (`.cached()`)
+
+To avoid cache bloat and stale data across multiple queries returning identical rows, queries cache **lists of primary key IDs**, not duplicated entity blobs.
+
+```cpp
+auto active_users = co_await ctx.db.sql.from<User>()
+    .where(&User::tenant_id, Op::Eq, 100)
+    .order_by_desc(&User::id)
+    .cached(std::chrono::seconds(600)) // Mark query as cacheable
+    .fetch_all();
+```
+
+#### Execution Workflow:
+1. Computes deterministic query fingerprint: SHA256 of `(SQL + Parameters + Table/Partition Epoch)`.
+2. Checks Redis for query pointer key (`q:<table_name>:<epoch>:<fingerprint>`).
+3. **Cache Hit**: Retrieves array of IDs (e.g., `[1, 5, 23]`) and dispatches a single pipelined `MGET users:id:1 users:id:5 users:id:23`.
+4. **Cache Miss**: Executes SQL query in database, records IDs into query key, and populates individual entity rows in Redis using pipelined `MSET`.
+
+### Automated Mutation Invalidation (`insert`, `update_entity`, `delete_by_id`)
+
+All mutations executed through `SqlDatabaseClient` / `ctx.db.sql` automatically orchestrate cache synchronization:
+
+- **`co_await client.insert(entity)`**:
+  - Sets `<table_name>:id:<new_id>` in cache.
+  - Increments table or partition epoch counter.
+- **`co_await client.update_entity(entity)`**:
+  - Updates `<table_name>:id:<pk>` directly with the new entity attributes.
+  - Increments table or partition epoch counter.
+- **`co_await client.delete_by_id<Entity>(pk)`**:
+  - Purges `<table_name>:id:<pk>`.
+  - Increments table or partition epoch counter.
+

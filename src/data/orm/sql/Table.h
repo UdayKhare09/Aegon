@@ -25,11 +25,37 @@
 
 namespace aegon::data::orm::sql {
 
+enum class InvalidationMode {
+    StrictEpoch,       // Increments table epoch on insert/delete (O(1))
+    Partitioned,       // Increments partition-specific epoch (scoped to parent/tenant ID)
+    PredicateAware,    // Checks if mutation matches cached WHERE conditions
+    TtlOnly            // Time-decay only; writes do NOT invalidate query cache
+};
+
+enum class MutationSync {
+    EvictOnWrite,      // Delete entity key on update (re-fetched on next read)
+    UpdateOnWrite      // Overwrite entity key with new serialized data on update
+};
+
+template <typename Entity>
+struct TableCacheConfig {
+    std::chrono::seconds ttl{300};
+    bool enabled{false};
+    bool by_id{true};
+    std::optional<std::string> unique_column;
+    std::function<std::string(const Entity&)> unique_extractor;
+    std::optional<std::string> partition_column;
+    std::function<std::string(const Entity&)> partition_extractor;
+    InvalidationMode invalidation{InvalidationMode::StrictEpoch};
+    MutationSync mutation_sync{MutationSync::EvictOnWrite};
+};
+
 template <typename ParentEntity, typename TargetEntity>
 class ManyToManyThrough;
 
 template <typename Entity>
 class TableDef {
+    TableCacheConfig<Entity> cache_config_{};
     std::string table_name_;
     std::string primary_key_name_{"id"};
     std::vector<ColumnMetadata> columns_;
@@ -326,6 +352,116 @@ public:
         current_col().is_updated_at = true;
         current_col().is_nullable = false;
         return *this;
+    }
+
+    // --- Smart Cache Configuration ---
+    TableDef& cache(TableCacheConfig<Entity> config) {
+        cache_config_ = std::move(config);
+        cache_config_.enabled = true;
+        return *this;
+    }
+
+    TableDef& cache_by_id(std::chrono::seconds ttl = std::chrono::seconds(300)) {
+        cache_config_.enabled = true;
+        cache_config_.by_id = true;
+        cache_config_.ttl = ttl;
+        return *this;
+    }
+
+    template <typename FieldType>
+    TableDef& by_unique(FieldType Entity::* ptr) {
+        cache_config_.enabled = true;
+        cache_config_.unique_column = resolve_column_name(ptr);
+        cache_config_.unique_extractor = [ptr](const Entity& e) -> std::string {
+            return format_param_value(e.*ptr);
+        };
+        return *this;
+    }
+
+    template <typename FieldType>
+    TableDef& partition_by(FieldType Entity::* ptr) {
+        cache_config_.enabled = true;
+        cache_config_.partition_column = resolve_column_name(ptr);
+        cache_config_.partition_extractor = [ptr](const Entity& e) -> std::string {
+            return format_param_value(e.*ptr);
+        };
+        cache_config_.invalidation = InvalidationMode::Partitioned;
+        return *this;
+    }
+
+    TableDef& invalidation_mode(InvalidationMode mode) {
+        cache_config_.invalidation = mode;
+        return *this;
+    }
+
+    TableDef& mutation_sync(MutationSync sync) {
+        cache_config_.mutation_sync = sync;
+        return *this;
+    }
+
+    [[nodiscard]] const TableCacheConfig<Entity>& cache_config() const noexcept {
+        return cache_config_;
+    }
+
+    [[nodiscard]] bool is_cached() const noexcept {
+        return cache_config_.enabled;
+    }
+
+    [[nodiscard]] std::string serialize_entity_json(const Entity& entity) const {
+#if __has_include(<glaze/glaze.hpp>)
+        if constexpr (requires(const Entity& e, std::string& s) { glz::write_json(e, s); }) {
+            std::string out;
+            if (glz::write_json(entity, out) == glz::error_code::none) {
+                return out;
+            }
+        }
+        std::unordered_map<std::string, std::string> map;
+        map.reserve(columns_.size());
+        for (size_t i = 0; i < columns_.size(); ++i) {
+            map.emplace(columns_[i].column_name, extractors_[i](entity));
+        }
+        std::string out;
+        if (glz::write_json(map, out) == glz::error_code::none) {
+            return out;
+        }
+#endif
+        return "{}";
+    }
+
+    [[nodiscard]] bool deserialize_entity_json(std::string_view json, Entity& out) const {
+#if __has_include(<glaze/glaze.hpp>)
+        if constexpr (requires(Entity& e, std::string_view s) { glz::read_json(e, s); }) {
+            if (glz::read_json(out, json) == glz::error_code::none) {
+                init_relations(out);
+                return true;
+            }
+        }
+        glz::generic doc;
+        if (glz::read_json(doc, json) == glz::error_code::none) {
+            std::vector<std::optional<std::string>> col_vals(columns_.size());
+            for (size_t i = 0; i < columns_.size(); ++i) {
+                if (doc.contains(columns_[i].column_name)) {
+                    const auto& val = doc[columns_[i].column_name];
+                    if (val.is_null()) {
+                        col_vals[i] = std::nullopt;
+                    } else if (val.is_string()) {
+                        col_vals[i] = std::string(val.get_string());
+                    } else {
+                        std::string s;
+                        std::ignore = glz::write_json(val, s);
+                        col_vals[i] = std::move(s);
+                    }
+                }
+            }
+            MockRowView mrow(std::move(col_vals));
+            for (size_t i = 0; i < hydrators_.size(); ++i) {
+                hydrators_[i](out, mrow, i);
+            }
+            init_relations(out);
+            return true;
+        }
+#endif
+        return false;
     }
 
     template <typename FieldType>

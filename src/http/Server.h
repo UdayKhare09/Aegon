@@ -111,7 +111,12 @@ public:
     [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
     [[nodiscard]] bool is_http3_enabled() const noexcept { return http3_enabled_; }
     [[nodiscard]] bool is_sqpoll_enabled() const noexcept { return sqpoll_enabled_; }
-    [[nodiscard]] data::orm::sql::SqlDatabaseClient* sql_client() const noexcept { return sql_client_; }
+    [[nodiscard]] aegon::data::orm::sql::SqlDatabaseClient* sql_client() const noexcept { return sql_client_; }
+    Server& redis_client(aegon::data::redis::RedisClient* client) noexcept {
+        redis_client_ = client;
+        return *this;
+    }
+    [[nodiscard]] aegon::data::redis::RedisClient* redis_client() const noexcept { return redis_client_; }
 
 private:
     core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
@@ -142,7 +147,8 @@ private:
     // SQL Connection Pool and Client
     std::unique_ptr<data::orm::sql::PerCoreConnectionPool> sql_pool_;
     std::unique_ptr<data::orm::sql::SqlDatabaseClient> owned_sql_client_;
-    data::orm::sql::SqlDatabaseClient* sql_client_{nullptr};
+    aegon::data::orm::sql::SqlDatabaseClient* sql_client_{nullptr};
+    aegon::data::redis::RedisClient* redis_client_{nullptr};
 
     friend struct ServerDatabaseConfig;
 };
