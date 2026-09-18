@@ -2,6 +2,18 @@
 
 A comprehensive, production-grade guide to every developer-facing feature, class, method, builder, and utility function provided by the **Aegon** C++26 high-performance asynchronous web framework and compile-time ORM.
 
+### Decoupled Modular Architecture & CMake Targets
+
+Aegon is designed as a set of completely decoupled, standalone libraries. Developers can use any component independently or combine them as needed:
+
+| Library Target | Description | Dependencies |
+|---|---|---|
+| `aegon_core` | Core coroutine engine (`Task<T>`), `io_uring`, buffer pools, and per-core `EventLoop`. | Linux kernel 6.x |
+| `aegon_http` | High-performance multithreaded HTTP/1.1, HTTP/2, HTTP/3, SIMD routing, and `ServiceRegistry`. | `aegon_core` *(Zero dependency on SQL or Redis)* |
+| `aegon_orm` | Compile-time SQL ORM, fluent query builder, relations, migrations, and declarative caching. | `aegon_core`, `aegon_uuid`, drivers (`sqlite3`, `pq`) |
+| `aegon_redis` | Low-latency async Redis client, Sentinel, Cluster, Lua scripting, locks, and `PerCoreRedisClient`. | `aegon_core`, `aegon_uuid` |
+| `aegon_uuid` | SIMD-accelerated UUIDv4 and UUIDv7 generator. | Standalone |
+
 ---
 
 ## Table of Contents
@@ -13,7 +25,8 @@ A comprehensive, production-grade guide to every developer-facing feature, class
    - [Zero-Copy Buffer Pool (`BufferPool`)](#zero-copy-buffer-pool-bufferpool)
    - [Per-Core Event Loop (`EventLoop`)](#per-core-event-loop-eventloop)
 2. [HTTP Engine & Web Server (`aegon::http`)](#2-http-engine--web-server-aegonhttp)
-   - [Server (`Server`)](#server-server)
+   - [Server & Lifecycle Hooks (`Server`, `on_start`, `on_stop`, `spawn_worker`)](#server-server)
+   - [Service Registry & Dependency Injection (`ServiceRegistry`)](#service-registry--dependency-injection-serviceregistry)
    - [Router & Route Matching (`Router`, `RouteGroup`)](#router--route-matching-router-routegroup)
    - [SIMD URL Matching (`SimdRouter`)](#simd-url-matching-simdrouter)
    - [HTTP Context (`Context`)](#http-context-context)
@@ -34,20 +47,20 @@ A comprehensive, production-grade guide to every developer-facing feature, class
    - [Relation Mappings (`HasOne`, `HasMany`, `BelongsTo`, `ManyToMany`)](#relation-mappings-hasone-hasmany-belongsto-manytomany)
    - [Fluent Query Builders (`SelectBuilder`, `InsertBuilder`, `UpdateBuilder`, `DeleteBuilder`)](#fluent-query-builders-selectbuilder-insertbuilder-updatebuilder-deletebuilder)
    - [Query Expressions (`col(...)`)](#query-expressions-col)
-   - [Database Client & Accessor (`SqlDatabaseClient`, `SqlAccessor`)](#database-client--accessor-sqldatabaseclient-sqlaccessor)
+   - [Database Client & Schema Migration (`SqlDatabaseClient`, `sync_schema`)](#database-client--schema-migration-sqldatabaseclient-sync_schema)
    - [Transactions (`Transaction`)](#transactions-transaction)
    - [Per-Core Connection Pool (`PerCoreConnectionPool`)](#per-core-connection-pool-percoreconnectionpool)
    - [Schema Generation (`SchemaGenerator`)](#schema-generation-schemagenerator)
    - [Pagination Results (`Page<T>`)](#pagination-results-paget)
 5. [Native Asynchronous Redis Client (`aegon::data::redis`)](#5-native-asynchronous-redis-client-aegondataredis)
    - [Deployment Topologies (Standalone, Sentinel, Cluster)](#deployment-topologies-standalone-sentinel-cluster)
+   - [Per-Core Thread Affinity (`PerCoreRedisClient`)](#per-core-thread-affinity-percoreredisclient)
    - [RESP2 & RESP3 Parser/Serializer (`Resp3Parser`, `Resp3Serializer`)](#resp2--resp3-parserserializer-resp3parser-resp3serializer)
    - [Connection Pool & RAII Guard (`RedisConnectionPool`, `Guard`)](#connection-pool--raii-guard-redisconnectionpool-guard)
    - [CRC16 & Redis Cluster Router (`Crc16`, `RedisClusterRouter`)](#crc16--redis-cluster-router-crc16-redisclusterrouter)
    - [Developer Redis API (`RedisClient`)](#developer-redis-api-redisclient)
-   - [HTTP Context Accessor (`ctx.redis`)](#http-context-accessor-ctxredis)
 6. [Smart Distributed Cache & Declarative ORM Caching (`aegon::data::cache` & `aegon::data::orm::sql`)](#6-smart-distributed-cache--declarative-orm-caching-aegondatacache--aegondataormsql)
-   - [Pluggable Cache Backend (`CacheBackend`, `RedisCacheBackend`)](#pluggable-cache-backend-cachebackend-rediscachebackend)
+   - [Pluggable Cache Backends (`CacheBackend`, `RedisCacheBackend`, `InMemoryCacheBackend`)](#pluggable-cache-backend-cachebackend-rediscachebackend)
    - [Declarative `TableDef` Cache Configuration](#declarative-tabledef-cache-configuration)
    - [Invalidation Strategies (`StrictEpoch`, `Partitioned`, `TtlOnly`)](#invalidation-strategies-strictepoch-partitioned-ttlonly)
    - [Normalized Two-Phase Query Pointer Caching (`.cached()`)](#normalized-two-phase-query-pointer-caching-cached)
@@ -172,23 +185,26 @@ Header files: `<aegon/http/Server.hpp>`, `<aegon/http/Router.hpp>`, `<aegon/http
 
 ### Server (`Server`)
 
-Core asynchronous multithreaded web server engine supporting HTTP/1.1, HTTP/2, HTTP/3, TLS, and SQPOLL.
+Core asynchronous multithreaded web server engine supporting HTTP/1.1, HTTP/2, HTTP/3, TLS, SQPOLL, and lifecycle hooks.
 
 | Method | Signature | Description |
 |---|---|---|
 | `set_router()` | `Server& set_router(Router router)` | Sets the root routing table for the server. |
 | `router()` | `Router& router() noexcept` | Accesses the server's internal router for inline route declarations. |
-| `listen()` | `Server& listen(std::string host, uint16_t port)` | Sets the bind address and TCP listening port. |
-| `enable_tls()` | `Server& enable_tls(std::string cert_path, std::string key_path)` | Configures TLS encryption with certificate and private key paths. |
+| `listen()` | `Server& listen(uint16_t port, std::string_view host = "0.0.0.0")` | Sets the TCP/UDP listening port and bind address. |
+| `enable_tls()` | `Server& enable_tls(std::string cert_path = "", std::string key_path = "")` | Configures TLS encryption with certificate/key paths (or self-signed if empty). |
 | `enable_http3()` | `Server& enable_http3(bool enable = true)` | Enables QUIC and HTTP/3 UDP listeners on the server port. |
-| `enable_sqpoll()` | `Server& enable_sqpoll(bool enable = true)` | Enables kernel-thread SQPOLL on all worker io_uring instances. |
-| `ring_entries()` | `Server& ring_entries(uint32_t entries)` | Configures io_uring queue depth (default 4096). |
-| `set_state()` | `template<typename T> Server& set_state(std::shared_ptr<T> state)` | Registers shared application state accessible via `Context::state<T>()`. |
-| `sql_client()` | `Server& sql_client(std::shared_ptr<SqlDatabaseClient> client)` | Attaches a global SQL ORM client instance to the server. |
-| `db.sql` | `SqlAccessor db.sql` | Server-level fluent SQL ORM accessor for background queries. |
-| `run()` | `void run()` | Runs the server synchronously on the main thread. |
+| `enable_sqpoll()` | `Server& enable_sqpoll(bool enable = true, uint32_t idle_ms = 2000, int cpu = -1)` | Enables kernel-thread SQPOLL on all worker io_uring instances. |
+| `provide<T>()` | `template<typename T> Server& provide(std::shared_ptr<T> service)` | Registers a shared service (SQL client, Redis, domain service) in the `ServiceRegistry`. |
+| `provide<T, Args...>()` | `template<typename T, typename... Args> Server& provide(Args&&... args)` | Instantiates and registers a service `T` directly into `ServiceRegistry`. |
+| `service<T>()` | `template<typename T> std::shared_ptr<T> service() const` | Retrieves a registered service `T` from `ServiceRegistry`. |
+| `services()` | `ServiceRegistry& services() noexcept` | Accesses the underlying type-safe `ServiceRegistry` container. |
+| `on_start()` | `Server& on_start(LifecycleHook hook)` | Registers an asynchronous startup hook executed before accepting traffic (ideal for DDL migrations, seeding, cache pre-warming). |
+| `on_stop()` | `Server& on_stop(LifecycleHook hook)` | Registers an asynchronous shutdown hook executed on server termination (ideal for queue draining, flushing). |
+| `spawn_worker()` | `Server& spawn_worker(BackgroundWorker worker)` | Registers a long-running background worker coroutine spawned directly on the server event loop (e.g. stream listeners). |
+| `run()` | `void run()` | Runs the server synchronously on the main thread's event loop. |
 | `run(threads)` | `void run(size_t threads)` | Spawns an `SO_REUSEPORT` thread-per-core event loop cluster. |
-| `stop()` | `void stop()` | Gracefully stops the server and closes all listening sockets. |
+| `stop()` | `void stop()` | Gracefully stops the server, executes `on_stop` hooks, and closes listening sockets. |
 | `port()` | `uint16_t port() const noexcept` | Returns configured listening port. |
 | `host()` | `std::string_view host() const noexcept` | Returns configured listening host. |
 | `is_tls_enabled()` | `bool is_tls_enabled() const noexcept` | Checks if TLS is enabled. |
@@ -197,11 +213,19 @@ Core asynchronous multithreaded web server engine supporting HTTP/1.1, HTTP/2, H
 
 ```cpp
 #include <aegon/http/Server.hpp>
+#include <aegon/data/orm/sql/SqlDatabaseClient.hpp>
 
 int main() {
     aegon::http::Server app;
-    app.listen("0.0.0.0", 8080)
-       .enable_sqpoll(true);
+    app.listen(8080)
+       .enable_sqpoll(true)
+       .on_start([](aegon::http::Server& s) -> aegon::core::Task<void> {
+           auto sql = s.service<aegon::data::orm::sql::SqlDatabaseClient>();
+           if (sql) {
+               co_await sql->sync_schema<User, Product, Order>();
+           }
+           co_return;
+       });
 
     app.router().get("/ping", [](aegon::http::Context& ctx) -> aegon::core::Task<void> {
         ctx.res().text("pong");
@@ -211,6 +235,38 @@ int main() {
     app.run(std::thread::hardware_concurrency());
 }
 ```
+
+---
+
+### Service Registry & Dependency Injection (`ServiceRegistry`)
+
+High-performance, type-indexed service dependency injection container. Allows database clients, Redis pools, cache backends, and domain services to be registered once at server startup and accessed safely inside route handlers and lifecycle hooks without global variables or monolithic context coupling.
+
+```cpp
+// 1. Register dependencies in Server
+server.provide(sql_client)
+      .provide(redis_client)
+      .provide(std::make_shared<CatalogService>(*sql_client));
+
+// 2. Access in route handlers via Context
+app.get("/items/:id", [](aegon::http::Context& ctx) -> aegon::core::Task<void> {
+    auto& catalog = ctx.service<CatalogService>();
+    auto item = co_await catalog.get_by_id(std::stoll(std::string(ctx.req().param("id"))));
+    if (item) {
+        ctx.res().json(*item);
+    } else {
+        ctx.res().status(aegon::http::StatusCode::NotFound).text("Item not found");
+    }
+});
+```
+
+| Method | Signature | Description |
+|---|---|---|
+| `register_service<T>()` | `void register_service(std::shared_ptr<T> service)` | Registers a shared pointer for type `T`. |
+| `has<T>()` | `bool has() const noexcept` | Checks if a service of type `T` is registered. |
+| `get<T>()` | `T* get() const noexcept` | Returns raw pointer to service `T` or `nullptr`. |
+| `get_shared<T>()` | `std::shared_ptr<T> get_shared() const noexcept` | Returns `std::shared_ptr<T>` or `nullptr`. |
+| `require<T>()` | `T& require() const` | Returns reference to service `T`, throwing `std::runtime_error` if missing. |
 
 ---
 
@@ -270,8 +326,10 @@ Per-request transaction context passed to every route handler and middleware.
 | `bind_query<T>()` | `template<typename T> std::optional<T> bind_query()` | Deserializes query parameters into struct `T`. |
 | `bind_path<T>()` | `template<typename T> std::optional<T> bind_path()` | Deserializes route path parameters (e.g. `:id`) into struct `T`. |
 | `send_file()` | `void send_file(std::string path)` | Directs the engine to serve a file via zero-copy `sendfile`/`splice`. |
-| `state<T>()` | `template<typename T> std::shared_ptr<T> state()` | Retrieves typed dependency-injected application state. |
-| `db.sql` | `SqlAccessor db.sql` | Context-scoped SQL accessor with connection reuse. |
+| `service<T>()` | `template<typename T> T& service() const` | Retrieves a reference to service `T` from `ServiceRegistry`, throwing if not found. |
+| `try_service<T>()` | `template<typename T> T* try_service() const noexcept` | Retrieves a pointer to service `T`, or `nullptr` if not registered. |
+| `has_service<T>()` | `template<typename T> bool has_service() const noexcept` | Checks if service of type `T` is registered. |
+| `services()` | `const ServiceRegistry* services() const noexcept` | Direct access to the `ServiceRegistry` container. |
 
 ---
 
@@ -700,24 +758,26 @@ Type-safe conditional query operators for building `WHERE` and `HAVING` clauses.
 
 ---
 
-### Database Client & Accessor (`SqlDatabaseClient`, `SqlAccessor`)
+### Database Client & Schema Migration (`SqlDatabaseClient`, `sync_schema`)
 
-Asynchronous database connectivity handling connection pools, transactions, and entity mapping.
+Asynchronous database connectivity handling connection pools, transactions, entity mapping, and automated schema migrations.
 
 | Method | Signature | Description |
 |---|---|---|
+| `sync_schema<Entities...>()` | `template<typename... Entities> Task<void> sync_schema()` | Auto-generates and applies DDL schema migrations for the specified entities with automatic dialect detection. |
+| `set_cache()` | `void set_cache(std::shared_ptr<CacheBackend> cache) noexcept` | Attaches an L2 cache backend (e.g. `RedisCacheBackend` or `InMemoryCacheBackend`) for declarative ORM caching. |
+| `cache()` | `std::shared_ptr<CacheBackend> cache() const noexcept` | Returns the currently configured cache backend. |
 | `from<T>()` | `SelectBuilder<T> from<T>()` | Spawns a type-safe `SELECT` builder for entity `T`. |
-| `insert<T>()` | `Task<int> insert(const T& entity)` | Inserts entity record into its configured table. |
+| `insert<T>()` | `Task<size_t> insert(const T& entity)` | Inserts entity record into its configured table (auto-syncs cache). |
 | `insert_get_id<T>()` | `Task<int64_t> insert_get_id(const T& entity)` | Inserts record and returns generated auto-increment ID. |
 | `update<T>()` | `UpdateBuilder<T> update<T>()` | Spawns an `UPDATE` builder for entity `T`. |
+| `update_entity<T>()` | `Task<size_t> update_entity(const T& entity)` | Updates existing record using OCC version validation (auto-invalidates cache). |
 | `delete_from<T>()` | `DeleteBuilder<T> delete_from<T>()` | Spawns a `DELETE` builder for entity `T`. |
-| `find_by_id<T>()` | `Task<std::optional<T>> find_by_id(PrimaryKeyValue id)` | Fetches single record matching primary key. |
-| `delete_by_id<T>()` | `Task<bool> delete_by_id(PrimaryKeyValue id)` | Deletes single record matching primary key. |
-| `execute()` | `Task<int> execute(std::string sql, std::vector<Value> params)` | Executes raw SQL mutation (`INSERT`, `UPDATE`, `DELETE`). |
-| `fetch_all<T>()` | `Task<std::vector<T>> fetch_all(std::string sql, std::vector<Value> params)` | Runs raw query and maps rows into struct `T`. |
-| `fetch_one<T>()` | `Task<std::optional<T>> fetch_one(std::string sql, std::vector<Value> params)` | Runs raw query and maps first row into `T`. |
-| `transaction()` | `Task<Transaction> transaction()` | Checks out a dedicated connection and opens a transaction (`BEGIN`). |
-| `paginate<T>()` | `Task<Page<T>> paginate(SelectBuilder<T> builder, size_t page, size_t per_page)` | Executes paginated query. |
+| `find_by_id<T>()` | `Task<std::optional<T>> find_by_id(const ID& id)` | Fetches single record matching primary key (checks cache first on cacheable models). |
+| `delete_by_id<T>()` | `Task<bool> delete_by_id(const ID& id)` | Deletes single record matching primary key (auto-invalidates cache). |
+| `execute()` | `Task<size_t> execute(std::string_view sql, const std::vector<std::string>& params = {})` | Executes raw SQL mutation (`INSERT`, `UPDATE`, `DELETE`). |
+| `fetch_all<T>()` | `Task<std::vector<T>> fetch_all(SelectBuilder<T>& builder)` | Executes query builder and returns vector of mapped entity models. |
+| `transaction()` | `Task<void> transaction(std::function<Task<void>(Transaction&)> fn)` | Opens an ACID transaction and executes the callback with automatic rollback on error. |
 
 ---
 
@@ -808,20 +868,31 @@ const auto ProductTable = aegon::data::orm::sql::TableDef<Product>("products")
     .created_at(&Product::created_at, "created_at");
 
 int main() {
+    auto pool = aegon::data::orm::sql::drivers::create_sqlite_pool(":memory:", 4);
+    auto sql_client = std::make_shared<aegon::data::orm::sql::SqlDatabaseClient>(*pool);
+
     aegon::http::Server server;
-    server.listen("0.0.0.0", 8080)
-          .enable_sqpoll(true);
+    server.listen(8080)
+          .enable_sqpoll(true)
+          .provide(sql_client)
+          .on_start([](aegon::http::Server& s) -> aegon::core::Task<void> {
+              auto sql = s.service<aegon::data::orm::sql::SqlDatabaseClient>();
+              co_await sql->sync_schema<Product>();
+              co_return;
+          });
 
     auto api = server.router().group("/api/v1");
 
     // Paginated product query with zero-copy JSON response
     api.get("/products", [](aegon::http::Context& ctx) -> aegon::core::Task<void> {
-        auto page = co_await ctx.db.sql.from<Product>()
+        auto& sql = ctx.service<aegon::data::orm::sql::SqlDatabaseClient>();
+        auto query = sql.from<Product>()
             .where(col("price") > 10.0)
             .order_by_desc("created_at")
-            .paginate(1, 20);
+            .limit(20);
 
-        ctx.res().json(page);
+        auto products = co_await sql.fetch_all(query);
+        ctx.res().json(products);
     });
 
     // Validated create route with UUIDv7 generation
@@ -842,7 +913,8 @@ int main() {
         }
 
         product->id = UUIDGenerator::v7();
-        co_await ctx.db.sql.insert(*product);
+        auto& sql = ctx.service<aegon::data::orm::sql::SqlDatabaseClient>();
+        co_await sql.insert(*product);
 
         ctx.res().status(aegon::http::StatusCode::Created).json(*product);
     });
@@ -987,15 +1059,29 @@ while (true) {
 }
 ```
 
-### HTTP Context Accessor (`ctx.redis`)
+### Multi-Core Thread Affinity (`PerCoreRedisClient`)
 
-Available directly on every route handler:
+Because Linux `io_uring` instances are thread-bound, sharing a single `RedisClient` across multiple worker threads introduces lock contention and cross-ring synchronization overhead. `PerCoreRedisClient` provides a thread-affinity Redis container that lazily instantiates and binds a private `RedisClient` to the calling worker's `EventLoop::current()` ring without cross-thread mutexes.
 
 ```cpp
+// 1. Initialize once in main() before worker threads spawn
+auto redis = std::make_shared<aegon::data::redis::PerCoreRedisClient>(config, /*pool_size=*/4);
+
+// 2. Register in server ServiceRegistry
+server.provide(redis);
+
+// 3. Access inside route handlers via Context
 app.get("/cache-stat", [](aegon::http::Context& ctx) -> aegon::core::Task<void> {
-    auto visits = co_await ctx.redis.incr("analytics:page_visits");
+    auto& redis = ctx.service<aegon::data::redis::PerCoreRedisClient>();
+    auto visits = co_await redis->incr("analytics:page_visits");
     ctx.res().text("Total visits: " + std::to_string(visits));
 });
+```
+
+`PerCoreRedisClient` also exposes `.provider()` for transparent attachment to [RedisCacheBackend](#pluggable-cache-backends-cachebackend-rediscachebackend-inmemorycachebackend):
+```cpp
+auto sql_cache = std::make_shared<aegon::data::cache::RedisCacheBackend>(redis->provider());
+sql_client->set_cache(sql_cache);
 ```
 
 ---
@@ -1006,9 +1092,9 @@ Header files: `<aegon/data/cache/CacheBackend.hpp>`, `<aegon/data/cache/RedisCac
 
 Aegon features an enterprise-grade, Spring Data-inspired declarative caching engine built into the compile-time SQL ORM.
 
-### Pluggable Cache Backend (`CacheBackend`, `RedisCacheBackend`)
+### Pluggable Cache Backends (`CacheBackend`, `RedisCacheBackend`, `InMemoryCacheBackend`)
 
-Abstract distributed caching contract allowing seamless substitution between Redis, Memcached, or custom clusters.
+Abstract distributed caching contract allowing seamless substitution between in-memory caches, standalone Redis, Redis Sentinel, or Redis Cluster.
 
 ```cpp
 class CacheBackend {
@@ -1023,9 +1109,21 @@ public:
 };
 ```
 
-Configure on server startup:
+#### 1. Distributed L2 Cache with Redis (`RedisCacheBackend`)
+Supports either direct shared `RedisClient` or zero-contention thread-affinity providers via `PerCoreRedisClient`:
 ```cpp
-server.cache_backend(std::make_shared<RedisCacheBackend>(redis_client, "app_prod:"));
+// Option A: With PerCoreRedisClient for multi-threaded thread-affinity
+auto redis = std::make_shared<aegon::data::redis::PerCoreRedisClient>(config, 4);
+sql_client->set_cache(std::make_shared<aegon::data::cache::RedisCacheBackend>(redis->provider(), "app:"));
+
+// Option B: With direct RedisClient instance
+sql_client->set_cache(std::make_shared<aegon::data::cache::RedisCacheBackend>(redis_client, "app:"));
+```
+
+#### 2. Local In-Memory Cache (`InMemoryCacheBackend`)
+Thread-safe, TTL-aware in-memory cache backend for standalone services or testing without external Redis dependencies:
+```cpp
+sql_client->set_cache(std::make_shared<aegon::data::cache::InMemoryCacheBackend>());
 ```
 
 ### Declarative `TableDef` Cache Configuration
@@ -1088,7 +1186,8 @@ struct User {
 To avoid cache bloat and stale data across multiple queries returning identical rows, queries cache **lists of primary key IDs**, not duplicated entity blobs.
 
 ```cpp
-auto active_users = co_await ctx.db.sql.from<User>()
+auto& sql = ctx.service<aegon::data::orm::sql::SqlDatabaseClient>();
+auto active_users = co_await sql.from<User>()
     .where(&User::tenant_id, Op::Eq, 100)
     .order_by_desc(&User::id)
     .cached(std::chrono::seconds(600)) // Mark query as cacheable
@@ -1103,7 +1202,7 @@ auto active_users = co_await ctx.db.sql.from<User>()
 
 ### Automated Mutation Invalidation (`insert`, `update_entity`, `delete_by_id`)
 
-All mutations executed through `SqlDatabaseClient` / `ctx.db.sql` automatically orchestrate cache synchronization:
+All mutations executed through `SqlDatabaseClient` automatically orchestrate cache synchronization:
 
 - **`co_await client.insert(entity)`**:
   - Sets `<table_name>:id:<new_id>` in cache.
