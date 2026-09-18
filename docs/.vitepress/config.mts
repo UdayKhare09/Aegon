@@ -8,7 +8,7 @@ export default defineConfig({
   base: process.env.BASE_PATH || '/',
 
   themeConfig: {
-    siteTitle: '⚡ Aegon',
+    siteTitle: 'Aegon',
     logo: '/logo.svg',
 
     nav: [
