@@ -41,6 +41,9 @@ public:
     // Pin this event loop thread to a specific CPU core
     static void pin_to_core(int core_id);
 
+    // Get current thread's active EventLoop (if running)
+    static EventLoop* current() noexcept;
+
     // Spawn a root coroutine Task onto the event loop
     void spawn(Task<void> task);
 

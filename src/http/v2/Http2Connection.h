@@ -9,11 +9,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
-#include <vector>
-
-namespace aegon::data::orm::sql {
-class SqlDatabaseClient;
-}
+#include "http/ServiceRegistry.h"
 
 namespace aegon::http::v2 {
 
@@ -35,8 +31,7 @@ using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
 class Http2Connection {
 public:
     Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
-                    void* user_state = nullptr, OutputSender sender = nullptr,
-                    data::orm::sql::SqlDatabaseClient* sql_client = nullptr);
+                    const ServiceRegistry* services = nullptr, OutputSender sender = nullptr);
     ~Http2Connection();
 
     Http2Connection(const Http2Connection&) = delete;
@@ -86,8 +81,7 @@ private:
     core::EventLoop& loop_;
     int client_fd_;
     const Router& router_;
-    void* user_state_{nullptr};
-    data::orm::sql::SqlDatabaseClient* sql_client_{nullptr};
+    const ServiceRegistry* services_{nullptr};
 
     nghttp2_session* session_{nullptr};
     std::unordered_map<int32_t, std::unique_ptr<Http2Stream>> streams_;

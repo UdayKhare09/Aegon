@@ -400,18 +400,22 @@ Task<void> test_postgres_live_pipeline() {
         std::cout << "  -> PASS: Complex multi-tier foreign key cascading verified (Tenant -> UserAccounts -> Orders).\n";
     }
 
-    std::cout << "[Test 6] Testing HTTP Context Integration (ctx.db.sql)...\n";
+    std::cout << "[Test 6] Testing HTTP Context Integration (ctx.service<SqlDatabaseClient>())...\n";
     {
+        ServiceRegistry services;
+        auto db_ptr = std::shared_ptr<SqlDatabaseClient>(&db, [](SqlDatabaseClient*){});
+        services.register_service<SqlDatabaseClient>(db_ptr);
+
         Request req;
         Response res;
-        Context ctx(req, res, nullptr, &db);
+        Context ctx(req, res, &services);
 
-        // Direct query via ctx.db.sql
-        auto tenant_count = co_await ctx.db.sql.fetch_all(ctx.db.sql.from<Tenant>());
+        // Direct query via ctx.service<SqlDatabaseClient>()
+        auto tenant_count = co_await ctx.service<SqlDatabaseClient>().fetch_all(ctx.service<SqlDatabaseClient>().from<Tenant>());
         TEST_CHECK(tenant_count.empty());
 
-        // Re-insert via ctx.db.sql within a transaction
-        co_await ctx.db.sql.transaction([&](Transaction& tx) -> Task<void> {
+        // Re-insert via ctx.service<SqlDatabaseClient>() within a transaction
+        co_await ctx.service<SqlDatabaseClient>().transaction([&](Transaction& tx) -> Task<void> {
             Tenant t2{
                 .id = UUIDGenerator::v4(),
                 .name = "HTTP Context Tenant",
@@ -423,11 +427,11 @@ Task<void> test_postgres_live_pipeline() {
             co_await tx.insert(t2);
         });
 
-        auto tenants_after = co_await ctx.db.sql.fetch_all(ctx.db.sql.from<Tenant>());
+        auto tenants_after = co_await ctx.service<SqlDatabaseClient>().fetch_all(ctx.service<SqlDatabaseClient>().from<Tenant>());
         TEST_CHECK(tenants_after.size() == 1);
         TEST_CHECK(tenants_after[0].name == "HTTP Context Tenant");
 
-        std::cout << "  -> PASS: ctx.db.sql seamlessly operated live transactions on Postgres 17.\n";
+        std::cout << "  -> PASS: ctx.service<SqlDatabaseClient>() seamlessly operated live transactions on Postgres 17.\n";
     }
 
     std::cout << "\n=======================================================\n";

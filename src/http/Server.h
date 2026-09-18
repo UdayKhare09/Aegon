@@ -1,11 +1,11 @@
 #pragma once
 
 #include "http/Router.h"
+#include "http/ServiceRegistry.h"
 #include "http/tls/TlsContext.h"
 #include "http/v3/Http3Server.h"
 #include "core/EventLoop.h"
 #include "core/Task.h"
-#include "data/orm/sql/SqlConfig.h"
 #include <string>
 #include <string_view>
 #include <memory>
@@ -13,35 +13,14 @@
 #include <thread>
 #include <atomic>
 
-namespace aegon::data::orm::sql {
-class SqlDatabaseClient;
-class PerCoreConnectionPool;
-}
-
 namespace aegon::http {
 
 namespace v3 {
 class Http3Server;
 }
 
-class Server;
-
-/**
- * @brief Fluent multi-database server configuration namespace (e.g. server.db.sql({...})).
- */
-struct ServerDatabaseConfig {
-    Server& server;
-    explicit ServerDatabaseConfig(Server& s) : server(s) {}
-
-    Server& sql(const data::orm::sql::SqlConfig& config);
-    Server& sql(data::orm::sql::SqlDatabaseClient* client);
-};
-
 class Server {
 public:
-    // Multi-database configuration namespace
-    ServerDatabaseConfig db{*this};
-
     Server();
     explicit Server(Router router);
     ~Server();
@@ -62,11 +41,34 @@ public:
     [[nodiscard]] const Router& router() const noexcept { return router_; }
     [[nodiscard]] Router& router() noexcept { return router_; }
 
-    // Dependency injection / shared application state
-    Server& set_state(void* state) noexcept {
-        user_state_ = state;
+    /**
+     * @brief Registers a shared service (database client, redis, or custom domain service) in the ServiceRegistry.
+     */
+    template <typename T>
+    Server& provide(std::shared_ptr<T> service) {
+        services_->register_service<T>(std::move(service));
         return *this;
     }
+
+    /**
+     * @brief Instantiates and registers a service of type T in the ServiceRegistry.
+     */
+    template <typename T, typename... Args>
+    Server& provide(Args&&... args) {
+        services_->register_service<T>(std::make_shared<T>(std::forward<Args>(args)...));
+        return *this;
+    }
+
+    /**
+     * @brief Backward-compatible alias to register typed application state in ServiceRegistry.
+     */
+    template <typename T>
+    Server& set_state(std::shared_ptr<T> state) {
+        return provide<T>(std::move(state));
+    }
+
+    [[nodiscard]] ServiceRegistry& services() noexcept { return *services_; }
+    [[nodiscard]] const ServiceRegistry& services() const noexcept { return *services_; }
 
     // Enable TLS (HTTPS) with ALPN (h2 and http/1.1)
     Server& enable_tls(const std::string& cert_file = "", const std::string& key_file = "");
@@ -111,12 +113,6 @@ public:
     [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
     [[nodiscard]] bool is_http3_enabled() const noexcept { return http3_enabled_; }
     [[nodiscard]] bool is_sqpoll_enabled() const noexcept { return sqpoll_enabled_; }
-    [[nodiscard]] aegon::data::orm::sql::SqlDatabaseClient* sql_client() const noexcept { return sql_client_; }
-    Server& redis_client(aegon::data::redis::RedisClient* client) noexcept {
-        redis_client_ = client;
-        return *this;
-    }
-    [[nodiscard]] aegon::data::redis::RedisClient* redis_client() const noexcept { return redis_client_; }
 
 private:
     core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
@@ -130,7 +126,7 @@ private:
     Router router_;
     std::string host_{"0.0.0.0"};
     uint16_t port_{8080};
-    void* user_state_{nullptr};
+    std::shared_ptr<ServiceRegistry> services_{std::make_shared<ServiceRegistry>()};
     std::atomic<bool> running_{false};
     std::vector<std::thread> workers_;
 
@@ -143,14 +139,6 @@ private:
     bool http3_enabled_{true}; // Default to enabled when TLS is used
     std::unique_ptr<tls::TlsContext> tls_ctx_;
     std::unique_ptr<v3::Http3Server> h3_server_;
-
-    // SQL Connection Pool and Client
-    std::unique_ptr<data::orm::sql::PerCoreConnectionPool> sql_pool_;
-    std::unique_ptr<data::orm::sql::SqlDatabaseClient> owned_sql_client_;
-    aegon::data::orm::sql::SqlDatabaseClient* sql_client_{nullptr};
-    aegon::data::redis::RedisClient* redis_client_{nullptr};
-
-    friend struct ServerDatabaseConfig;
 };
 
 } // namespace aegon::http

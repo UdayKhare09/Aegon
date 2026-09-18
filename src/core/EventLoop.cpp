@@ -6,6 +6,12 @@
 
 namespace aegon::core {
 
+thread_local EventLoop* t_current_loop{nullptr};
+
+EventLoop* EventLoop::current() noexcept {
+    return t_current_loop;
+}
+
 EventLoop::EventLoop(uint32_t ring_entries, uint16_t pbuf_entries, size_t buffer_size)
     : ring_(ring_entries),
       buffer_pool_(ring_.raw_ring(), DEFAULT_BGID, pbuf_entries, buffer_size) {}
@@ -36,6 +42,7 @@ void EventLoop::stop() noexcept {
 }
 
 void EventLoop::run() {
+    t_current_loop = this;
     running_ = true;
 
     while (running_) {

@@ -153,7 +153,7 @@ Task<void> test_transaction_rollback() {
 // Test 3: Multi-Database Context Namespace (`ctx.db.sql`)
 // =========================================================================
 Task<void> test_context_db_sql_namespace() {
-    std::cout << "[Test 3] Testing Context multi-database namespace (ctx.db.sql)...\n";
+    std::cout << "[Test 3] Testing Context ServiceRegistry integration (ctx.service<SqlDatabaseClient>())...\n";
 
     MockConnection* mock_ptr = nullptr;
     PerCoreConnectionPool pool([&]() -> std::unique_ptr<Connection> {
@@ -162,13 +162,14 @@ Task<void> test_context_db_sql_namespace() {
         return conn;
     });
 
-    SqlDatabaseClient db(pool);
+    ServiceRegistry services;
+    services.register_service<SqlDatabaseClient>(std::make_shared<SqlDatabaseClient>(pool));
 
     Request req;
     Response res;
-    Context ctx(req, res, nullptr, &db);
+    Context ctx(req, res, &services);
 
-    TEST_CHECK(ctx.db.sql.is_configured());
+    TEST_CHECK(ctx.has_service<SqlDatabaseClient>());
 
     User user{
         .id = UUID::from_string("550e8400-e29b-41d4-a716-446655440000").value(),
@@ -177,8 +178,7 @@ Task<void> test_context_db_sql_namespace() {
         .balance = Decimal128::from_string("300.0000").value()
     };
 
-    // Option 4 invocation directly via ctx.db.sql:
-    co_await ctx.db.sql.transaction([&](Transaction& tx) -> Task<void> {
+    co_await ctx.service<SqlDatabaseClient>().transaction([&](Transaction& tx) -> Task<void> {
         co_await tx.insert(user);
     });
 
@@ -189,17 +189,17 @@ Task<void> test_context_db_sql_namespace() {
     Request req2;
     Response res2;
     Context ctx_no_db(req2, res2);
-    TEST_CHECK(!ctx_no_db.db.sql.is_configured());
+    TEST_CHECK(!ctx_no_db.has_service<SqlDatabaseClient>());
 
     bool threw_unconfigured = false;
     try {
-        ctx_no_db.db.sql.from<User>();
+        (void)ctx_no_db.service<SqlDatabaseClient>().from<User>();
     } catch (const std::runtime_error& e) {
         threw_unconfigured = true;
     }
     TEST_CHECK(threw_unconfigured);
 
-    std::cout << "  -> PASS: ctx.db.sql namespace works seamlessly in Context.\n";
+    std::cout << "  -> PASS: ctx.service<SqlDatabaseClient>() works seamlessly in Context.\n";
 }
 
 // =========================================================================

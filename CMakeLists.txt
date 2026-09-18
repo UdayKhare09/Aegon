@@ -6,6 +6,7 @@ enable_testing()
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 # Enable aggressive optimization and Zen 4 / modern x86 instruction sets
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -104,8 +105,6 @@ target_include_directories(aegon_http PUBLIC
 
 target_link_libraries(aegon_http PUBLIC
     aegon_core
-    aegon_uuid
-    aegon_redis
     glaze::glaze
     nghttp2
     ngtcp2_crypto_ossl
@@ -113,8 +112,6 @@ target_link_libraries(aegon_http PUBLIC
     nghttp3
     ssl
     crypto
-    sqlite3
-    pq
 )
 
 # Test and Benchmark executables
@@ -236,7 +233,7 @@ target_link_libraries(test_live_redis_topologies PRIVATE aegon_redis aegon_core)
 add_executable(test_live_postgres_orm_cache
     tests/test_live_postgres_orm_cache.cpp
 )
-target_link_libraries(test_live_postgres_orm_cache PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_live_postgres_orm_cache PRIVATE aegon_http aegon_redis aegon_core aegon_uuid sqlite3 pq)
 
 add_executable(test_redis_advanced
     tests/test_redis_advanced.cpp
@@ -269,11 +266,5 @@ add_test(NAME live_postgres_orm_cache COMMAND test_live_postgres_orm_cache)
 add_test(NAME redis_advanced COMMAND test_redis_advanced)
 add_test(NAME orm_advanced COMMAND test_orm_advanced)
 
-
-
-
-
-
-
-
-
+# Samples
+add_subdirectory(samples/adv)
