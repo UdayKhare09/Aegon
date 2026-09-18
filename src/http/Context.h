@@ -137,7 +137,7 @@ struct DatabaseContext {
  * @brief Zero-overhead compile-time Context passed to all route handlers.
  *
  * Provides direct access to inbound request data, response builder, route parameters,
- * multi-database client (ctx.db.sql), Redis client (ctx.redis), SIMD UUID extraction, and dependency injection.
+ * multi-database client (ctx.db.sql), Redis client (ctx.redis), and dependency injection.
  */
 class Context {
 private:

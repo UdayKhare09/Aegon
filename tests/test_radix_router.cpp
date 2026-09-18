@@ -16,6 +16,7 @@
 
 using namespace aegon;
 using namespace aegon::http;
+using aegon::data::UUID;
 
 inline void invoke_handler(const Handler& handler, Context& ctx) {
     auto task = handler(ctx);
@@ -161,7 +162,9 @@ void test_radix_tree_parameters() {
 
         Response resp;
         Context ctx(req, resp);
-        auto extracted_uuid = ctx.req().param_uuid("id");
+        auto id_str = ctx.req().param("id");
+        TEST_CHECK(id_str.has_value());
+        auto extracted_uuid = UUID::from_string(*id_str);
         TEST_CHECK(extracted_uuid.has_value());
         TEST_CHECK(*extracted_uuid == test_uuid);
     }

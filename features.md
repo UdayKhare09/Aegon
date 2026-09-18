@@ -317,7 +317,6 @@ Fluent response builder for headers, payloads, JSON, files, and chunked streamin
 | `has_file()` | `bool has_file() const noexcept` | Returns true if a static file was scheduled for streaming. |
 | `file_path()` | `std::string_view file_path() const noexcept` | Returns configured static file path. |
 | `file_size()` | `size_t file_size() const noexcept` | Returns size of scheduled static file in bytes. |
-| `uuid()` | `Response& uuid(const aegon::data::uuid::UUID& id)` | Sets UUID string payload and `Content-Type: text/plain`. |
 | `chunked()` | `Response& chunked(bool enable = true)` | Enables HTTP/1.1 chunked transfer encoding (`Transfer-Encoding: chunked`). |
 | `is_chunked()` | `bool is_chunked() const noexcept` | Returns true if chunked encoding is active. |
 | `serialize_http1()`| `std::string serialize_http1() const` | Serializes complete HTTP/1.1 status line, headers, and body. |

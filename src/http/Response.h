@@ -2,7 +2,6 @@
 
 #include "http/Protocol.h"
 #include "http/HeaderMap.h"
-#include "data/uuid/UUID.h"
 #include <glaze/glaze.hpp>
 #include <string>
 #include <string_view>
@@ -115,12 +114,6 @@ public:
     [[nodiscard]] const std::string& file_path() const noexcept { return file_path_; }
     [[nodiscard]] size_t file_size() const noexcept { return file_size_; }
 
-    Response& uuid(const aegon::data::UUID& id) {
-        struct UuidPayload {
-            aegon::data::UUID uuid;
-        };
-        return json(UuidPayload{id});
-    }
 
     Response& chunked() {
         is_chunked_ = true;

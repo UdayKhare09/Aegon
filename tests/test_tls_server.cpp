@@ -24,17 +24,22 @@ int main() {
     });
 
     router.get("/users/:id", [](Context& ctx) {
-        auto id = ctx.req().param_uuid("id");
+        auto id_str = ctx.req().param("id");
+        if (!id_str) {
+            ctx.res().status(StatusCode::BadRequest).text("Invalid UUID parameter");
+            return;
+        }
+        auto id = UUID::from_string(*id_str);
         if (!id) {
             ctx.res().status(StatusCode::BadRequest).text("Invalid UUID parameter");
             return;
         }
-        ctx.res().uuid(*id);
+        ctx.res().json(R"({"uuid":")" + std::string(*id_str) + R"("})");
     });
 
     router.post("/users", [](Context& ctx) {
         UUID new_id = UUIDGenerator::v7();
-        ctx.res().status(StatusCode::Created).uuid(new_id);
+        ctx.res().status(StatusCode::Created).json(R"({"uuid":")" + new_id.to_string() + R"("})");
     });
 
     Server server(std::move(router));

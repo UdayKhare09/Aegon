@@ -225,7 +225,12 @@ void test_live_http3_server() {
     });
 
     router.get("/users/:id", [](Context& ctx) {
-        auto user_id_opt = ctx.req().param_uuid("id");
+        auto id_str = ctx.req().param("id");
+        if (!id_str) {
+            ctx.res().status(StatusCode::BadRequest).text("Invalid UUID");
+            return;
+        }
+        auto user_id_opt = aegon::data::UUID::from_string(*id_str);
         if (!user_id_opt) {
             ctx.res().status(StatusCode::BadRequest).text("Invalid UUID");
             return;

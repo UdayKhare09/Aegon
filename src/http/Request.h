@@ -3,7 +3,6 @@
 #include "http/Protocol.h"
 #include "http/HeaderMap.h"
 #include "http/Response.h"
-#include "data/uuid/UUID.h"
 #include "data/validation/Validator.h"
 #include <glaze/glaze.hpp>
 #include <string_view>
@@ -64,14 +63,6 @@ public:
         return std::nullopt;
     }
 
-    /**
-     * @brief Zero-copy parse route parameter directly into a SIMD-validated 128-bit UUID.
-     */
-    [[nodiscard]] std::optional<aegon::data::UUID> param_uuid(std::string_view key) const noexcept {
-        auto val = param(key);
-        if (!val.has_value()) return std::nullopt;
-        return aegon::data::UUID::from_string(*val);
-    }
 
     /**
      * @brief Parse query parameter from query string (e.g. ?foo=bar&baz=123)

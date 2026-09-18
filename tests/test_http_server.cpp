@@ -20,10 +20,12 @@ void test_http_parser_and_router() {
 
     router.get("/users/:id", [&](Context& ctx) -> aegon::core::Task<void> {
         reached_user_route = true;
-        auto id = ctx.req().param_uuid("id");
+        auto id_str = ctx.req().param("id");
+        assert(id_str.has_value());
+        auto id = UUID::from_string(*id_str);
         assert(id.has_value());
         captured_uuid = *id;
-        ctx.res().uuid(*id);
+        ctx.res().json(R"({"uuid":")" + std::string(*id_str) + R"("})");
         co_return;
     });
 
@@ -74,17 +76,22 @@ void test_live_server_loopback() {
     });
 
     router.get("/users/:id", [](Context& ctx) {
-        auto id = ctx.req().param_uuid("id");
+        auto id_str = ctx.req().param("id");
+        if (!id_str) {
+            ctx.res().status(StatusCode::BadRequest).text("Invalid UUID parameter");
+            return;
+        }
+        auto id = UUID::from_string(*id_str);
         if (!id) {
             ctx.res().status(StatusCode::BadRequest).text("Invalid UUID parameter");
             return;
         }
-        ctx.res().uuid(*id);
+        ctx.res().json(R"({"uuid":")" + std::string(*id_str) + R"("})");
     });
 
     router.post("/users", [](Context& ctx) {
         UUID new_user_id = UUIDGenerator::v7();
-        ctx.res().status(StatusCode::Created).uuid(new_user_id);
+        ctx.res().status(StatusCode::Created).json(R"({"uuid":")" + new_user_id.to_string() + R"("})");
     });
 
     router.post("/echo", [](Context& ctx) {

@@ -184,6 +184,37 @@ public:
     }
 
     template <typename Entity>
+    core::Task<int64_t> insert_get_id(const Entity& entity) {
+        auto guard = primary_pool_.acquire();
+        Transaction tx(*guard);
+        int64_t id = co_await tx.insert_get_id(entity);
+
+        auto schema = Entity::schema();
+        if (cache_ && schema.is_cached()) {
+            if (schema.cache_config().invalidation == InvalidationMode::Partitioned && schema.cache_config().partition_extractor) {
+                std::string part_key = schema.table_name() + ":part:" + schema.cache_config().partition_extractor(entity) + ":epoch";
+                co_await cache_->incr(part_key);
+            } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
+                co_await cache_->incr(schema.table_name() + ":epoch");
+            } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
+                auto vals = schema.extract_values(entity, false);
+                for (const auto& [col, val] : vals) {
+                    if (!val.empty()) {
+                        co_await cache_->incr(schema.table_name() + ":pred:" + col + ":" + val + ":epoch");
+                    }
+                }
+            }
+
+            if (schema.cache_config().by_id) {
+                std::string id_key = schema.table_name() + ":id:" + std::to_string(id);
+                co_await cache_->set(id_key, schema.serialize_entity_json(entity), schema.cache_config().ttl);
+            }
+        }
+
+        co_return id;
+    }
+
+    template <typename Entity>
     core::Task<void> insert_all(std::span<Entity> entities) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);

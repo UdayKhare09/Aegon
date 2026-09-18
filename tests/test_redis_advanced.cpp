@@ -245,9 +245,9 @@ core::Task<void> test_cluster_pipeline(core::IoUring& ring) {
     assert(results.size() == 6);
 
     // SET results
-    assert(results[0].is_string() || results[0].is_simple_string());
-    assert(results[1].is_string() || results[1].is_simple_string());
-    assert(results[2].is_string() || results[2].is_simple_string());
+    assert(results[0].is_string());
+    assert(results[1].is_string());
+    assert(results[2].is_string());
 
     // GET results in preserved order
     assert(results[3].as_string() == "Alice");
