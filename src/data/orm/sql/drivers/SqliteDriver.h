@@ -17,9 +17,15 @@ class SqliteConnection : public Connection {
 
 public:
     explicit SqliteConnection(const std::string& path = ":memory:") {
-        int rc = sqlite3_open_v2(path.c_str(), &db_,
-                                 SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX,
-                                 nullptr);
+        std::string open_path = path;
+        int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX;
+        if (open_path == ":memory:" || open_path.starts_with("file:")) {
+            flags |= SQLITE_OPEN_URI;
+            if (open_path == ":memory:") {
+                open_path = "file:aegon_memdb?mode=memory&cache=shared";
+            }
+        }
+        int rc = sqlite3_open_v2(open_path.c_str(), &db_, flags, nullptr);
         if (rc != SQLITE_OK || !db_) {
             std::string err = db_ ? sqlite3_errmsg(db_) : "Failed to open SQLite database";
             if (db_) sqlite3_close_v2(db_);

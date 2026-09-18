@@ -13,8 +13,7 @@ namespace aegon::sample {
 
 class CatalogService {
 public:
-    CatalogService(data::orm::sql::SqlDatabaseClient& db,
-                   std::shared_ptr<data::redis::RedisClient> redis = nullptr);
+    explicit CatalogService(data::orm::sql::SqlDatabaseClient& db);
 
     core::Task<Product> create_product(CreateProductRequest req);
     core::Task<std::optional<Product>> get_product_by_id(int64_t id);
@@ -23,7 +22,6 @@ public:
 
 private:
     data::orm::sql::SqlDatabaseClient& db_;
-    std::shared_ptr<data::redis::RedisClient> redis_;
 };
 
 } // namespace aegon::sample

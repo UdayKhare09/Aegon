@@ -1,18 +1,17 @@
 #include "services/LeaderboardService.h"
-#include "services/RedisProvider.h"
 #include "models/Product.h"
 #include <iostream>
 
 namespace aegon::sample {
 
 LeaderboardService::LeaderboardService(data::orm::sql::SqlDatabaseClient& db,
-                                       std::shared_ptr<data::redis::RedisClient> redis)
+                                       std::shared_ptr<data::redis::PerCoreRedisClient> redis)
     : db_(db), redis_(std::move(redis)) {}
 
 core::Task<LeaderboardResponse> LeaderboardService::get_top_products(size_t limit) {
     LeaderboardResponse resp;
 
-    auto* redis = redis_ ? redis_.get() : get_current_redis_client();
+    auto* redis = redis_ ? redis_->current() : nullptr;
     if (!redis) {
         co_return resp;
     }

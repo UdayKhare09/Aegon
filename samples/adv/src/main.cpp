@@ -13,10 +13,11 @@
 #include "handlers/StreamHandler.h"
 
 #include "http/Server.h"
+#include "data/cache/RedisCacheBackend.h"
+#include "data/redis/PerCoreRedisClient.h"
 #include "data/orm/sql/drivers/SqliteDriver.h"
 #include "data/orm/sql/drivers/PostgresDriver.h"
 #include "data/orm/sql/SqlDatabaseClient.h"
-#include "data/redis/RedisClient.h"
 #include "core/EventLoop.h"
 
 #include <iostream>
@@ -40,41 +41,21 @@ int main(int argc, char* argv[]) {
     auto pool = data::orm::sql::drivers::create_sqlite_pool(":memory:", 4);
     auto sql_client = std::make_shared<data::orm::sql::SqlDatabaseClient>(*pool);
 
-    // Bootstrap Schema DDL
-    {
-        core::EventLoop init_loop;
-        init_loop.spawn([&]() -> core::Task<void> {
-            auto ddl_user = data::orm::sql::generate_ddl<User>(data::orm::sql::DatabaseDialect::SQLite);
-            auto ddl_profile = data::orm::sql::generate_ddl<UserProfile>(data::orm::sql::DatabaseDialect::SQLite);
-            auto ddl_prod = data::orm::sql::generate_ddl<Product>(data::orm::sql::DatabaseDialect::SQLite);
-            auto ddl_order = data::orm::sql::generate_ddl<Order>(data::orm::sql::DatabaseDialect::SQLite);
+    // 2. Initialize Per-Core Redis Client & attach as declarative L2 cache for SQL ORM
+    auto redis_client = std::make_shared<data::redis::PerCoreRedisClient>(data::redis::RedisNodeConfig{
+        .host = "127.0.0.1",
+        .port = 6379,
+        .password = "redis_secret"
+    }, 4);
+    auto sql_cache = std::make_shared<data::cache::RedisCacheBackend>(redis_client->provider());
+    sql_client->set_cache(sql_cache);
 
-            co_await sql_client->execute(ddl_user);
-            co_await sql_client->execute(ddl_profile);
-            co_await sql_client->execute(ddl_prod);
-            co_await sql_client->execute(ddl_order);
-
-            // Seed initial admin user and sample products
-            User u1{.id = 1, .username = "alice", .email = "alice@aegon.dev", .balance = *data::types::Decimal128::from_string("1000.00")};
-            co_await sql_client->insert(u1);
-
-            Product p1{.id = 1, .sku = "VAL-SWORD", .name = "Valyrian Steel Sword", .price = *data::types::Decimal128::from_string("299.99"), .stock = 15, .version = 1};
-            Product p2{.id = 2, .sku = "DRG-HELM", .name = "Dragon Scale Helmet", .price = *data::types::Decimal128::from_string("149.50"), .stock = 50, .version = 1};
-            co_await sql_client->insert(p1);
-            co_await sql_client->insert(p2);
-
-            std::cout << "[DB Init] Schema created and initial catalog seeded.\n";
-            co_return;
-        }());
-        init_loop.run();
-    }
-
-    // 2. Domain Services (leveraging ServiceRegistry and thread-local RedisProvider)
+    // 3. Domain Services (injected with SQL client and PerCoreRedisClient)
     auto catalog_service = std::make_shared<CatalogService>(*sql_client);
-    auto order_service = std::make_shared<OrderService>(*sql_client);
-    auto leaderboard_service = std::make_shared<LeaderboardService>(*sql_client);
+    auto order_service = std::make_shared<OrderService>(*sql_client, redis_client);
+    auto leaderboard_service = std::make_shared<LeaderboardService>(*sql_client, redis_client);
 
-    // 3. Configure HTTP Router
+    // 4. Configure HTTP Router
     http::Router router;
 
     // Health Check
@@ -102,12 +83,30 @@ int main(int argc, char* argv[]) {
     // SSE Live Stream
     router.get("/api/v1/events/live", StreamHandler::live_events);
 
-    // 4. Initialize Server & Register Services with ServiceRegistry
+    // 5. Initialize Server & Register Services with ServiceRegistry
     http::Server server;
     server.provide(sql_client)
+          .provide(redis_client)
           .provide(catalog_service)
           .provide(order_service)
           .provide(leaderboard_service)
+          .on_start([](http::Server& s) -> core::Task<void> {
+              auto sql = s.service<data::orm::sql::SqlDatabaseClient>();
+
+              // Asynchronous schema migration & seed data before accepting traffic
+              co_await sql->sync_schema<User, UserProfile, Product, Order>();
+
+              User u1{.id = 1, .username = "alice", .email = "alice@aegon.dev", .balance = *data::types::Decimal128::from_string("1000.00")};
+              co_await sql->insert(u1);
+
+              Product p1{.id = 1, .sku = "VAL-SWORD", .name = "Valyrian Steel Sword", .price = *data::types::Decimal128::from_string("299.99"), .stock = 15, .version = 1};
+              Product p2{.id = 2, .sku = "DRG-HELM", .name = "Dragon Scale Helmet", .price = *data::types::Decimal128::from_string("149.50"), .stock = 50, .version = 1};
+              co_await sql->insert(p1);
+              co_await sql->insert(p2);
+
+              std::cout << "[Server:on_start] Schema migrated and initial catalog seeded.\n";
+              co_return;
+          })
           .set_router(std::move(router))
           .listen(config.port, config.host);
 

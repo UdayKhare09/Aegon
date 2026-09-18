@@ -27,7 +27,12 @@ struct Product {
             .column(&Product::price, "price")
             .column(&Product::stock, "stock")
             .version(&Product::version, "version")
-            .has_many(&Product::orders, &Order::product_id);
+            .has_many(&Product::orders, &Order::product_id)
+            .cache({
+                .ttl = std::chrono::seconds(120),
+                .by_id = true,
+                .invalidation = data::orm::sql::InvalidationMode::StrictEpoch
+            });
     }
 };
 

@@ -7,6 +7,7 @@
 #include "UpdateBuilder.h"
 #include "DeleteBuilder.h"
 #include "OptimisticLockException.h"
+#include "SchemaGenerator.h"
 #include "core/Task.h"
 #include <concepts>
 #include <functional>
@@ -639,6 +640,19 @@ public:
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
         co_return co_await tx.execute(sql, params);
+    }
+
+    /**
+     * @brief Automatically generates and executes DDL migrations for one or more entity schemas.
+     */
+    template <typename... Entities>
+    core::Task<void> sync_schema() {
+        DatabaseDialect d = DatabaseDialect::SQLite;
+        {
+            auto guard = primary_pool_.acquire();
+            d = guard->dialect();
+        }
+        (co_await execute(generate_ddl<Entities>(d)), ...);
     }
 
     template <typename Entity>

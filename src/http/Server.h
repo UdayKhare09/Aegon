@@ -70,6 +70,41 @@ public:
     [[nodiscard]] ServiceRegistry& services() noexcept { return *services_; }
     [[nodiscard]] const ServiceRegistry& services() const noexcept { return *services_; }
 
+    template <typename T>
+    [[nodiscard]] std::shared_ptr<T> service() const {
+        return services_->get_shared<T>();
+    }
+
+    using LifecycleHook = std::function<core::Task<void>(Server&)>;
+    using BackgroundWorker = std::function<core::Task<void>(Server&, core::EventLoop&)>;
+
+    /**
+     * @brief Registers an asynchronous startup hook executed before accepting traffic.
+     * Ideal for schema migrations, seed data, cache pre-warming, health checks, and service announcements.
+     */
+    Server& on_start(LifecycleHook hook) {
+        startup_hooks_.push_back(std::move(hook));
+        return *this;
+    }
+
+    /**
+     * @brief Registers an asynchronous shutdown hook executed during server stop.
+     * Ideal for queue draining, cache flushing, and service deregistration.
+     */
+    Server& on_stop(LifecycleHook hook) {
+        shutdown_hooks_.push_back(std::move(hook));
+        return *this;
+    }
+
+    /**
+     * @brief Registers a long-running background worker coroutine spawned on the server event loop.
+     * Ideal for Redis stream consumers, event workers, and metrics collectors.
+     */
+    Server& spawn_worker(BackgroundWorker worker) {
+        background_workers_.push_back(std::move(worker));
+        return *this;
+    }
+
     // Enable TLS (HTTPS) with ALPN (h2 and http/1.1)
     Server& enable_tls(const std::string& cert_file = "", const std::string& key_file = "");
 
@@ -127,6 +162,9 @@ private:
     std::string host_{"0.0.0.0"};
     uint16_t port_{8080};
     std::shared_ptr<ServiceRegistry> services_{std::make_shared<ServiceRegistry>()};
+    std::vector<LifecycleHook> startup_hooks_;
+    std::vector<LifecycleHook> shutdown_hooks_;
+    std::vector<BackgroundWorker> background_workers_;
     std::atomic<bool> running_{false};
     std::vector<std::thread> workers_;
 

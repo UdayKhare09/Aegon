@@ -28,8 +28,7 @@ samples/adv/
 │   │   ├── CatalogService.h
 │   │   ├── OrderService.h
 │   │   ├── LeaderboardService.h
-│   │   ├── EventStreamWorker.h
-│   │   └── RedisProvider.h
+│   │   └── EventStreamWorker.h
 │   └── handlers/
 │       ├── AuthHandler.h
 │       ├── CatalogHandler.h

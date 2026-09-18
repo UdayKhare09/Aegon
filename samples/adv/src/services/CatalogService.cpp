@@ -1,13 +1,9 @@
 #include "services/CatalogService.h"
-#include "services/RedisProvider.h"
-#include <glaze/glaze.hpp>
-#include <iostream>
 
 namespace aegon::sample {
 
-CatalogService::CatalogService(data::orm::sql::SqlDatabaseClient& db,
-                               std::shared_ptr<data::redis::RedisClient> redis)
-    : db_(db), redis_(std::move(redis)) {}
+CatalogService::CatalogService(data::orm::sql::SqlDatabaseClient& db)
+    : db_(db) {}
 
 core::Task<Product> CatalogService::create_product(CreateProductRequest req) {
     Product p;
@@ -17,50 +13,23 @@ core::Task<Product> CatalogService::create_product(CreateProductRequest req) {
     p.stock = req.stock;
     p.version = 1;
 
+    // Automatic SQL cache insertion via declarative TableDef::cache()
     int64_t new_id = co_await db_.insert_get_id(p);
     p.id = new_id;
-
-    auto* redis = redis_ ? redis_.get() : get_current_redis_client();
-    if (redis) {
-        std::string json_str;
-        (void)glz::write_json(p, json_str);
-        (void)co_await redis->set("product:" + std::to_string(p.id), json_str, std::chrono::seconds(120));
-    }
 
     co_return p;
 }
 
 core::Task<std::optional<Product>> CatalogService::get_product_by_id(int64_t id) {
-    std::string cache_key = "product:" + std::to_string(id);
-    auto* redis = redis_ ? redis_.get() : get_current_redis_client();
-
-    // 1. Check Redis L2 cache if available
-    if (redis) {
-        auto cached = co_await redis->get(cache_key);
-        if (cached && !cached->empty()) {
-            Product prod;
-            auto ec = glz::read_json(prod, *cached);
-            if (!ec) {
-                co_return prod;
-            }
-        }
-    }
-
-    // 2. Query relational database via ORM
-    auto prod = co_await db_.find_by_id<Product>(id);
-    if (prod && redis) {
-        // Cache aside with 120s TTL
-        std::string json_str;
-        (void)glz::write_json(*prod, json_str);
-        (void)co_await redis->set(cache_key, json_str, std::chrono::seconds(120));
-    }
-
-    co_return prod;
+    // Declarative cache lookup: SqlDatabaseClient checks cache first,
+    // queries SQL on miss, and writes through transparently
+    co_return co_await db_.find_by_id<Product>(id);
 }
 
 core::Task<std::vector<Product>> CatalogService::list_products(int page, int limit) {
     int64_t offset = static_cast<int64_t>(std::max(0, page - 1)) * limit;
-    auto query = db_.from<Product>().limit(limit).offset(offset);
+    // Two-phase query pointer caching with table epoch validation
+    auto query = db_.from<Product>().limit(limit).offset(offset).cached();
     co_return co_await db_.fetch_all(query);
 }
 
@@ -75,15 +44,9 @@ core::Task<bool> CatalogService::update_stock(int64_t id, int32_t quantity_delta
     }
 
     prod->stock += quantity_delta;
+    // Automatic cache invalidation and table epoch bump on mutation
     size_t updated_rows = co_await db_.update_entity(*prod);
-    bool ok = (updated_rows > 0);
-
-    auto* redis = redis_ ? redis_.get() : get_current_redis_client();
-    if (ok && redis) {
-        (void)co_await redis->del("product:" + std::to_string(id));
-    }
-
-    co_return ok;
+    co_return (updated_rows > 0);
 }
 
 } // namespace aegon::sample

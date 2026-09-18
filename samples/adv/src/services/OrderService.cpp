@@ -1,16 +1,15 @@
 #include "services/OrderService.h"
-#include "services/RedisProvider.h"
 #include "data/redis/RedisLock.h"
 #include <iostream>
 
 namespace aegon::sample {
 
 OrderService::OrderService(data::orm::sql::SqlDatabaseClient& db,
-                           std::shared_ptr<data::redis::RedisClient> redis)
+                           std::shared_ptr<data::redis::PerCoreRedisClient> redis)
     : db_(db), redis_(std::move(redis)) {}
 
 core::Task<OrderCreationResult> OrderService::place_order(CreateOrderRequest req) {
-    auto* redis = redis_ ? redis_.get() : get_current_redis_client();
+    auto* redis = redis_ ? redis_->current() : nullptr;
 
     // 1. Acquire Distributed Mutex for Flash-Sale concurrency control if Redis is present
     std::optional<data::redis::RedisLock> dist_lock;

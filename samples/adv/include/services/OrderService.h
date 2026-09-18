@@ -1,7 +1,7 @@
 #pragma once
 
 #include "data/orm/sql/SqlDatabaseClient.h"
-#include "data/redis/RedisClient.h"
+#include "data/redis/PerCoreRedisClient.h"
 #include "models/Order.h"
 #include "models/Product.h"
 #include "models/User.h"
@@ -22,7 +22,7 @@ struct OrderCreationResult {
 class OrderService {
 public:
     OrderService(data::orm::sql::SqlDatabaseClient& db,
-                 std::shared_ptr<data::redis::RedisClient> redis = nullptr);
+                 std::shared_ptr<data::redis::PerCoreRedisClient> redis = nullptr);
 
     /**
      * @brief Creates an order with Distributed Mutex, OCC validation, SQL Transaction,
@@ -34,7 +34,7 @@ public:
 
 private:
     data::orm::sql::SqlDatabaseClient& db_;
-    std::shared_ptr<data::redis::RedisClient> redis_;
+    std::shared_ptr<data::redis::PerCoreRedisClient> redis_;
 };
 
 } // namespace aegon::sample

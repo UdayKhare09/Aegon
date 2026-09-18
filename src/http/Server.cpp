@@ -25,6 +25,9 @@ Server::Server(Server&& other) noexcept
       host_(std::move(other.host_)),
       port_(other.port_),
       services_(std::move(other.services_)),
+      startup_hooks_(std::move(other.startup_hooks_)),
+      shutdown_hooks_(std::move(other.shutdown_hooks_)),
+      background_workers_(std::move(other.background_workers_)),
       running_(other.running_.load()),
       workers_(std::move(other.workers_)),
       sqpoll_enabled_(other.sqpoll_enabled_),
@@ -44,6 +47,9 @@ Server& Server::operator=(Server&& other) noexcept {
         host_ = std::move(other.host_);
         port_ = other.port_;
         services_ = std::move(other.services_);
+        startup_hooks_ = std::move(other.startup_hooks_);
+        shutdown_hooks_ = std::move(other.shutdown_hooks_);
+        background_workers_ = std::move(other.background_workers_);
         running_.store(other.running_.load());
         workers_ = std::move(other.workers_);
         sqpoll_enabled_ = other.sqpoll_enabled_;
@@ -470,6 +476,14 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd) {
 
 void Server::run() {
     running_ = true;
+
+    // 1. Run asynchronous startup lifecycle hooks before listening
+    for (const auto& hook : startup_hooks_) {
+        core::EventLoop init_loop;
+        init_loop.spawn(hook(*this));
+        init_loop.run();
+    }
+
     int listen_fd = create_listen_socket();
 
     core::IoUringConfig ring_cfg;
@@ -480,6 +494,11 @@ void Server::run() {
 
     core::EventLoop loop(ring_cfg, 512, 4096);
     loop.spawn(accept_loop(loop, listen_fd));
+
+    // Spawn long-running background workers on the server event loop
+    for (const auto& worker : background_workers_) {
+        loop.spawn(worker(*this, loop));
+    }
 
     if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
         h3_server_ = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), services_.get());
@@ -499,6 +518,14 @@ void Server::run() {
 
 void Server::run(size_t threads) {
     running_ = true;
+
+    // 1. Run asynchronous startup lifecycle hooks once across the cluster
+    for (const auto& hook : startup_hooks_) {
+        core::EventLoop init_loop;
+        init_loop.spawn(hook(*this));
+        init_loop.run();
+    }
+
     workers_.clear();
 
     for (size_t i = 0; i < threads; ++i) {
@@ -514,6 +541,13 @@ void Server::run(size_t threads) {
                 core::EventLoop loop(ring_cfg, 512, 4096);
                 loop.pin_to_core(i);
                 loop.spawn(accept_loop(loop, listen_fd));
+
+                // Spawn background workers on core 0
+                if (i == 0) {
+                    for (const auto& worker : background_workers_) {
+                        loop.spawn(worker(*this, loop));
+                    }
+                }
 
                 std::unique_ptr<v3::Http3Server> h3_worker;
                 if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
@@ -545,6 +579,14 @@ void Server::run(size_t threads) {
 
 void Server::stop() {
     running_ = false;
+
+    // Run asynchronous shutdown lifecycle hooks
+    for (const auto& hook : shutdown_hooks_) {
+        core::EventLoop stop_loop;
+        stop_loop.spawn(hook(*this));
+        stop_loop.run();
+    }
+
     if (h3_server_) {
         h3_server_->stop();
     }
