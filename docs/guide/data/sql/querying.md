@@ -41,7 +41,29 @@ auto query = db.from<User>()
     .order_by(&User::created_at, SortOrder::Desc)
     .limit(10);
 
+// Fetch all matching rows
 std::vector<User> users = co_await db.fetch_all(query);
+
+// Or fetch only the first matching record (appends LIMIT 1 automatically)
+std::optional<User> first_admin = co_await db.fetch_one(
+    db.from<User>().where(&User::role, Op::Eq, "admin")
+);
+```
+
+### Column Projections (`.select()`)
+
+By default, Aegon queries all columns defined on the entity's schema. You can project specific columns to reduce bandwidth:
+
+```cpp
+// Project specific member pointers
+auto q = db.from<Product>()
+    .select(&Product::id, &Product::name, &Product::price);
+
+// Or project column names as strings
+q.select_columns({"id", "name", "price"});
+
+// Reset to select all columns
+q.select();
 ```
 
 ### Filtering with `.where()`
@@ -84,11 +106,30 @@ query.where_not_null(&User::bio);
 ```cpp
 auto q = db.from<Product>()
     .where(&Product::category, Op::Eq, "electronics")
+    .group_by(&Product::category)
+    .having(&Product::price, Op::Gt, 50.0)
     .order_by(&Product::price, SortOrder::Asc)
     .order_by(&Product::created_at, SortOrder::Desc)
     .limit(20)
     .offset(40);
 ```
+
+### Group By & Having Clauses
+
+```cpp
+// Group by single or multiple fields
+q.group_by(&Product::category);
+q.group_by_fields(&Product::category, &Product::brand);
+
+// Filter grouped results with HAVING
+q.having(&Product::price, Op::Gt, 100.0);
+q.having("COUNT(*) > 5"); // Raw expression support
+```
+
+### Resetting Clauses
+- `q.clear_limit()`: Removes `LIMIT` clause.
+- `q.clear_offset()`: Removes `OFFSET` clause.
+- `q.clear_order_by()`: Removes all `ORDER BY` sorting clauses.
 
 ### Automatic Pagination (`db.paginate`)
 
@@ -106,6 +147,34 @@ std::cout << "Has Next:     " << std::boolalpha << page.has_next << "\n";
 for (const auto& item : page.items) {
     std::cout << " - " << item.name << " ($" << item.price << ")\n";
 }
+```
+
+---
+
+## SQL Inspection & Raw Execution
+
+### Inspect Compiled SQL (`.to_sql`)
+
+Inspect the generated dialect-specific SQL string and bound parameters at any time:
+
+```cpp
+QueryResult qr = query.to_sql(DatabaseDialect::PostgreSQL);
+std::println("Generated SQL: {}", qr.sql);
+for (const auto& param : qr.params) {
+    std::println("Param: {}", param);
+}
+```
+
+### Raw SQL Execution (`db.execute`)
+
+For arbitrary database DDL/DML migrations or vendor-specific commands:
+
+```cpp
+// Parameterized raw mutation
+size_t affected = co_await db.execute(
+    "UPDATE users SET balance = balance + $1 WHERE status = $2",
+    {"100.0", "active"}
+);
 ```
 
 ---
