@@ -1,0 +1,37 @@
+:root {
+  --vp-layout-max-width: 100%;
+}
+
+/* Allow documentation pages to use full viewport width */
+.VPDoc .container {
+  max-width: 100% !important;
+  margin: 0 !important;
+}
+
+.VPDoc:not(.has-sidebar) .container {
+  max-width: 100% !important;
+}
+
+.VPDoc .content-container {
+  max-width: 100% !important;
+}
+
+.VPDoc.has-sidebar.has-aside .content-container,
+.VPDoc.has-sidebar:not(.has-aside) .content-container {
+  max-width: 100% !important;
+}
+
+.VPDoc.has-sidebar .content {
+  padding-left: 32px !important;
+  padding-right: 32px !important;
+}
+
+/* Home hero & feature containers full width */
+.VPHome {
+  max-width: 100% !important;
+}
+
+.VPHome .VPHero,
+.VPHome .VPFeatures {
+  max-width: 100% !important;
+}
