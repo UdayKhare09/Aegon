@@ -245,6 +245,11 @@ add_executable(test_orm_advanced
 )
 target_link_libraries(test_orm_advanced PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
 
+add_executable(test_sql_tx_cache_parity
+    tests/test_sql_tx_cache_parity.cpp
+)
+target_link_libraries(test_sql_tx_cache_parity PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+
 # Test Registrations for CTest
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
@@ -265,6 +270,7 @@ add_test(NAME live_redis_topologies COMMAND test_live_redis_topologies)
 add_test(NAME live_postgres_orm_cache COMMAND test_live_postgres_orm_cache)
 add_test(NAME redis_advanced COMMAND test_redis_advanced)
 add_test(NAME orm_advanced COMMAND test_orm_advanced)
+add_test(NAME sql_tx_cache_parity COMMAND test_sql_tx_cache_parity)
 
 # Samples
 add_subdirectory(samples/adv)

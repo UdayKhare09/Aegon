@@ -57,11 +57,29 @@ public:
         return cache_;
     }
 
+    // Helper to flush deferred cache operations
+    core::Task<void> flush_deferred_cache(const std::vector<DeferredCacheOp>& ops) {
+        if (!cache_ || ops.empty()) co_return;
+        for (const auto& op : ops) {
+            if (op.type == DeferredCacheOpType::Del) {
+                co_await cache_->del(op.key);
+            } else if (op.type == DeferredCacheOpType::Incr) {
+                co_await cache_->incr(op.key);
+            } else if (op.type == DeferredCacheOpType::Set) {
+                co_await cache_->set(op.key, op.value, op.ttl);
+            }
+        }
+    }
+
     // Transaction & Unit of Work Lifecycle (always on primary pool)
     template <typename Func>
     core::Task<void> transaction(Func&& block) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred_cache;
+        if (cache_) {
+            tx.set_deferred_cache_ops(&deferred_cache);
+        }
         co_await tx.begin();
 
         std::exception_ptr ex{nullptr};
@@ -78,6 +96,7 @@ public:
             std::rethrow_exception(ex);
         } else if (!tx.is_completed()) {
             co_await tx.commit();
+            co_await flush_deferred_cache(deferred_cache);
         }
     }
 
@@ -92,95 +111,30 @@ public:
 
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
         co_await tx.insert(entity);
-
-        if (cache_ && schema.is_cached()) {
-            if (schema.cache_config().invalidation == InvalidationMode::Partitioned && schema.cache_config().partition_extractor) {
-                std::string part_key = schema.table_name() + ":part:" + schema.cache_config().partition_extractor(entity) + ":epoch";
-                co_await cache_->incr(part_key);
-            } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-                co_await cache_->incr(schema.table_name() + ":epoch");
-            } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
-                auto vals = schema.extract_values(entity, false);
-                for (const auto& [col, val] : vals) {
-                    if (!val.empty()) {
-                        co_await cache_->incr(schema.table_name() + ":pred:" + col + ":" + val + ":epoch");
-                    }
-                }
-            }
-
-            auto pk_val = schema.extract_values(entity, false);
-            for (const auto& [col, val] : pk_val) {
-                if (col == schema.primary_key_name() && !val.empty()) {
-                    std::string id_key = schema.table_name() + ":id:" + val;
-                    co_await cache_->set(id_key, schema.serialize_entity_json(entity), schema.cache_config().ttl);
-                    break;
-                }
-            }
-        }
+        co_await flush_deferred_cache(deferred);
     }
 
     template <typename Entity>
     core::Task<void> insert(const Entity& entity) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
         co_await tx.insert(entity);
-
-        auto schema = Entity::schema();
-        if (cache_ && schema.is_cached()) {
-            if (schema.cache_config().invalidation == InvalidationMode::Partitioned && schema.cache_config().partition_extractor) {
-                std::string part_key = schema.table_name() + ":part:" + schema.cache_config().partition_extractor(entity) + ":epoch";
-                co_await cache_->incr(part_key);
-            } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-                co_await cache_->incr(schema.table_name() + ":epoch");
-            } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
-                auto vals = schema.extract_values(entity, false);
-                for (const auto& [col, val] : vals) {
-                    if (!val.empty()) {
-                        co_await cache_->incr(schema.table_name() + ":pred:" + col + ":" + val + ":epoch");
-                    }
-                }
-            }
-
-            auto pk_val = schema.extract_values(entity, false);
-            for (const auto& [col, val] : pk_val) {
-                if (col == schema.primary_key_name() && !val.empty()) {
-                    std::string id_key = schema.table_name() + ":id:" + val;
-                    co_await cache_->set(id_key, schema.serialize_entity_json(entity), schema.cache_config().ttl);
-                    break;
-                }
-            }
-        }
+        co_await flush_deferred_cache(deferred);
     }
 
     template <typename Entity>
     core::Task<int64_t> insert_get_id(Entity& entity) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
         int64_t id = co_await tx.insert_get_id(entity);
-
-        auto schema = Entity::schema();
-        if (cache_ && schema.is_cached()) {
-            if (schema.cache_config().invalidation == InvalidationMode::Partitioned && schema.cache_config().partition_extractor) {
-                std::string part_key = schema.table_name() + ":part:" + schema.cache_config().partition_extractor(entity) + ":epoch";
-                co_await cache_->incr(part_key);
-            } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-                co_await cache_->incr(schema.table_name() + ":epoch");
-            } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
-                auto vals = schema.extract_values(entity, false);
-                for (const auto& [col, val] : vals) {
-                    if (!val.empty()) {
-                        co_await cache_->incr(schema.table_name() + ":pred:" + col + ":" + val + ":epoch");
-                    }
-                }
-            }
-
-            if (schema.cache_config().by_id) {
-                std::string id_key = schema.table_name() + ":id:" + std::to_string(id);
-                co_await cache_->set(id_key, schema.serialize_entity_json(entity), schema.cache_config().ttl);
-            }
-        }
-
+        co_await flush_deferred_cache(deferred);
         co_return id;
     }
 
@@ -188,30 +142,10 @@ public:
     core::Task<int64_t> insert_get_id(const Entity& entity) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
         int64_t id = co_await tx.insert_get_id(entity);
-
-        auto schema = Entity::schema();
-        if (cache_ && schema.is_cached()) {
-            if (schema.cache_config().invalidation == InvalidationMode::Partitioned && schema.cache_config().partition_extractor) {
-                std::string part_key = schema.table_name() + ":part:" + schema.cache_config().partition_extractor(entity) + ":epoch";
-                co_await cache_->incr(part_key);
-            } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-                co_await cache_->incr(schema.table_name() + ":epoch");
-            } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
-                auto vals = schema.extract_values(entity, false);
-                for (const auto& [col, val] : vals) {
-                    if (!val.empty()) {
-                        co_await cache_->incr(schema.table_name() + ":pred:" + col + ":" + val + ":epoch");
-                    }
-                }
-            }
-
-            if (schema.cache_config().by_id) {
-                std::string id_key = schema.table_name() + ":id:" + std::to_string(id);
-                co_await cache_->set(id_key, schema.serialize_entity_json(entity), schema.cache_config().ttl);
-            }
-        }
-
+        co_await flush_deferred_cache(deferred);
         co_return id;
     }
 
@@ -219,23 +153,10 @@ public:
     core::Task<void> insert_all(std::span<Entity> entities) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
         co_await tx.insert_all(entities);
-
-        auto schema = Entity::schema();
-        if (cache_ && schema.is_cached()) {
-            if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-                co_await cache_->incr(schema.table_name() + ":epoch");
-            } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
-                for (const auto& entity : entities) {
-                    auto vals = schema.extract_values(entity, false);
-                    for (const auto& [col, val] : vals) {
-                        if (!val.empty()) {
-                            co_await cache_->incr(schema.table_name() + ":pred:" + col + ":" + val + ":epoch");
-                        }
-                    }
-                }
-            }
-        }
+        co_await flush_deferred_cache(deferred);
     }
 
     template <typename Entity>
@@ -249,47 +170,10 @@ public:
     core::Task<size_t> update_entity(Entity& entity) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
         size_t n = co_await tx.update_entity(entity);
-
-        auto schema = Entity::schema();
-        if (cache_ && schema.is_cached()) {
-            std::string pk_str;
-            auto vals = schema.extract_values(entity, false);
-            for (const auto& [col, val] : vals) {
-                if (col == schema.primary_key_name()) {
-                    pk_str = val;
-                    break;
-                }
-            }
-
-            if (!pk_str.empty()) {
-                std::string id_key = schema.table_name() + ":id:" + pk_str;
-                if (schema.cache_config().mutation_sync == MutationSync::UpdateOnWrite) {
-                    co_await cache_->set(id_key, schema.serialize_entity_json(entity), schema.cache_config().ttl);
-                } else {
-                    co_await cache_->del(id_key);
-                }
-            }
-
-            if (schema.cache_config().unique_column && schema.cache_config().unique_extractor) {
-                std::string u_key = schema.table_name() + ":" + *schema.cache_config().unique_column + ":" + schema.cache_config().unique_extractor(entity);
-                co_await cache_->del(u_key);
-            }
-
-            if (schema.cache_config().invalidation == InvalidationMode::Partitioned && schema.cache_config().partition_extractor) {
-                std::string part_key = schema.table_name() + ":part:" + schema.cache_config().partition_extractor(entity) + ":epoch";
-                co_await cache_->incr(part_key);
-            } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-                co_await cache_->incr(schema.table_name() + ":epoch");
-            } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
-                for (const auto& [col, val] : vals) {
-                    if (!val.empty()) {
-                        co_await cache_->incr(schema.table_name() + ":pred:" + col + ":" + val + ":epoch");
-                    }
-                }
-            }
-        }
-
+        co_await flush_deferred_cache(deferred);
         co_return n;
     }
 
@@ -297,47 +181,10 @@ public:
     core::Task<size_t> update_entity(const Entity& entity) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
         size_t n = co_await tx.update_entity(entity);
-
-        auto schema = Entity::schema();
-        if (cache_ && schema.is_cached()) {
-            std::string pk_str;
-            auto vals = schema.extract_values(entity, false);
-            for (const auto& [col, val] : vals) {
-                if (col == schema.primary_key_name()) {
-                    pk_str = val;
-                    break;
-                }
-            }
-
-            if (!pk_str.empty()) {
-                std::string id_key = schema.table_name() + ":id:" + pk_str;
-                if (schema.cache_config().mutation_sync == MutationSync::UpdateOnWrite) {
-                    co_await cache_->set(id_key, schema.serialize_entity_json(entity), schema.cache_config().ttl);
-                } else {
-                    co_await cache_->del(id_key);
-                }
-            }
-
-            if (schema.cache_config().unique_column && schema.cache_config().unique_extractor) {
-                std::string u_key = schema.table_name() + ":" + *schema.cache_config().unique_column + ":" + schema.cache_config().unique_extractor(entity);
-                co_await cache_->del(u_key);
-            }
-
-            if (schema.cache_config().invalidation == InvalidationMode::Partitioned && schema.cache_config().partition_extractor) {
-                std::string part_key = schema.table_name() + ":part:" + schema.cache_config().partition_extractor(entity) + ":epoch";
-                co_await cache_->incr(part_key);
-            } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-                co_await cache_->incr(schema.table_name() + ":epoch");
-            } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
-                for (const auto& [col, val] : vals) {
-                    if (!val.empty()) {
-                        co_await cache_->incr(schema.table_name() + ":pred:" + col + ":" + val + ":epoch");
-                    }
-                }
-            }
-        }
-
+        co_await flush_deferred_cache(deferred);
         co_return n;
     }
 
@@ -390,8 +237,7 @@ public:
 
         auto guard = read_pool().acquire();
         Transaction tx(*guard);
-        auto q = from<Entity>().where(field, Op::Eq, val);
-        auto opt_entity = co_await tx.fetch_one(q);
+        auto opt_entity = co_await tx.find_by_unique(field, val);
         if (opt_entity && cache_ && schema.is_cached()) {
             auto vals = schema.extract_values(*opt_entity, false);
             std::string pk;
@@ -415,21 +261,10 @@ public:
     core::Task<bool> delete_by_id(const ID& id) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
         bool ok = co_await tx.delete_by_id<Entity>(id);
-
-        auto schema = Entity::schema();
-        if (ok && cache_ && schema.is_cached()) {
-            std::string id_str = format_param_value(id);
-            std::string id_key = schema.table_name() + ":id:" + id_str;
-            co_await cache_->del(id_key);
-
-            if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-                co_await cache_->incr(schema.table_name() + ":epoch");
-            } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
-                co_await cache_->incr(schema.table_name() + ":pred:" + schema.primary_key_name() + ":" + id_str + ":epoch");
-            }
-        }
-
+        co_await flush_deferred_cache(deferred);
         co_return ok;
     }
 
@@ -678,49 +513,15 @@ public:
     template <typename JunctionEntity, typename ParentID, typename ChildID>
     core::Task<void> link(const ParentID& parent_id, const ChildID& child_id) {
         auto guard = primary_pool_.acquire();
-        auto dialect = guard->dialect();
-        auto schema = JunctionEntity::schema();
-        std::string sql = "INSERT INTO ";
-        sql.append(DialectTraits::quote_identifier(dialect, schema.table_name()));
-        sql.append(" (");
-        sql.append(DialectTraits::quote_identifier(dialect, schema.columns()[0].column_name));
-        sql.append(", ");
-        sql.append(DialectTraits::quote_identifier(dialect, schema.columns()[1].column_name));
-        sql.append(") VALUES (");
-        std::string p1, p2;
-        DialectTraits::format_placeholder(dialect, 1, p1);
-        DialectTraits::format_placeholder(dialect, 2, p2);
-        sql.append(p1);
-        sql.append(", ");
-        sql.append(p2);
-        sql.append(");");
-
-        co_await guard->execute(sql, {format_param_value(parent_id), format_param_value(child_id)});
+        Transaction tx(*guard);
+        co_await tx.template link<JunctionEntity>(parent_id, child_id);
     }
 
     template <typename JunctionEntity, typename ParentID, typename ChildID>
     core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id) {
         auto guard = primary_pool_.acquire();
-        auto dialect = guard->dialect();
-        auto schema = JunctionEntity::schema();
-        std::string sql = "DELETE FROM ";
-        sql.append(DialectTraits::quote_identifier(dialect, schema.table_name()));
-        sql.append(" WHERE ");
-        sql.append(DialectTraits::quote_identifier(dialect, schema.columns()[0].column_name));
-        sql.append(" = ");
-        std::string p1;
-        DialectTraits::format_placeholder(dialect, 1, p1);
-        sql.append(p1);
-        sql.append(" AND ");
-        sql.append(DialectTraits::quote_identifier(dialect, schema.columns()[1].column_name));
-        sql.append(" = ");
-        std::string p2;
-        DialectTraits::format_placeholder(dialect, 2, p2);
-        sql.append(p2);
-        sql.append(";");
-
-        size_t n = co_await guard->execute(sql, {format_param_value(parent_id), format_param_value(child_id)});
-        co_return n > 0;
+        Transaction tx(*guard);
+        co_return co_await tx.template unlink<JunctionEntity>(parent_id, child_id);
     }
 };
 
