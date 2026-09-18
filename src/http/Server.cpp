@@ -67,6 +67,12 @@ Server& Server::operator=(Server&& other) noexcept {
 Server& Server::enable_tls(const std::string& cert_file, const std::string& key_file) {
     tls_ctx_ = std::make_unique<tls::TlsContext>();
     if (!cert_file.empty() && !key_file.empty()) {
+        if (::access(cert_file.c_str(), R_OK) != 0) {
+            throw std::runtime_error("Server TLS configuration error: certificate file does not exist or is unreadable: " + cert_file);
+        }
+        if (::access(key_file.c_str(), R_OK) != 0) {
+            throw std::runtime_error("Server TLS configuration error: key file does not exist or is unreadable: " + key_file);
+        }
         if (!tls_ctx_->load_cert_and_key(cert_file, key_file)) {
             throw std::runtime_error("Failed to load TLS certificate and key from files: " + cert_file);
         }
@@ -80,6 +86,10 @@ Server& Server::enable_tls(const std::string& cert_file, const std::string& key_
 }
 
 int Server::create_listen_socket() {
+    if (port_ == 0) {
+        throw std::runtime_error("Server configuration error: port must be greater than 0 (1-65535)");
+    }
+
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         throw std::runtime_error("Failed to create TCP socket");
@@ -259,16 +269,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
             }
 
             Response res;
-            auto match_res = router_.match(req);
-
-            if (match_res.route_found && match_res.handler) {
-                Context ctx(req, res, services_.get());
-                co_await (*match_res.handler)(ctx);
-            } else if (match_res.method_not_allowed) {
-                res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
-            } else {
-                res.status(StatusCode::NotFound).text("Not Found");
-            }
+            co_await router_.dispatch(req, res, services_.get());
 
             bool keep_alive = true;
             if (auto conn_hdr = req.headers().get("Connection")) {
@@ -375,16 +376,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
         }
 
         Response res;
-        auto match_res = router_.match(req);
-
-        if (match_res.route_found && match_res.handler) {
-            Context ctx(req, res, services_.get());
-            co_await (*match_res.handler)(ctx);
-        } else if (match_res.method_not_allowed) {
-            res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
-        } else {
-            res.status(StatusCode::NotFound).text("Not Found");
-        }
+        co_await router_.dispatch(req, res, services_.get());
 
         bool keep_alive = true;
         if (auto conn_hdr = req.headers().get("Connection")) {

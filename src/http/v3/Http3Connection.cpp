@@ -484,15 +484,7 @@ core::Task<void> Http3Connection::dispatch_pending_requests() {
             stream->req.set_body(stream->body_accum);
         }
 
-        auto match_res = router_.match(stream->req);
-        if (match_res.route_found && match_res.handler) {
-            Context ctx(stream->req, stream->res, services_);
-            co_await (*match_res.handler)(ctx);
-        } else if (match_res.method_not_allowed) {
-            stream->res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
-        } else {
-            stream->res.status(StatusCode::NotFound).text("Not Found");
-        }
+        co_await router_.dispatch(stream->req, stream->res, services_);
 
         submit_response(stream);
     }

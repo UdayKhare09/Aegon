@@ -3,6 +3,7 @@
 #include "http/Request.h"
 #include "http/Response.h"
 #include "http/ServiceRegistry.h"
+#include "http/ProblemDetails.h"
 #include <string>
 #include <string_view>
 #include <optional>
@@ -97,6 +98,21 @@ public:
     template <typename T>
     [[nodiscard]] std::optional<T> bind_path() {
         return req_.bind_path<T>(res_);
+    }
+
+    /**
+     * @brief Emits a standardized RFC 7807 Problem Details response.
+     */
+    Response& problem(StatusCode status, std::string_view title, std::string_view detail = "", std::string_view type = "about:blank") {
+        ProblemDetails pd{
+            .type = std::string(type),
+            .title = std::string(title),
+            .status = static_cast<int>(status),
+            .detail = std::string(detail),
+            .instance = std::string(req_.path())
+        };
+        res_.header("content-type", "application/problem+json");
+        return res_.status(status).json(pd.to_json());
     }
 
     /**

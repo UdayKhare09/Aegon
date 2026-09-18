@@ -162,9 +162,127 @@ public:
         return static_routes_.size();
     }
 
+    using ErrorHandler = std::function<core::Task<void>(Context&, std::exception_ptr)>;
+    using FallbackHandler = Handler;
+
+    template <typename F>
+    Router& set_error_handler(F&& handler) {
+        if constexpr (std::is_invocable_r_v<core::Task<void>, F, Context&, std::exception_ptr>) {
+            error_handler_ = std::forward<F>(handler);
+        } else if constexpr (std::is_invocable_r_v<void, F, Context&, std::exception_ptr>) {
+            error_handler_ = [func = std::forward<F>(handler)](Context& ctx, std::exception_ptr ex) -> core::Task<void> {
+                func(ctx, ex);
+                co_return;
+            };
+        } else {
+            static_assert(sizeof(F) == 0, "ErrorHandler must be callable as (Context&, std::exception_ptr) returning void or Task<void>");
+        }
+        return *this;
+    }
+
+    template <typename F>
+    Router& set_not_found_handler(F&& handler) {
+        not_found_handler_ = make_handler(std::forward<F>(handler));
+        return *this;
+    }
+
+    template <typename F>
+    Router& set_method_not_allowed_handler(F&& handler) {
+        method_not_allowed_handler_ = make_handler(std::forward<F>(handler));
+        return *this;
+    }
+
+    [[nodiscard]] const ErrorHandler& error_handler() const noexcept { return error_handler_; }
+    [[nodiscard]] const FallbackHandler& not_found_handler() const noexcept { return not_found_handler_; }
+    [[nodiscard]] const FallbackHandler& method_not_allowed_handler() const noexcept { return method_not_allowed_handler_; }
+
+    /**
+     * @brief Dispatches an inbound request to its matched route handler within a global exception boundary.
+     *
+     * Catches unhandled exceptions and invokes error_handler or returns standard RFC 7807 500 JSON.
+     * Invokes custom or standard RFC 7807 handlers for 404 (Not Found) and 405 (Method Not Allowed).
+     */
+    core::Task<void> dispatch(Request& req, Response& res, const ServiceRegistry* services) const {
+        auto match_res = match(req);
+
+        if (match_res.route_found && match_res.handler) {
+            Context ctx(req, res, services);
+            std::exception_ptr ex{nullptr};
+            try {
+                co_await (*match_res.handler)(ctx);
+            } catch (...) {
+                ex = std::current_exception();
+            }
+
+            if (ex) {
+                if (error_handler_) {
+                    std::exception_ptr err_handler_ex{nullptr};
+                    try {
+                        co_await error_handler_(ctx, ex);
+                    } catch (...) {
+                        err_handler_ex = std::current_exception();
+                    }
+
+                    if (err_handler_ex) {
+                        std::string detail = "Unknown error in custom error handler";
+                        try {
+                            std::rethrow_exception(err_handler_ex);
+                        } catch (const std::exception& inner) {
+                            detail = inner.what();
+                        } catch (...) {}
+                        ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                    }
+                } else {
+                    std::string detail = "An internal server error occurred.";
+                    try {
+                        std::rethrow_exception(ex);
+                    } catch (const std::exception& e) {
+                        detail = e.what();
+                    } catch (...) {
+                        detail = "Unknown exception occurred.";
+                    }
+                    ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                }
+            }
+        } else if (match_res.method_not_allowed) {
+            Context ctx(req, res, services);
+            if (method_not_allowed_handler_) {
+                std::exception_ptr fallback_ex{nullptr};
+                try {
+                    co_await method_not_allowed_handler_(ctx);
+                } catch (...) {
+                    fallback_ex = std::current_exception();
+                }
+                if (fallback_ex) {
+                    ctx.problem(StatusCode::MethodNotAllowed, "Method Not Allowed", "Method not allowed for requested route");
+                }
+            } else {
+                ctx.problem(StatusCode::MethodNotAllowed, "Method Not Allowed", "Method " + std::string(to_string(req.method())) + " is not allowed for " + std::string(req.path()));
+            }
+        } else {
+            Context ctx(req, res, services);
+            if (not_found_handler_) {
+                std::exception_ptr fallback_ex{nullptr};
+                try {
+                    co_await not_found_handler_(ctx);
+                } catch (...) {
+                    fallback_ex = std::current_exception();
+                }
+                if (fallback_ex) {
+                    ctx.problem(StatusCode::NotFound, "Not Found", "Requested route was not found");
+                }
+            } else {
+                ctx.problem(StatusCode::NotFound, "Not Found", "Cannot " + std::string(to_string(req.method())) + " " + std::string(req.path()));
+            }
+        }
+    }
+
 private:
     std::unordered_map<std::string, StaticRouteEntry, StringHash, StringEq> static_routes_;
     RadixTree tree_;
+    ErrorHandler error_handler_{nullptr};
+    FallbackHandler not_found_handler_{nullptr};
+    FallbackHandler method_not_allowed_handler_{nullptr};
 };
 
 // RouteGroup inline implementations

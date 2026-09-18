@@ -41,6 +41,24 @@ public:
     [[nodiscard]] const Router& router() const noexcept { return router_; }
     [[nodiscard]] Router& router() noexcept { return router_; }
 
+    template <typename F>
+    Server& set_error_handler(F&& handler) {
+        router_.set_error_handler(std::forward<F>(handler));
+        return *this;
+    }
+
+    template <typename F>
+    Server& set_not_found_handler(F&& handler) {
+        router_.set_not_found_handler(std::forward<F>(handler));
+        return *this;
+    }
+
+    template <typename F>
+    Server& set_method_not_allowed_handler(F&& handler) {
+        router_.set_method_not_allowed_handler(std::forward<F>(handler));
+        return *this;
+    }
+
     /**
      * @brief Registers a shared service (database client, redis, or custom domain service) in the ServiceRegistry.
      */
@@ -110,6 +128,9 @@ public:
 
     // Configure listen address and port
     Server& listen(uint16_t port, std::string_view host = "0.0.0.0") {
+        if (port == 0) {
+            throw std::runtime_error("Server configuration error: port must be greater than 0 (1-65535)");
+        }
         port_ = port;
         host_ = std::string(host);
         return *this;
