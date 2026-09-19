@@ -546,7 +546,7 @@ void Server::run(size_t threads) {
     workers_.clear();
 
     for (size_t i = 0; i < worker_count; ++i) {
-        workers_.emplace_back([this, i]() {
+        workers_.emplace_back([this, i, &cpus]() {
             try {
                 int listen_fd = create_listen_socket();
                 core::IoUringConfig ring_cfg;
