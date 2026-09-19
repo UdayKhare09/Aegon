@@ -32,6 +32,8 @@ export default defineConfig({
           text: 'HTTP Framework',
           items: [
             { text: 'Routing & Groups', link: '/guide/routing' },
+            { text: 'Middleware Pipeline', link: '/guide/middleware' },
+            { text: 'CORS Middleware', link: '/guide/cors' },
             { text: 'HTTP Request', link: '/guide/request' },
             { text: 'HTTP Response', link: '/guide/response' },
             { text: 'Context & Binding', link: '/guide/context' },

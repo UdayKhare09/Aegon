@@ -260,6 +260,11 @@ add_executable(test_middleware
 )
 target_link_libraries(test_middleware PRIVATE aegon_http aegon_core aegon_uuid)
 
+add_executable(test_cors
+    tests/test_cors.cpp
+)
+target_link_libraries(test_cors PRIVATE aegon_http aegon_core aegon_uuid)
+
 # Test Registrations for CTest
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
@@ -283,6 +288,7 @@ add_test(NAME orm_advanced COMMAND test_orm_advanced)
 add_test(NAME sql_tx_cache_parity COMMAND test_sql_tx_cache_parity)
 add_test(NAME error_handling COMMAND test_error_handling)
 add_test(NAME middleware COMMAND test_middleware)
+add_test(NAME cors COMMAND test_cors)
 
 # Samples
 add_subdirectory(samples/adv)

@@ -195,3 +195,46 @@ server.router().get("/logo.png", [](Context& ctx) -> Task<void> {
     co_return;
 });
 ```
+
+---
+
+## Per-Request Typed Data Bag (Middleware State)
+
+Middlewares often produce request-scoped data (such as authenticated user identities, decoded JWT tokens, or distributed tracing contexts) that must be safely accessed by downstream handlers.
+
+The `Context` object provides a type-safe per-request store with zero overhead and clear distinction from the application-level `ServiceRegistry`:
+
+| Method | Return Type | Behavior |
+|---|---|---|
+| `ctx.set<T>(value)` | `void` | Stores a typed copy of `T` in the request context. |
+| `ctx.get<T>()` | `T*` | Nullable pointer; returns `nullptr` if not set. |
+| `ctx.local<T>()` | `T&` | Reference accessor; throws `std::runtime_error` if missing. |
+| `ctx.has<T>()` | `bool` | Checks if a value of type `T` has been stored. |
+
+### Example
+
+```cpp
+struct CurrentUser {
+    std::string user_id;
+    std::string role;
+};
+
+// 1. Set by an authentication middleware
+server.use([](Context& ctx, Next next) -> Task<void> {
+    ctx.set<CurrentUser>(CurrentUser{
+        .user_id = "usr_42",
+        .role = "admin"
+    });
+    co_await next(ctx);
+});
+
+// 2. Read by route handlers
+server.router().get("/profile", [](Context& ctx) -> Task<void> {
+    if (auto* user = ctx.get<CurrentUser>()) {
+        ctx.res().text("Hello, " + user->user_id);
+    } else {
+        ctx.res().status(StatusCode::Unauthorized).text("Unauthorized");
+    }
+    co_return;
+});
+```

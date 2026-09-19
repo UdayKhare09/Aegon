@@ -271,79 +271,84 @@ public:
      */
     core::Task<void> dispatch(Request& req, Response& res, const ServiceRegistry* services) const {
         auto match_res = match(req);
+        Context ctx(req, res, services);
 
-        if (match_res.route_found && match_res.handler) {
-            Context ctx(req, res, services);
-            std::exception_ptr ex{nullptr};
-            try {
-                if (global_middleware_.empty()) {
-                    co_await (*match_res.handler)(ctx);
+        auto execute_route = [&]() -> core::Task<void> {
+            if (match_res.route_found && match_res.handler) {
+                co_await (*match_res.handler)(ctx);
+            } else if (match_res.method_not_allowed) {
+                if (method_not_allowed_handler_) {
+                    std::exception_ptr fallback_ex{nullptr};
+                    try {
+                        co_await method_not_allowed_handler_(ctx);
+                    } catch (...) {
+                        fallback_ex = std::current_exception();
+                    }
+                    if (fallback_ex) {
+                        ctx.problem(StatusCode::MethodNotAllowed, "Method Not Allowed", "Method not allowed for requested route");
+                    }
                 } else {
-                    co_await run_chain(global_middleware_, {}, 0, *match_res.handler, ctx);
+                    ctx.problem(StatusCode::MethodNotAllowed, "Method Not Allowed", "Method " + std::string(to_string(req.method())) + " is not allowed for " + std::string(req.path()));
                 }
-            } catch (...) {
-                ex = std::current_exception();
-            }
-
-            if (ex) {
-                if (error_handler_) {
-                    std::exception_ptr err_handler_ex{nullptr};
+            } else {
+                if (not_found_handler_) {
+                    std::exception_ptr fallback_ex{nullptr};
                     try {
-                        co_await error_handler_(ctx, ex);
+                        co_await not_found_handler_(ctx);
                     } catch (...) {
-                        err_handler_ex = std::current_exception();
+                        fallback_ex = std::current_exception();
                     }
-
-                    if (err_handler_ex) {
-                        std::string detail = "Unknown error in custom error handler";
-                        try {
-                            std::rethrow_exception(err_handler_ex);
-                        } catch (const std::exception& inner) {
-                            detail = inner.what();
-                        } catch (...) {}
-                        ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                    if (fallback_ex) {
+                        ctx.problem(StatusCode::NotFound, "Not Found", "Requested route was not found");
                     }
                 } else {
-                    std::string detail = "An internal server error occurred.";
+                    ctx.problem(StatusCode::NotFound, "Not Found", "Cannot " + std::string(to_string(req.method())) + " " + std::string(req.path()));
+                }
+            }
+        };
+
+        std::exception_ptr ex{nullptr};
+        try {
+            if (global_middleware_.empty()) {
+                co_await execute_route();
+            } else {
+                Handler terminal = [&](Context&) -> core::Task<void> {
+                    co_await execute_route();
+                };
+                co_await run_chain(global_middleware_, {}, 0, terminal, ctx);
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+
+        if (ex) {
+            if (error_handler_) {
+                std::exception_ptr err_handler_ex{nullptr};
+                try {
+                    co_await error_handler_(ctx, ex);
+                } catch (...) {
+                    err_handler_ex = std::current_exception();
+                }
+
+                if (err_handler_ex) {
+                    std::string detail = "Unknown error in custom error handler";
                     try {
-                        std::rethrow_exception(ex);
-                    } catch (const std::exception& e) {
-                        detail = e.what();
-                    } catch (...) {
-                        detail = "Unknown exception occurred.";
-                    }
+                        std::rethrow_exception(err_handler_ex);
+                    } catch (const std::exception& inner) {
+                        detail = inner.what();
+                    } catch (...) {}
                     ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
                 }
-            }
-        } else if (match_res.method_not_allowed) {
-            Context ctx(req, res, services);
-            if (method_not_allowed_handler_) {
-                std::exception_ptr fallback_ex{nullptr};
-                try {
-                    co_await method_not_allowed_handler_(ctx);
-                } catch (...) {
-                    fallback_ex = std::current_exception();
-                }
-                if (fallback_ex) {
-                    ctx.problem(StatusCode::MethodNotAllowed, "Method Not Allowed", "Method not allowed for requested route");
-                }
             } else {
-                ctx.problem(StatusCode::MethodNotAllowed, "Method Not Allowed", "Method " + std::string(to_string(req.method())) + " is not allowed for " + std::string(req.path()));
-            }
-        } else {
-            Context ctx(req, res, services);
-            if (not_found_handler_) {
-                std::exception_ptr fallback_ex{nullptr};
+                std::string detail = "An internal server error occurred.";
                 try {
-                    co_await not_found_handler_(ctx);
+                    std::rethrow_exception(ex);
+                } catch (const std::exception& e) {
+                    detail = e.what();
                 } catch (...) {
-                    fallback_ex = std::current_exception();
+                    detail = "Unknown exception occurred.";
                 }
-                if (fallback_ex) {
-                    ctx.problem(StatusCode::NotFound, "Not Found", "Requested route was not found");
-                }
-            } else {
-                ctx.problem(StatusCode::NotFound, "Not Found", "Cannot " + std::string(to_string(req.method())) + " " + std::string(req.path()));
+                ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
             }
         }
     }
