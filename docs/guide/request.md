@@ -121,6 +121,34 @@ size_t count = headers.size();
 
 ---
 
+## Reading Cookies (`req.cookie()`)
+
+Inbound HTTP cookies sent by the client via the `Cookie` header can be retrieved directly using `ctx.req().cookie(name)`.
+
+Cookie lookups are zero-copy and zero-allocation, returning an `std::optional<std::string_view>` directly referencing the socket buffer:
+
+```cpp
+server.router().get("/dashboard", [](Context& ctx) -> Task<void> {
+    std::optional<std::string_view> session_id = ctx.req().cookie("session_id");
+
+    if (!session_id) {
+        ctx.res().status(StatusCode::Unauthorized).text("Missing session cookie");
+        co_return;
+    }
+
+    // Zero-allocation access to cookie value
+    ctx.res().text("Authenticated with session: " + std::string(*session_id));
+    co_return;
+});
+```
+
+Key features:
+- **Zero-Allocation**: No dynamic memory allocations during parsing.
+- **RFC 6265 Compliance**: Strips whitespace around delimiters and strips surrounding double-quotes if values are quoted (e.g., `Cookie: token="abc"` produces `abc`).
+- **Missing Cookie Safety**: Returns `std::nullopt` if the cookie name or the `Cookie` header is absent.
+
+---
+
 ## HTTP Protocol & RFC Compliance
 
 The `Request` object exposes helper methods for HTTP/1.1 and HTTP/2 protocol negotiation:

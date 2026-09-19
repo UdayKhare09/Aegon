@@ -96,6 +96,50 @@ public:
     }
 
     /**
+     * @brief Parse a single cookie value by name from the inbound "Cookie" header.
+     * Zero-allocation and zero-copy.
+     *
+     * @param key The cookie name to look up
+     * @return std::optional<std::string_view> containing the unquoted cookie value, or std::nullopt
+     */
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view key) const noexcept {
+        auto raw = header("cookie");
+        if (!raw || raw->empty()) return std::nullopt;
+        std::string_view c = *raw;
+        while (!c.empty()) {
+            while (!c.empty() && (c.front() == ' ' || c.front() == '\t')) {
+                c.remove_prefix(1);
+            }
+            if (c.empty()) break;
+            size_t semi = c.find(';');
+            std::string_view pair = (semi != std::string_view::npos) ? c.substr(0, semi) : c;
+            size_t eq = pair.find('=');
+            if (eq != std::string_view::npos) {
+                std::string_view k = pair.substr(0, eq);
+                while (!k.empty() && (k.back() == ' ' || k.back() == '\t')) {
+                    k.remove_suffix(1);
+                }
+                if (k == key) {
+                    std::string_view v = pair.substr(eq + 1);
+                    while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) {
+                        v.remove_prefix(1);
+                    }
+                    while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) {
+                        v.remove_suffix(1);
+                    }
+                    if (v.size() >= 2 && v.front() == '"' && v.back() == '"') {
+                        v = v.substr(1, v.size() - 2);
+                    }
+                    return v;
+                }
+            }
+            if (semi == std::string_view::npos) break;
+            c.remove_prefix(semi + 1);
+        }
+        return std::nullopt;
+    }
+
+    /**
      * @brief Binds inbound JSON body into typed DTO T with automatic validation & error response.
      */
     template <typename T>

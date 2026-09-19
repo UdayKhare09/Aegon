@@ -270,6 +270,11 @@ add_executable(test_security_headers
 )
 target_link_libraries(test_security_headers PRIVATE aegon_http aegon_core aegon_uuid)
 
+add_executable(test_cookie
+    tests/test_cookie.cpp
+)
+target_link_libraries(test_cookie PRIVATE aegon_http aegon_core aegon_uuid)
+
 # Test Registrations for CTest
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
@@ -295,6 +300,7 @@ add_test(NAME error_handling COMMAND test_error_handling)
 add_test(NAME middleware COMMAND test_middleware)
 add_test(NAME cors COMMAND test_cors)
 add_test(NAME security_headers COMMAND test_security_headers)
+add_test(NAME cookie COMMAND test_cookie)
 
 # Samples
 add_subdirectory(samples/adv)

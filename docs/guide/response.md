@@ -110,6 +110,70 @@ ctx.res()
 
 ---
 
+## Setting HTTP Cookies (`.set_cookie()`)
+
+Outgoing HTTP cookies are configured using `ctx.res().set_cookie({ ... })` with modern C++ designated initializers via `CookieOptions`.
+
+### Setting a Secure Session Cookie
+
+```cpp
+ctx.res().set_cookie({
+    .name = "session_id",
+    .value = token,
+    .path = "/",
+    .max_age = std::chrono::hours(24),
+    .same_site = SameSite::Strict,
+    .http_only = true,
+    .secure = true
+});
+```
+
+### Setting Multiple Cookies
+
+HTTP allows multiple `Set-Cookie` response headers. Calling `.set_cookie()` multiple times appends individual `Set-Cookie` headers to the response without overwriting:
+
+```cpp
+ctx.res()
+    .set_cookie({
+        .name = "session_id",
+        .value = token,
+        .path = "/",
+        .http_only = true,
+        .secure = true,
+        .same_site = SameSite::Strict
+    })
+    .set_cookie({
+        .name = "theme",
+        .value = "dark",
+        .path = "/",
+        .same_site = SameSite::Lax
+    });
+```
+
+### Clearing / Expiring Cookies (`.clear_cookie()`)
+
+To delete a cookie on the client, use `.clear_cookie(name, path, domain)`. This automatically sends `Max-Age=0` causing the client browser to purge it immediately:
+
+```cpp
+ctx.res().clear_cookie("session_id", "/");
+```
+
+### `CookieOptions` Reference
+
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `name` | `std::string_view` | *(required)* | Cookie name identifier. |
+| `value` | `std::string_view` | `""` | Cookie value payload. |
+| `path` | `std::string_view` | `"/"` | URL path scope for the cookie. |
+| `domain` | `std::string_view` | `""` | Optional domain scope (e.g. `"example.com"`). |
+| `max_age` | `std::optional<std::chrono::seconds>` | `std::nullopt` | Lifetime in seconds (`std::chrono::seconds`, `std::chrono::hours`, etc.). |
+| `same_site` | `SameSite` | `SameSite::Lax` | Cross-site policy: `SameSite::Lax`, `SameSite::Strict`, `SameSite::None`, or `SameSite::Default`. |
+| `http_only` | `bool` | `false` | Prevents clientside JavaScript (`document.cookie`) access (XSS mitigation). |
+| `secure` | `bool` | `false` | Instructs the browser to only transmit the cookie over HTTPS. |
+| `partitioned` | `bool` | `false` | Enables CHIPS (Cookies Having Independent Partitioned State) for embedded contexts. |
+
+---
+
 ## Static File Serving
 
 Aegon supports high-speed static file serving backed by Linux kernel zero-copy mechanisms:

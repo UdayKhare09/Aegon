@@ -2,6 +2,7 @@
 
 #include "http/Protocol.h"
 #include "http/HeaderMap.h"
+#include "http/Cookie.h"
 #include <glaze/glaze.hpp>
 #include <string>
 #include <string_view>
@@ -38,6 +39,30 @@ public:
         std::string_view n = *(owned_strings_.end() - 2);
         headers_.set(n, v);
         return *this;
+    }
+
+    /**
+     * @brief Set an HTTP cookie using modern C++ designated initializers.
+     * Appends a Set-Cookie header per RFC 6265. Supports multiple cookies per response.
+     */
+    Response& set_cookie(const CookieOptions& options) {
+        std::string cookie_str = format_cookie(options);
+        owned_strings_.push_back(std::move(cookie_str));
+        headers_.add("Set-Cookie", owned_strings_.back());
+        return *this;
+    }
+
+    /**
+     * @brief Clear an HTTP cookie on the client by expiring it immediately (Max-Age=0).
+     */
+    Response& clear_cookie(std::string_view name, std::string_view path = "/", std::string_view domain = {}) {
+        return set_cookie({
+            .name = name,
+            .value = "",
+            .path = path,
+            .domain = domain,
+            .max_age = std::chrono::seconds(0)
+        });
     }
 
     Response& body(std::string b) {
