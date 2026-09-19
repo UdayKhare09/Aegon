@@ -41,6 +41,11 @@ public:
     // Pin this event loop thread to a specific CPU core
     static void pin_to_core(int core_id);
 
+    // Return CPUs currently permitted to this process/container. This is
+    // important because logical CPU numbering is not necessarily contiguous
+    // under cpuset/container constraints.
+    [[nodiscard]] static std::vector<int> available_cpus();
+
     // Get current thread's active EventLoop (if running)
     static EventLoop* current() noexcept;
 
