@@ -5,6 +5,7 @@
 #include <iostream>
 #include <iomanip>
 #include <sstream>
+#include <cctype>
 
 namespace aegon::http::client {
 
@@ -42,6 +43,7 @@ RequestBuilder::RequestBuilder(HttpClient& client, Method method, std::string ur
     state_->version = client.config().default_protocol;
     state_->timeout = client.config().timeout;
     state_->follow_redirects = client.config().follow_redirects;
+    state_->max_redirects = client.config().max_redirects;
     header("User-Agent", client.config().user_agent);
 }
 
@@ -157,6 +159,11 @@ RequestBuilder& RequestBuilder::follow_redirects(bool follow) {
     return *this;
 }
 
+RequestBuilder& RequestBuilder::max_redirects(uint8_t max_redirs) {
+    state_->max_redirects = max_redirs;
+    return *this;
+}
+
 RequestBuilder& RequestBuilder::retry(uint8_t count, std::chrono::milliseconds backoff) {
     state_->retries = count;
     state_->retry_backoff = backoff;
@@ -172,26 +179,116 @@ core::Task<Response> RequestBuilder::send() {
     co_return co_await state->client.execute(state, *loop);
 }
 
-static core::Task<void> run_sync_request(std::shared_ptr<RequestState> state,
-                                         core::EventLoop* loop,
-                                         std::optional<Response>* out_res) {
-    *out_res = co_await state->client.execute(state, *loop);
-    loop->stop();
+static std::shared_ptr<RequestState> check_redirect(
+    const std::shared_ptr<RequestState>& current_state,
+    const Response& res,
+    uint8_t& redirect_count,
+    const ClientConfig& config) {
+    if (!current_state->follow_redirects || !config.follow_redirects) {
+        return nullptr;
+    }
+
+    auto status = res.status();
+    bool is_redirect = (status == StatusCode::MovedPermanently ||
+                        status == StatusCode::Found ||
+                        status == StatusCode::SeeOther ||
+                        status == StatusCode::TemporaryRedirect ||
+                        status == StatusCode::PermanentRedirect);
+
+    if (!is_redirect) {
+        return nullptr;
+    }
+
+    auto loc_opt = res.headers().get("location");
+    if (!loc_opt || loc_opt->empty()) {
+        return nullptr;
+    }
+
+    if (++redirect_count > current_state->max_redirects) {
+        return nullptr;
+    }
+
+    auto current_url = Url::parse(current_state->url);
+    if (!current_url) {
+        return nullptr;
+    }
+
+    std::string next_url = current_url->resolve(*loc_opt);
+    auto next_parsed = Url::parse(next_url);
+    if (!next_parsed) {
+        return nullptr;
+    }
+
+    Method next_method = current_state->method;
+    std::string next_body = current_state->body;
+
+    // RFC 9110 § 15.4: 303 must change to GET (or HEAD if original was HEAD) and drop body
+    // 301 & 302: user agents commonly rewrite POST to GET
+    if (status == StatusCode::SeeOther ||
+        ((status == StatusCode::MovedPermanently || status == StatusCode::Found) && current_state->method == Method::POST)) {
+        next_method = (current_state->method == Method::HEAD) ? Method::HEAD : Method::GET;
+        next_body.clear();
+    }
+
+    auto next_state = std::make_shared<RequestState>(current_state->client, next_method, std::move(next_url));
+    next_state->version = current_state->version;
+    if (!next_parsed->is_https() && next_state->version == HttpVersion::Http3) {
+        next_state->version = HttpVersion::Http1_1;
+    }
+    next_state->timeout = current_state->timeout;
+    next_state->follow_redirects = current_state->follow_redirects;
+    next_state->max_redirects = current_state->max_redirects;
+    next_state->body = std::move(next_body);
+
+    bool cross_origin = (current_url->scheme() != next_parsed->scheme() ||
+                         current_url->host() != next_parsed->host() ||
+                         current_url->port() != next_parsed->port());
+
+    for (const auto& h : current_state->headers) {
+        if (cross_origin && (iequals(h.name, "authorization") || iequals(h.name, "cookie") || iequals(h.name, "proxy-authorization"))) {
+            continue;
+        }
+        if (next_method == Method::GET && (iequals(h.name, "content-type") || iequals(h.name, "content-length"))) {
+            continue;
+        }
+        next_state->headers.push_back(h);
+    }
+
+    if (!cross_origin) {
+        next_state->cookies = current_state->cookies;
+        auto set_cookie = res.headers().get("set-cookie");
+        if (set_cookie && !set_cookie->empty()) {
+            auto semi = set_cookie->find(';');
+            std::string_view cookie_pair = (semi == std::string_view::npos) ? *set_cookie : set_cookie->substr(0, semi);
+            while (!cookie_pair.empty() && std::isspace(static_cast<unsigned char>(cookie_pair.front()))) cookie_pair.remove_prefix(1);
+            while (!cookie_pair.empty() && std::isspace(static_cast<unsigned char>(cookie_pair.back()))) cookie_pair.remove_suffix(1);
+            if (!cookie_pair.empty()) {
+                next_state->cookies.push_back(std::string(cookie_pair));
+            }
+        }
+    }
+
+    return next_state;
 }
 
-Response RequestBuilder::send_sync() {
-    if (state_->version == HttpVersion::Http2) {
-        Http2ClientSession session(state_->client.config().tls);
-        return session.execute_sync(state_);
+static Response execute_single_sync(std::shared_ptr<RequestState> state) {
+    if (state->version == HttpVersion::Http2) {
+        Http2ClientSession session(state->client.config().tls);
+        return session.execute_sync(state);
     }
-    if (state_->version == HttpVersion::Http3) {
-        Http3ClientSession session(state_->client.config().tls);
-        return session.execute_sync(state_);
+    if (state->version == HttpVersion::Http3) {
+        Http3ClientSession session(state->client.config().tls);
+        return session.execute_sync(state);
     }
     core::EventLoop temp_loop(256, 128, 4096);
     std::optional<Response> sync_res;
 
-    temp_loop.spawn(run_sync_request(state_, &temp_loop, &sync_res));
+    auto sync_task = [](std::shared_ptr<RequestState> st, core::EventLoop* l, std::optional<Response>* out) -> core::Task<void> {
+        *out = co_await st->client.execute_single(st, *l);
+        l->stop();
+    };
+
+    temp_loop.spawn(sync_task(state, &temp_loop, &sync_res));
     temp_loop.run();
 
     if (sync_res) {
@@ -200,6 +297,20 @@ Response RequestBuilder::send_sync() {
     Response err_res;
     err_res.status(StatusCode::InternalServerError).body("Failed to execute request: loop execution error");
     return err_res;
+}
+
+Response RequestBuilder::send_sync() {
+    uint8_t redirect_count = 0;
+    auto current_state = state_;
+
+    while (true) {
+        Response res = execute_single_sync(current_state);
+        auto next_state = check_redirect(current_state, res, redirect_count, current_state->client.config());
+        if (!next_state) {
+            return res;
+        }
+        current_state = std::move(next_state);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -272,6 +383,20 @@ core::Task<Response> HttpClient::execute(const RequestBuilder& req, core::EventL
 }
 
 core::Task<Response> HttpClient::execute(std::shared_ptr<RequestState> state, core::EventLoop& loop) {
+    uint8_t redirect_count = 0;
+    auto current_state = state;
+
+    while (true) {
+        Response res = co_await execute_single(current_state, loop);
+        auto next_state = check_redirect(current_state, res, redirect_count, config_);
+        if (!next_state) {
+            co_return res;
+        }
+        current_state = std::move(next_state);
+    }
+}
+
+core::Task<Response> HttpClient::execute_single(std::shared_ptr<RequestState> state, core::EventLoop& loop) {
     if (state->version == HttpVersion::Http2) {
         Http2ClientSession session(config_.tls);
         co_return co_await session.execute(state, loop);

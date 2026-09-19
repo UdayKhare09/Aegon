@@ -32,6 +32,7 @@ struct RequestState {
     std::chrono::milliseconds timeout{30000};
     HttpVersion version{HttpVersion::Http1_1};
     bool follow_redirects{true};
+    uint8_t max_redirects{10};
     uint8_t retries{0};
     std::chrono::milliseconds retry_backoff{100};
 
@@ -65,6 +66,7 @@ public:
     // Body
     RequestBuilder& body(std::string b);
     RequestBuilder& body(std::string_view b);
+    RequestBuilder& body(const char* s) { return body(std::string_view(s)); }
     RequestBuilder& body(std::span<const uint8_t> bytes);
 
     template <typename T>
@@ -84,6 +86,7 @@ public:
     RequestBuilder& http3() { return version(HttpVersion::Http3); }
     RequestBuilder& timeout(std::chrono::milliseconds ms);
     RequestBuilder& follow_redirects(bool follow);
+    RequestBuilder& max_redirects(uint8_t max_redirs);
     RequestBuilder& retry(uint8_t count, std::chrono::milliseconds backoff = std::chrono::milliseconds(100));
 
     // Execute
@@ -98,6 +101,7 @@ public:
     [[nodiscard]] const std::string& body() const noexcept { return state_->body; }
     [[nodiscard]] std::chrono::milliseconds timeout() const noexcept { return state_->timeout; }
     [[nodiscard]] bool follow_redirects() const noexcept { return state_->follow_redirects; }
+    [[nodiscard]] uint8_t max_redirects() const noexcept { return state_->max_redirects; }
     [[nodiscard]] uint8_t retries() const noexcept { return state_->retries; }
     [[nodiscard]] std::chrono::milliseconds retry_backoff() const noexcept { return state_->retry_backoff; }
     [[nodiscard]] const std::shared_ptr<RequestState>& state() const noexcept { return state_; }

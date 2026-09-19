@@ -137,6 +137,32 @@ public:
         return (is_https_ ? "https://" : "http://") + std::string(host_) + ":" + std::to_string(port_);
     }
 
+    /**
+     * @brief Resolves a relative or absolute Location header URL against this base URL.
+     */
+    [[nodiscard]] std::string resolve(std::string_view location) const {
+        if (location.empty()) return raw_;
+        if (location.starts_with("http://") || location.starts_with("https://") ||
+            location.starts_with("HTTP://") || location.starts_with("HTTPS://")) {
+            return std::string(location);
+        }
+        if (location.starts_with("//")) {
+            return std::string(scheme_) + ":" + std::string(location);
+        }
+        if (location.front() == '/') {
+            return origin() + std::string(location);
+        }
+        // Relative path
+        std::string p(path_);
+        size_t last_slash = p.rfind('/');
+        if (last_slash != std::string::npos) {
+            p = p.substr(0, last_slash + 1);
+        } else {
+            p = "/";
+        }
+        return origin() + p + std::string(location);
+    }
+
 private:
     std::string raw_{};
     std::string_view scheme_{};

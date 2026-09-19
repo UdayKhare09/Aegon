@@ -48,6 +48,7 @@ public:
 
     void close();
 
+    core::Task<Response> execute_single(std::shared_ptr<RequestState> state, core::EventLoop& loop);
     core::Task<Response> execute(std::shared_ptr<RequestState> state, core::EventLoop& loop);
     core::Task<Response> execute(const RequestBuilder& req, core::EventLoop& loop);
 

@@ -513,6 +513,117 @@ void test_http2_loopback() {
     std::cout << "  -> PASS\n";
 }
 
+void test_redirect_chasing() {
+    std::cout << "[TEST 8] Automatic Redirect Chasing (301, 302, 303, Limits, Async)..." << std::endl;
+
+    constexpr uint16_t PORT = 29882;
+    Router router;
+
+    router.get("/final-destination", [](Context& ctx) {
+        ctx.res().status(StatusCode::Ok).text("Arrived at final destination!");
+    });
+
+    router.get("/redirect-302-rel", [](Context& ctx) {
+        ctx.res().status(StatusCode::Found)
+            .header("Location", "/final-destination")
+            .text("Redirecting...");
+    });
+
+    router.get("/redirect-301-abs", [](Context& ctx) {
+        ctx.res().status(StatusCode::MovedPermanently)
+            .header("Location", "http://127.0.0.1:29882/final-destination")
+            .text("Moved permanently...");
+    });
+
+    router.post("/redirect-303", [](Context& ctx) {
+        ctx.res().status(StatusCode::SeeOther)
+            .header("Location", "/final-destination")
+            .text("See other...");
+    });
+
+    // Circular redirect loop
+    router.get("/loop-a", [](Context& ctx) {
+        ctx.res().status(StatusCode::Found).header("Location", "/loop-b");
+    });
+    router.get("/loop-b", [](Context& ctx) {
+        ctx.res().status(StatusCode::Found).header("Location", "/loop-a");
+    });
+
+    Server server(std::move(router));
+    server.listen(PORT, "127.0.0.1");
+
+    std::thread server_thread([&]() {
+        server.run();
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    HttpClient client;
+
+    // 1. Synchronous relative redirect (302)
+    {
+        Response res = client.get("http://127.0.0.1:29882/redirect-302-rel").send_sync();
+        assert(res.status() == StatusCode::Ok);
+        assert(res.body() == "Arrived at final destination!");
+    }
+
+    // 2. Synchronous absolute redirect (301)
+    {
+        Response res = client.get("http://127.0.0.1:29882/redirect-301-abs").send_sync();
+        assert(res.status() == StatusCode::Ok);
+        assert(res.body() == "Arrived at final destination!");
+    }
+
+    // 3. Opt-out of following redirects
+    {
+        Response res = client.get("http://127.0.0.1:29882/redirect-302-rel")
+            .follow_redirects(false)
+            .send_sync();
+        assert(res.status() == StatusCode::Found);
+        auto loc = res.headers().get("location");
+        assert(loc.has_value());
+        assert(*loc == "/final-destination");
+    }
+
+    // 4. Max redirects limit protects against infinite loops
+    {
+        Response res = client.get("http://127.0.0.1:29882/loop-a")
+            .max_redirects(3)
+            .send_sync();
+        assert(res.status() == StatusCode::Found);
+    }
+
+    // 5. POST with 303 See Other rewrites method to GET
+    {
+        Response res = client.post("http://127.0.0.1:29882/redirect-303")
+            .body(R"({"some":"payload"})")
+            .send_sync();
+        assert(res.status() == StatusCode::Ok);
+        assert(res.body() == "Arrived at final destination!");
+    }
+
+    // 6. Asynchronous coroutine send() follows redirects inside EventLoop
+    {
+        core::EventLoop loop(256, 128, 4096);
+        bool async_redirect_done = false;
+        auto task = [&]() -> core::Task<void> {
+            Response ares = co_await client.get("http://127.0.0.1:29882/redirect-302-rel").send();
+            assert(ares.status() == StatusCode::Ok);
+            assert(ares.body() == "Arrived at final destination!");
+            async_redirect_done = true;
+            loop.stop();
+        };
+        loop.spawn(task());
+        loop.run();
+        assert(async_redirect_done);
+    }
+
+    client.close();
+    stop_server(server, PORT, server_thread);
+
+    std::cout << "  -> PASS\n";
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "       Aegon HttpClient Test Suite\n";
@@ -525,6 +636,7 @@ int main() {
     test_async_coroutine_usage();
     test_http3_loopback();
     test_http2_loopback();
+    test_redirect_chasing();
 
     std::cout << "\nALL HTTP CLIENT TESTS PASSED!\n";
     return 0;
