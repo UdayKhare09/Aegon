@@ -44,8 +44,10 @@ export default defineConfig({
               items: [
                 { text: 'CORS', link: '/guide/cors' },
                 { text: 'Security Headers', link: '/guide/security-headers' },
+                { text: 'Authentication & RBAC', link: '/guide/auth' },
               ]
             },
+            { text: 'JWT Engine', link: '/guide/jwt' },
           ]
         },
         {

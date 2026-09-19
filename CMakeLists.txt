@@ -275,6 +275,21 @@ add_executable(test_cookie
 )
 target_link_libraries(test_cookie PRIVATE aegon_http aegon_core aegon_uuid)
 
+add_executable(test_jwt
+    tests/test_jwt.cpp
+)
+target_link_libraries(test_jwt PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_auth_middleware
+    tests/test_auth_middleware.cpp
+)
+target_link_libraries(test_auth_middleware PRIVATE aegon_http aegon_core aegon_uuid)
+
+add_executable(test_rbac_guard
+    tests/test_rbac_guard.cpp
+)
+target_link_libraries(test_rbac_guard PRIVATE aegon_http aegon_core aegon_uuid)
+
 # Test Registrations for CTest
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
@@ -301,6 +316,9 @@ add_test(NAME middleware COMMAND test_middleware)
 add_test(NAME cors COMMAND test_cors)
 add_test(NAME security_headers COMMAND test_security_headers)
 add_test(NAME cookie COMMAND test_cookie)
+add_test(NAME jwt COMMAND test_jwt)
+add_test(NAME auth_middleware COMMAND test_auth_middleware)
+add_test(NAME rbac_guard COMMAND test_rbac_guard)
 
 # Samples
 add_subdirectory(samples/adv)
