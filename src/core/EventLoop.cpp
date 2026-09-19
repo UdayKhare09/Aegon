@@ -3,6 +3,7 @@
 #include <sched.h>
 #include <stdexcept>
 #include <algorithm>
+#include <cerrno>
 
 namespace aegon::core {
 
@@ -28,6 +29,23 @@ void EventLoop::pin_to_core(int core_id) {
     if (rc != 0) {
         throw std::system_error(rc, std::generic_category(), "pthread_setaffinity_np failed");
     }
+}
+
+std::vector<int> EventLoop::available_cpus() {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    if (sched_getaffinity(0, sizeof(cpuset), &cpuset) != 0) {
+        throw std::system_error(errno, std::generic_category(), "sched_getaffinity failed");
+    }
+
+    std::vector<int> cpus;
+    cpus.reserve(CPU_COUNT(&cpuset));
+    for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+        if (CPU_ISSET(cpu, &cpuset)) {
+            cpus.push_back(cpu);
+        }
+    }
+    return cpus;
 }
 
 void EventLoop::spawn(Task<void> task) {
