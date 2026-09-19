@@ -361,8 +361,13 @@ public:
         [[nodiscard]] AcceptResult await_resume() noexcept;
     };
 
-    [[nodiscard]] StreamAwaiter next() noexcept {
-        return StreamAwaiter{*this};
+    // The kernel keeps emitting CQEs for the original multishot SQE and
+    // returns its original user_data each time. Therefore the awaiter object
+    // referenced by that SQE must remain alive for the entire stream lifetime.
+    // Returning the stable member avoids a use-after-lifetime bug on the second
+    // and subsequent accepts.
+    [[nodiscard]] StreamAwaiter& next() noexcept {
+        return awaiter_;
     }
 
     void cancel() noexcept;
