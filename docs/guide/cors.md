@@ -1,6 +1,6 @@
 # CORS Middleware
 
-Aegon provides a built-in, zero-allocation **CORS (Cross-Origin Resource Sharing)** middleware compliant with the W3C Fetch specification and enhanced with enterprise-grade features inspired by **Spring Boot**.
+Aegon provides a built-in, zero-allocation **CORS (Cross-Origin Resource Sharing)** middleware compliant with the W3C Fetch specification and enhanced with enterprise-grade origin validation, subdomain globbing, and private network controls.
 
 ```cpp
 #include "http/middleware/Cors.h"
@@ -82,7 +82,7 @@ struct CorsConfig {
 
 ### 1. Subdomain Pattern Matching (`origin_patterns`)
 
-Modern cloud architectures deploy frontends across dynamic subdomains or ephemeral staging environments. Aegon supports Spring Boot-style wildcard globbing:
+Modern cloud architectures deploy frontends across dynamic subdomains or ephemeral staging environments. Aegon provides native, high-performance wildcard globbing:
 
 ```cpp
 app.use(cors(CorsConfig{

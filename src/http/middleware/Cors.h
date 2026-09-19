@@ -58,10 +58,10 @@ struct CorsConfig {
     // 1. Exact origin matching (e.g. {"https://myapp.com", "http://localhost:3000"} or {"*"})
     std::vector<std::string> allowed_origins{};
 
-    // 2. Spring Boot-style subdomain glob/wildcard patterns (e.g. {"https://*.myapp.com", "http://localhost:*"})
+    // 2. Subdomain glob/wildcard patterns (e.g. {"https://*.myapp.com", "http://localhost:*"})
     std::vector<std::string> origin_patterns{};
 
-    // 3. Spring Boot-style dynamic origin validator lambda (e.g. for runtime multi-tenant DB lookups)
+    // 3. Dynamic origin validator lambda (e.g. for runtime multi-tenant DB lookups)
     std::function<bool(std::string_view origin)> origin_validator{nullptr};
 
     // 4. Allowed HTTP methods for preflight
