@@ -329,6 +329,11 @@ add_executable(test_config
 )
 target_link_libraries(test_config PRIVATE aegon_config)
 
+add_executable(benchmark_multicore
+    tests/benchmark_multicore.cpp
+)
+target_link_libraries(benchmark_multicore PRIVATE aegon_http aegon_core aegon_uuid)
+
 # Test Registrations for CTest
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
