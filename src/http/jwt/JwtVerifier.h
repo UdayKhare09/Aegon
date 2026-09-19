@@ -2,6 +2,7 @@
 
 #include "http/jwt/JwtAlgorithm.h"
 #include "http/jwt/JwtDenylist.h"
+#include "http/jwt/Jwks.h"
 #include <glaze/glaze.hpp>
 #include <string>
 #include <string_view>
@@ -9,6 +10,7 @@
 #include <expected>
 #include <memory>
 #include <chrono>
+#include <functional>
 #include <stdexcept>
 
 namespace aegon::http::jwt {
@@ -19,8 +21,11 @@ namespace aegon::http::jwt {
 struct JwtVerifierOptions {
     std::optional<std::string> issuer{};
     std::optional<std::string> audience{};
+    std::optional<std::string> expected_kid{};
     int64_t leeway_seconds{0};
     std::shared_ptr<IJwtDenylist> denylist{nullptr};
+    std::shared_ptr<Jwks> jwks{nullptr};
+    std::function<std::optional<std::string>(std::string_view kid)> key_resolver{nullptr};
 };
 
 /**
@@ -33,6 +38,7 @@ struct JwtResult {
     std::optional<std::string> audience{};
     std::optional<std::string> subject{};
     std::optional<std::string> jti{};
+    std::optional<std::string> kid{};
     std::optional<int64_t> exp{};
     std::optional<int64_t> iat{};
     std::optional<int64_t> nbf{};
@@ -48,6 +54,7 @@ struct JwtResult<void> {
     std::optional<std::string> audience{};
     std::optional<std::string> subject{};
     std::optional<std::string> jti{};
+    std::optional<std::string> kid{};
     std::optional<int64_t> exp{};
     std::optional<int64_t> iat{};
     std::optional<int64_t> nbf{};
@@ -61,7 +68,7 @@ template <typename DefaultClaims = void>
 class JwtVerifier {
 public:
     /**
-     * @brief Constructs a JwtVerifier.
+     * @brief Constructs a JwtVerifier with a static key or PEM.
      *
      * @param alg Expected algorithm (e.g. HS256, RS256, ES256).
      * @param key_or_pem For HMAC: shared secret string. For RSA/ECDSA: PEM formatted public or private key.
@@ -84,6 +91,19 @@ public:
             if (!pkey_) {
                 throw std::invalid_argument("Failed to parse public key PEM for " + std::string(algorithm_to_string(alg)));
             }
+        }
+    }
+
+    /**
+     * @brief Constructs a JwtVerifier that dynamically resolves public keys via a JWKS or key_resolver callback.
+     *
+     * @param alg Expected algorithm (e.g. RS256, ES256).
+     * @param options Options containing jwks or key_resolver.
+     */
+    JwtVerifier(Algorithm alg, JwtVerifierOptions options)
+        : alg_(alg), options_(std::move(options)) {
+        if (!options_.jwks && !options_.key_resolver) {
+            throw std::invalid_argument("Dynamic JwtVerifier requires either a jwks or key_resolver in options");
         }
     }
 
@@ -135,6 +155,13 @@ public:
             return std::unexpected(JwtError::AlgorithmMismatch);
         }
 
+        // Validate expected_kid if configured
+        if (options_.expected_kid.has_value()) {
+            if (h.kid.empty() || h.kid != *options_.expected_kid) {
+                return std::unexpected(JwtError::KeyNotFound);
+            }
+        }
+
         // 3. Decode signature & verify crypto
         auto raw_sig = base64url_decode(sig_b64);
         if (!raw_sig) {
@@ -143,7 +170,30 @@ public:
 
         std::string_view signing_input = token.substr(0, second_dot);
         bool sig_valid = false;
-        if (is_hmac(alg_)) {
+
+        if (options_.jwks) {
+            if (h.kid.empty()) {
+                return std::unexpected(JwtError::KeyNotFound);
+            }
+            auto pkey = options_.jwks->get_key(h.kid);
+            if (!pkey) {
+                return std::unexpected(JwtError::KeyNotFound);
+            }
+            sig_valid = verify_asymmetric(alg_, pkey.get(), signing_input, *raw_sig);
+        } else if (options_.key_resolver) {
+            auto key_str_opt = options_.key_resolver(h.kid);
+            if (!key_str_opt) {
+                return std::unexpected(JwtError::KeyNotFound);
+            }
+            if (is_hmac(alg_)) {
+                sig_valid = verify_hmac(alg_, *key_str_opt, signing_input, *raw_sig);
+            } else {
+                auto pkey = load_public_key_pem(*key_str_opt);
+                if (!pkey) pkey = load_private_key_pem(*key_str_opt);
+                if (!pkey) return std::unexpected(JwtError::KeyError);
+                sig_valid = verify_asymmetric(alg_, pkey.get(), signing_input, *raw_sig);
+            }
+        } else if (is_hmac(alg_)) {
             sig_valid = verify_hmac(alg_, secret_, signing_input, *raw_sig);
         } else {
             sig_valid = verify_asymmetric(alg_, pkey_.get(), signing_input, *raw_sig);
@@ -168,6 +218,9 @@ public:
 
         JwtResult<TClaims> result{};
         result.raw_payload = *payload_json;
+        if (!h.kid.empty()) {
+            result.kid = h.kid;
+        }
 
         auto get_str = [](const auto& val) -> std::optional<std::string> {
             if (auto* s = val.template get_if<std::string>()) return *s;

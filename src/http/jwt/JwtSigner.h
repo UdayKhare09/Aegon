@@ -22,13 +22,14 @@ template <typename DefaultClaims = void>
 class JwtSigner {
 public:
     /**
-     * @brief Constructs a JwtSigner with an algorithm and key.
+     * @brief Constructs a JwtSigner with an algorithm, key, and optional Key ID (kid).
      *
      * @param alg Algorithm to use (e.g. HS256, RS256, ES256).
      * @param key_or_pem For HMAC: shared secret string. For RSA/ECDSA: PEM formatted private key.
+     * @param kid Optional Key ID identifying this key in a JWKS or key rotation set.
      */
-    JwtSigner(Algorithm alg, std::string key_or_pem)
-        : alg_(alg) {
+    JwtSigner(Algorithm alg, std::string key_or_pem, std::string kid = "")
+        : alg_(alg), kid_(std::move(kid)) {
         if (is_hmac(alg)) {
             if (key_or_pem.empty()) {
                 throw std::invalid_argument("HMAC secret cannot be empty");
@@ -45,8 +46,8 @@ public:
     /**
      * @brief Factory creating a JwtSigner by reading a PEM private key from a file.
      */
-    [[nodiscard]] static JwtSigner from_file(Algorithm alg, const std::string& path) {
-        return JwtSigner(alg, detail::read_file_to_string(path));
+    [[nodiscard]] static JwtSigner from_file(Algorithm alg, const std::string& path, std::string kid = "") {
+        return JwtSigner(alg, detail::read_file_to_string(path), std::move(kid));
     }
 
     /**
@@ -67,8 +68,13 @@ public:
         std::chrono::seconds ttl = std::chrono::hours(24),
         std::optional<int64_t> nbf = std::nullopt
     ) const {
-        // 1. Build Header
-        std::string header_json = "{\"alg\":\"" + std::string(algorithm_to_string(alg_)) + "\",\"typ\":\"JWT\"}";
+        // 1. Build Header (with optional kid)
+        std::string header_json;
+        if (!kid_.empty()) {
+            header_json = "{\"alg\":\"" + std::string(algorithm_to_string(alg_)) + "\",\"typ\":\"JWT\",\"kid\":\"" + kid_ + "\"}";
+        } else {
+            header_json = "{\"alg\":\"" + std::string(algorithm_to_string(alg_)) + "\",\"typ\":\"JWT\"}";
+        }
         std::string header_b64 = base64url_encode(header_json);
 
         // 2. Serialize user claims
@@ -138,11 +144,14 @@ public:
     }
 
     [[nodiscard]] Algorithm algorithm() const noexcept { return alg_; }
+    [[nodiscard]] std::string_view kid() const noexcept { return kid_; }
+    void set_kid(std::string kid) { kid_ = std::move(kid); }
 
 private:
     Algorithm alg_;
     std::string secret_{};
     std::shared_ptr<EVP_PKEY> pkey_{nullptr};
+    std::string kid_{};
 };
 
 } // namespace aegon::http::jwt

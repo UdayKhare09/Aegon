@@ -193,6 +193,95 @@ std::optional<std::string> header = JwtParser::decode_header(token);
 // Extract declared algorithm
 std::optional<Algorithm> alg = JwtParser::get_algorithm(token);
 
+// Extract Key ID (kid) from header
+std::optional<std::string> kid = JwtParser::get_kid(token);
+
 // Decode payload into typed struct without checking signature
 std::optional<UserClaims> claims = JwtParser::decode_payload<UserClaims>(token);
 ```
+
+---
+
+## JSON Web Key Sets (JWKS) & Key Rotation
+
+Aegon provides built-in support for **RFC 7517 JSON Web Key Sets (JWKS)** for both roles: acting as an **Identity Provider** (issuing tokens and publishing `/.well-known/jwks.json`) and acting as a **Resource Server** (consuming and verifying tokens from Google, Auth0, Keycloak, or another Aegon service).
+
+```cpp
+#include "http/jwt/Jwks.h"
+```
+
+### 1. Aegon as Identity Provider (Serving JWKS)
+
+To publish your active public keys so clients and API gateways can verify your tokens:
+
+```cpp
+// 1. Build a JWKS with active public keys
+Jwks jwks;
+jwks.add_key("auth-2026-v1", Algorithm::RS256, rsa_public_pem_v1);
+jwks.add_key("auth-2026-v2", Algorithm::RS256, rsa_public_pem_v2); // New rotation key
+
+// 2. Expose standard JWKS endpoint
+app.router().get("/.well-known/jwks.json", [&jwks](Context& ctx) {
+    ctx.res().header("Content-Type", "application/json")
+             .body(jwks.to_json());
+});
+
+// 3. Sign tokens stamped with the active Key ID (kid)
+JwtSigner signer(Algorithm::RS256, rsa_private_pem_v2, "auth-2026-v2");
+std::string token = signer.sign(UserClaims{ .user_id = 42 });
+```
+
+The resulting token header will automatically be:
+```json
+{
+  "alg": "RS256",
+  "typ": "JWT",
+  "kid": "auth-2026-v2"
+}
+```
+
+### 2. Aegon as Consumer (Verifying via JWKS)
+
+When verifying incoming tokens against a JWKS (either fetched from an external provider or loaded locally):
+
+```cpp
+// Parse JWKS document
+std::string jwks_json = co_await http_client.get("https://auth.example.com/.well-known/jwks.json");
+auto jwks = std::make_shared<Jwks>(Jwks::from_json(jwks_json));
+
+// Initialize verifier with JWKS (no static key needed)
+JwtVerifier<UserClaims> verifier(Algorithm::RS256, {
+    .issuer = "https://auth.example.com/",
+    .audience = "https://api.mycompany.com",
+    .jwks = jwks
+});
+
+// Verifies tokens signed with ANY valid key in the JWKS:
+auto result = verifier.verify(token);
+if (result.has_value()) {
+    std::cout << "Verified using key: " << result->kid.value_or("none") << "\n";
+}
+```
+
+### 3. Dynamic Key Rotation (`key_resolver`)
+
+For applications that resolve keys on-demand from a cache or database:
+
+```cpp
+JwtVerifier<UserClaims> verifier(Algorithm::RS256, {
+    .key_resolver = [&key_cache](std::string_view kid) -> std::optional<std::string> {
+        // Look up public PEM for this kid, or fetch from network if missing
+        return key_cache.find_key(kid);
+    }
+});
+```
+
+### 4. Zero-Downtime Key Rotation in Production
+
+During a key rotation cycle:
+1. Generate the new key pair (`v2`).
+2. Add the `v2` public key to your `Jwks` alongside `v1`.
+3. Update `JwtSigner` to start signing with `v2` and `"kid": "v2"`.
+4. API verifiers holding the updated `Jwks` can verify both `v1` (unexpired existing tokens) and `v2` (newly issued tokens) simultaneously.
+5. After all `v1` tokens have expired (e.g., 24 hours), remove `v1` from the `Jwks`. **Zero downtime and zero logged-out users.**
+

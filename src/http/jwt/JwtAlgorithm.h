@@ -121,6 +121,7 @@ enum class JwtError {
     AudienceMismatch,
     ParseError,
     KeyError,
+    KeyNotFound,
     RevokedToken
 };
 
@@ -138,6 +139,7 @@ enum class JwtError {
         case JwtError::AudienceMismatch: return "Audience mismatch (aud claim)";
         case JwtError::ParseError: return "Failed to deserialize JSON payload into claims";
         case JwtError::KeyError: return "Invalid cryptographic key or key format";
+        case JwtError::KeyNotFound: return "Key specified by kid was not found in JWKS or key resolver";
         case JwtError::RevokedToken: return "Token has been revoked (jti claim in denylist)";
     }
     return "Unknown JWT error";
@@ -152,6 +154,7 @@ namespace detail {
 struct JwtHeader {
     std::string alg;
     std::string typ{"JWT"};
+    std::string kid{};
 };
 
 inline constexpr char BASE64URL_CHARS[] =

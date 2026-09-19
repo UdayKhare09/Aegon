@@ -58,6 +58,20 @@ public:
     }
 
     /**
+     * @brief Extracts the Key ID (kid) declared in the JWT header, if present.
+     */
+    [[nodiscard]] static std::optional<std::string> get_kid(std::string_view token) {
+        auto header_opt = decode_header(token);
+        if (!header_opt) return std::nullopt;
+
+        detail::JwtHeader h{};
+        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(h, *header_opt);
+        if (ec || h.kid.empty()) return std::nullopt;
+
+        return h.kid;
+    }
+
+    /**
      * @brief Deserializes the JWT payload into a typed C++ struct or DTO without verifying signature.
      */
     template <typename TClaims>
