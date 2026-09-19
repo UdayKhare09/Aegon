@@ -1,0 +1,98 @@
+name: Multicore Performance Benchmark
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config git \
+            liburing-dev libssl-dev libnghttp2-dev \
+            libngtcp2-dev libngtcp2-crypto-ossl-dev libnghttp3-dev \
+            libsqlite3-dev libpq-dev
+
+      - name: Build wrk
+        run: |
+          git clone --depth 1 https://github.com/wg/wrk.git /tmp/wrk
+          make -C /tmp/wrk -j2
+
+      - name: Build baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add /tmp/aegon-baseline "$BASE_SHA"
+          cmake -S /tmp/aegon-baseline -B /tmp/aegon-baseline/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/aegon-baseline/build --target benchmark_multicore -j2
+
+      - name: Build candidate
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target benchmark_multicore -j2
+
+      - name: Benchmark baseline and candidate
+        run: |
+          set -euo pipefail
+          : > benchmark-results.txt
+
+          for variant in baseline candidate; do
+            if [ "$variant" = baseline ]; then
+              BIN=/tmp/aegon-baseline/build/benchmark_multicore
+            else
+              BIN=$PWD/build/benchmark_multicore
+            fi
+
+            echo "===== $variant =====" | tee -a benchmark-results.txt
+
+            for workers in 1 2 3; do
+              port=$((18080 + workers))
+              if [ "$workers" -eq 1 ]; then
+                server_cpus=0
+              elif [ "$workers" -eq 2 ]; then
+                server_cpus=0-1
+              else
+                server_cpus=0-2
+              fi
+
+              echo "--- $variant workers=$workers server_cpus=$server_cpus ---" | tee -a benchmark-results.txt
+              taskset -c "$server_cpus" "$BIN" "$workers" "$port" >"/tmp/aegon-server-$variant-$workers.log" 2>&1 &
+              pid=$!
+              trap 'kill "$pid" 2>/dev/null || true' EXIT
+
+              for i in $(seq 1 50); do
+                if curl -fsS "http://127.0.0.1:$port/ping" >/dev/null 2>&1; then
+                  break
+                fi
+                sleep 0.1
+              done
+
+              taskset -c 3 /tmp/wrk/wrk -t2 -c128 -d10s --latency "http://127.0.0.1:$port/ping" | tee -a benchmark-results.txt
+
+              kill "$pid" 2>/dev/null || true
+              wait "$pid" 2>/dev/null || true
+              trap - EXIT
+            done
+          done
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: multicore-benchmark-results
+          path: |
+            benchmark-results.txt
+            /tmp/aegon-server-*.log
