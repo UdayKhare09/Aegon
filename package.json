@@ -1,6 +1,7 @@
 {
   "name": "aegon-docs",
   "version": "1.0.0",
+  "license": "MIT",
   "private": true,
   "description": "Documentation for the Aegon C++26 Web Framework & ORM",
   "scripts": {
