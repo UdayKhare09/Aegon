@@ -1,6 +1,8 @@
 name: Multicore Performance Benchmark
 
 on:
+  push:
+    branches: [ perf/multicore-2026-09-20 ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
