@@ -48,6 +48,7 @@ export default defineConfig({
               ]
             },
             { text: 'JWT Engine', link: '/guide/jwt' },
+            { text: 'HTTP Client', link: '/guide/http-client' },
           ]
         },
         {

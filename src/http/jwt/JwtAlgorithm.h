@@ -239,6 +239,32 @@ inline constexpr char BASE64URL_CHARS[] =
     return base64url_decode(in);
 }
 
+inline constexpr char BASE64_CHARS[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/**
+ * @brief Standard Base64 encode for HTTP Basic Auth and binary payloads.
+ */
+[[nodiscard]] inline std::string base64_encode(std::string_view in) {
+    std::string out;
+    size_t len = in.size();
+    out.reserve(((len + 2) / 3) * 4);
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t b0 = static_cast<uint8_t>(in[i]);
+        uint32_t b1 = (i + 1 < len) ? static_cast<uint8_t>(in[i + 1]) : 0;
+        uint32_t b2 = (i + 2 < len) ? static_cast<uint8_t>(in[i + 2]) : 0;
+        uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+
+        out.push_back(BASE64_CHARS[(triple >> 18) & 0x3F]);
+        out.push_back(BASE64_CHARS[(triple >> 12) & 0x3F]);
+        if (i + 1 < len) out.push_back(BASE64_CHARS[(triple >> 6) & 0x3F]);
+        else out.push_back('=');
+        if (i + 2 < len) out.push_back(BASE64_CHARS[triple & 0x3F]);
+        else out.push_back('=');
+    }
+    return out;
+}
+
 // -----------------------------------------------------------------------------
 // OpenSSL Key Management & Cryptographic Primitives
 // -----------------------------------------------------------------------------

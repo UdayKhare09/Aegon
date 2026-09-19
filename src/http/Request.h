@@ -43,6 +43,16 @@ public:
     [[nodiscard]] std::string_view query() const noexcept { return query_; }
     [[nodiscard]] std::string_view body() const noexcept { return body_; }
 
+    template <typename T>
+    [[nodiscard]] std::expected<T, glz::error_ctx> json() const {
+        T val{};
+        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(val, body_);
+        if (ec) {
+            return std::unexpected(ec);
+        }
+        return val;
+    }
+
     // Route parameters (:id, :username, etc.)
     void add_param(std::string_view key, std::string_view value) noexcept {
         if (param_count_ < MAX_ROUTE_PARAMS) {

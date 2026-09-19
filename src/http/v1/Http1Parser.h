@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <charconv>
 
 namespace aegon::http::v1 {
 
@@ -259,6 +260,196 @@ public:
             cursor += content_length;
         } else {
             req.set_body("");
+        }
+
+        bytes_consumed = cursor;
+        return ParseStatus::Complete;
+    }
+
+    /**
+     * @brief Parse and decode an HTTP/1.1 response from buffer (RFC 9112).
+     * @param buffer Raw packet data received from server
+     * @param res Target Response object to populate
+     * @param bytes_consumed Output number of bytes processed
+     */
+    static ParseStatus parse_response(std::string_view buffer, Response& res, size_t& bytes_consumed) noexcept {
+        bytes_consumed = 0;
+
+        // 1. Locate Status Line (\r\n)
+        size_t status_line_end = buffer.find("\r\n");
+        if (status_line_end == std::string_view::npos) {
+            return ParseStatus::NeedMoreData;
+        }
+
+        std::string_view status_line = buffer.substr(0, status_line_end);
+
+        // Format: HTTP/1.1 <status_code> [reason phrase]
+        size_t sp1 = status_line.find(' ');
+        if (sp1 == std::string_view::npos) return ParseStatus::Error;
+
+        std::string_view proto_sv = status_line.substr(0, sp1);
+        if (proto_sv == "HTTP/1.1") {
+            res.version(HttpVersion::Http1_1);
+        } else if (proto_sv == "HTTP/1.0") {
+            res.version(HttpVersion::Http1_0);
+        } else if (proto_sv == "HTTP/2.0" || proto_sv == "HTTP/2") {
+            res.version(HttpVersion::Http2);
+        } else if (proto_sv == "HTTP/3.0" || proto_sv == "HTTP/3") {
+            res.version(HttpVersion::Http3);
+        }
+
+        size_t sp2 = status_line.find(' ', sp1 + 1);
+        std::string_view code_sv = (sp2 == std::string_view::npos)
+            ? status_line.substr(sp1 + 1)
+            : status_line.substr(sp1 + 1, sp2 - sp1 - 1);
+
+        uint16_t status_code = 0;
+        auto [ptr, ec] = std::from_chars(code_sv.data(), code_sv.data() + code_sv.size(), status_code);
+        if (ec != std::errc{} || status_code < 100 || status_code > 599) {
+            return ParseStatus::Error;
+        }
+        res.status(status_code);
+
+        // 2. Locate Header Termination (\r\n\r\n)
+        size_t headers_end = buffer.find("\r\n\r\n");
+        if (headers_end == std::string_view::npos) {
+            return ParseStatus::NeedMoreData;
+        }
+
+        // 3. Parse Headers
+        size_t cursor = status_line_end + 2;
+        bool is_chunked = false;
+        size_t content_length = 0;
+        bool has_content_length = false;
+
+        while (cursor < headers_end) {
+            size_t line_end = buffer.find("\r\n", cursor);
+            if (line_end == std::string_view::npos || line_end > headers_end) {
+                break;
+            }
+
+            std::string_view line = buffer.substr(cursor, line_end - cursor);
+            cursor = line_end + 2;
+
+            if (line.empty()) continue;
+
+            size_t colon = line.find(':');
+            if (colon == std::string_view::npos || colon == 0) {
+                return ParseStatus::Error;
+            }
+
+            std::string_view name = line.substr(0, colon);
+            std::string_view value = line.substr(colon + 1);
+
+            // Trim leading/trailing whitespace
+            while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+                value.remove_prefix(1);
+            }
+            while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
+                value.remove_suffix(1);
+            }
+
+            res.header(name, value);
+
+            // Check Content-Length & Transfer-Encoding
+            if (name.size() == 14) {
+                bool match = true;
+                const char* cl = "content-length";
+                for (size_t i = 0; i < 14; ++i) {
+                    char c = name[i];
+                    if (c >= 'A' && c <= 'Z') c += 32;
+                    if (c != cl[i]) { match = false; break; }
+                }
+                if (match) {
+                    has_content_length = true;
+                    auto [cptr, cec] = std::from_chars(value.data(), value.data() + value.size(), content_length);
+                    if (cec != std::errc{}) return ParseStatus::Error;
+                }
+            } else if (name.size() == 17) {
+                bool match = true;
+                const char* te = "transfer-encoding";
+                for (size_t i = 0; i < 17; ++i) {
+                    char c = name[i];
+                    if (c >= 'A' && c <= 'Z') c += 32;
+                    if (c != te[i]) { match = false; break; }
+                }
+                if (match && value.find("chunked") != std::string_view::npos) {
+                    is_chunked = true;
+                }
+            }
+        }
+
+        cursor = headers_end + 4; // Skip \r\n\r\n
+
+        // Responses to HEAD or 204 No Content / 304 Not Modified have no body
+        if (status_code == 204 || status_code == 304 || (status_code >= 100 && status_code < 200)) {
+            res.body("");
+            bytes_consumed = cursor;
+            return ParseStatus::Complete;
+        }
+
+        // 4. Parse Body
+        if (is_chunked) {
+            std::string decoded_body;
+            size_t chunk_cursor = cursor;
+
+            while (true) {
+                size_t line_end = buffer.find("\r\n", chunk_cursor);
+                if (line_end == std::string_view::npos) {
+                    return ParseStatus::NeedMoreData;
+                }
+
+                std::string_view size_line = buffer.substr(chunk_cursor, line_end - chunk_cursor);
+                size_t semi = size_line.find(';');
+                if (semi != std::string_view::npos) {
+                    size_line = size_line.substr(0, semi);
+                }
+
+                size_t chunk_size = 0;
+                if (!parse_hex_size(size_line, chunk_size)) {
+                    return ParseStatus::Error;
+                }
+
+                chunk_cursor = line_end + 2;
+
+                if (chunk_size == 0) {
+                    size_t trailer_end = buffer.find("\r\n\r\n", chunk_cursor);
+                    if (trailer_end == std::string_view::npos) {
+                        if (buffer.size() >= chunk_cursor + 2 &&
+                            buffer[chunk_cursor] == '\r' && buffer[chunk_cursor + 1] == '\n') {
+                            chunk_cursor += 2;
+                        } else {
+                            return ParseStatus::NeedMoreData;
+                        }
+                    } else {
+                        chunk_cursor = trailer_end + 4;
+                    }
+                    cursor = chunk_cursor;
+                    break;
+                }
+
+                if (buffer.size() < chunk_cursor + chunk_size + 2) {
+                    return ParseStatus::NeedMoreData;
+                }
+
+                if (buffer[chunk_cursor + chunk_size] != '\r' || buffer[chunk_cursor + chunk_size + 1] != '\n') {
+                    return ParseStatus::Error;
+                }
+
+                decoded_body.append(buffer.data() + chunk_cursor, chunk_size);
+                chunk_cursor += chunk_size + 2;
+            }
+
+            res.body(std::move(decoded_body));
+        } else if (has_content_length) {
+            size_t remaining = buffer.size() - cursor;
+            if (remaining < content_length) {
+                return ParseStatus::NeedMoreData;
+            }
+            res.body(std::string(buffer.substr(cursor, content_length)));
+            cursor += content_length;
+        } else {
+            res.body("");
         }
 
         bytes_consumed = cursor;

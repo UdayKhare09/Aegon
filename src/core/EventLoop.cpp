@@ -31,6 +31,7 @@ void EventLoop::pin_to_core(int core_id) {
 }
 
 void EventLoop::spawn(Task<void> task) {
+    t_current_loop = this;
     task.resume();
     if (!task.is_ready()) {
         tasks_.push_back(std::move(task));

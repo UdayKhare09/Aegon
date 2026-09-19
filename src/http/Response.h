@@ -27,6 +27,13 @@ public:
         return *this;
     }
 
+    Response& version(HttpVersion v) noexcept {
+        version_ = v;
+        return *this;
+    }
+
+    [[nodiscard]] HttpVersion version() const noexcept { return version_; }
+
     Response& header(std::string_view name, std::string_view value) {
         headers_.set(name, value);
         return *this;
@@ -150,9 +157,24 @@ public:
 
     // Getters
     [[nodiscard]] StatusCode status() const noexcept { return status_; }
+    [[nodiscard]] uint16_t status_code() const noexcept { return static_cast<uint16_t>(status_); }
+    [[nodiscard]] bool is_success() const noexcept {
+        auto s = static_cast<uint16_t>(status_);
+        return s >= 200 && s <= 299;
+    }
     [[nodiscard]] const HeaderMap& headers() const noexcept { return headers_; }
     [[nodiscard]] HeaderMap& headers() noexcept { return headers_; }
     [[nodiscard]] std::string_view body() const noexcept { return body_; }
+
+    template <typename T>
+    [[nodiscard]] std::expected<T, glz::error_ctx> json() const {
+        T val{};
+        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(val, body_);
+        if (ec) {
+            return std::unexpected(ec);
+        }
+        return val;
+    }
 
     /**
      * @brief Serialize a single chunk per RFC 9112 §7.1 (<hex-len>\r\n<data>\r\n)
@@ -231,6 +253,7 @@ public:
     }
 
 private:
+    HttpVersion version_{HttpVersion::Http1_1};
     StatusCode status_{StatusCode::Ok};
     HeaderMap headers_{};
     std::string body_{};
