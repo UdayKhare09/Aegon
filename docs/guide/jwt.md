@@ -263,6 +263,9 @@ if (result.has_value()) {
 }
 ```
 
+> [!TIP]
+> **Single-Key Fallback**: If an incoming token omits the `kid` header and the configured `jwks` contains exactly one key (`jwks->size() == 1`), `JwtVerifier` automatically falls back to verifying against that single key. If the key set contains multiple keys, omitting `kid` is rejected with `JwtError::KeyNotFound` to prevent key confusion attacks.
+
 ### 3. Dynamic Key Rotation (`key_resolver`)
 
 For applications that resolve keys on-demand from a cache or database:

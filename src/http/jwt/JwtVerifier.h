@@ -172,10 +172,13 @@ public:
         bool sig_valid = false;
 
         if (options_.jwks) {
-            if (h.kid.empty()) {
-                return std::unexpected(JwtError::KeyNotFound);
+            std::shared_ptr<EVP_PKEY> pkey = nullptr;
+            if (!h.kid.empty()) {
+                pkey = options_.jwks->get_key(h.kid);
+            } else if (options_.jwks->size() == 1) {
+                // Graceful fallback for single-key JWKS when token omits kid
+                pkey = options_.jwks->keys.front().to_evp_pkey();
             }
-            auto pkey = options_.jwks->get_key(h.kid);
             if (!pkey) {
                 return std::unexpected(JwtError::KeyNotFound);
             }

@@ -9,6 +9,7 @@
 #include "http/v1/Http1Parser.h"
 #include "http/middleware/Auth.h"
 #include "http/jwt/JwtAlgorithm.h"
+#include "http/jwt/JwtSigner.h"
 
 using namespace aegon;
 using namespace aegon::http;
@@ -278,6 +279,87 @@ void test_basic_auth() {
     std::cout << "  -> PASS\n";
 }
 
+struct AuthClaims {
+    uint64_t id{0};
+    std::string username{};
+};
+
+void test_jwt_verifier_convenience_overloads() {
+    std::cout << "[TEST] bearer_auth(verifier) & cookie_auth(name, verifier) convenience overloads..." << std::endl;
+
+    jwt::JwtSigner signer(jwt::Algorithm::HS256, "my_secret_key_123");
+    jwt::JwtVerifier<AuthClaims> verifier(jwt::Algorithm::HS256, "my_secret_key_123");
+
+    std::string valid_token = signer.sign(AuthClaims{42, "bob"});
+    std::string invalid_token = "bad.token.signature";
+
+    // 1. bearer_auth(verifier) - 1-liner
+    {
+        Router router;
+        router.use(bearer_auth(verifier));
+        router.get("/me", [](Context& ctx) {
+            const auto* u = ctx.get<AuthClaims>();
+            assert(u != nullptr);
+            ctx.res().status(StatusCode::Ok).body("Hello " + u->username);
+        });
+
+        // Valid token
+        Response res1 = dispatch_offline(router, "GET /me HTTP/1.1\r\nAuthorization: Bearer " + valid_token + "\r\n\r\n");
+        assert(res1.status() == StatusCode::Ok);
+        assert(res1.body() == "Hello bob");
+
+        // Invalid token -> 401
+        Response res2 = dispatch_offline(router, "GET /me HTTP/1.1\r\nAuthorization: Bearer " + invalid_token + "\r\n\r\n");
+        assert(res2.status() == StatusCode::Unauthorized);
+
+        // Missing token -> 401
+        Response res3 = dispatch_offline(router, "GET /me HTTP/1.1\r\n\r\n");
+        assert(res3.status() == StatusCode::Unauthorized);
+    }
+
+    // 2. cookie_auth("token", verifier) - 1-liner
+    {
+        Router router;
+        router.use(cookie_auth("auth_cookie", verifier));
+        router.get("/dashboard", [](Context& ctx) {
+            const auto* u = ctx.get<AuthClaims>();
+            assert(u != nullptr);
+            ctx.res().status(StatusCode::Ok).body("Dashboard for " + u->username);
+        });
+
+        // Valid cookie
+        Response res1 = dispatch_offline(router, "GET /dashboard HTTP/1.1\r\nCookie: auth_cookie=" + valid_token + "\r\n\r\n");
+        assert(res1.status() == StatusCode::Ok);
+        assert(res1.body() == "Dashboard for bob");
+
+        // Invalid cookie -> 401
+        Response res2 = dispatch_offline(router, "GET /dashboard HTTP/1.1\r\nCookie: auth_cookie=" + invalid_token + "\r\n\r\n");
+        assert(res2.status() == StatusCode::Unauthorized);
+
+        // Missing cookie -> 401
+        Response res3 = dispatch_offline(router, "GET /dashboard HTTP/1.1\r\n\r\n");
+        assert(res3.status() == StatusCode::Unauthorized);
+    }
+
+    // 3. Generic verifier JwtVerifier<void> with bearer_auth<AuthClaims>(verifier)
+    {
+        jwt::JwtVerifier generic_verifier(jwt::Algorithm::HS256, "my_secret_key_123");
+        Router router;
+        router.use(bearer_auth<AuthClaims>(generic_verifier));
+        router.get("/explicit", [](Context& ctx) {
+            const auto* u = ctx.get<AuthClaims>();
+            assert(u != nullptr);
+            ctx.res().status(StatusCode::Ok).body(u->username);
+        });
+
+        Response res = dispatch_offline(router, "GET /explicit HTTP/1.1\r\nAuthorization: Bearer " + valid_token + "\r\n\r\n");
+        assert(res.status() == StatusCode::Ok);
+        assert(res.body() == "bob");
+    }
+
+    std::cout << "  -> PASS\n";
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "    Aegon Auth Middleware Tests\n";
@@ -287,6 +369,7 @@ int main() {
     test_cookie_auth();
     test_api_key_auth();
     test_basic_auth();
+    test_jwt_verifier_convenience_overloads();
 
     std::cout << "\nALL AUTH MIDDLEWARE TESTS PASSED!\n";
     return 0;

@@ -5,6 +5,7 @@
 #include "http/Protocol.h"
 #include "http/ProblemDetails.h"
 #include "http/jwt/JwtAlgorithm.h"
+#include "http/jwt/JwtVerifier.h"
 #include "core/Task.h"
 
 #include <string>
@@ -149,6 +150,31 @@ inline MiddlewareFn bearer_auth(BearerAuthOptions<T> options) {
 }
 
 /**
+ * @brief Convenience overload for bearer_auth directly accepting a JwtVerifier.
+ *
+ * Verifies the bearer JWT and automatically sets ctx.set<T>(res->claims) on success.
+ *
+ * Example:
+ * @code
+ * jwt::JwtVerifier<UserClaims> verifier(jwt::Algorithm::HS256, "secret");
+ * app.use(bearer_auth(verifier));
+ * @endcode
+ */
+template <typename T = void, typename TDefault = void>
+inline MiddlewareFn bearer_auth(jwt::JwtVerifier<TDefault> verifier, std::function<void(Context&)> on_unauthorized = nullptr) {
+    using TargetType = std::conditional_t<std::is_void_v<T>, TDefault, T>;
+    static_assert(!std::is_void_v<TargetType>, "bearer_auth requires a non-void claims type. Specify bearer_auth<MyClaims>(verifier) or use JwtVerifier<MyClaims>.");
+    return bearer_auth<TargetType>({
+        .validator = [verifier = std::move(verifier)](std::string_view token, Context&) -> core::Task<std::optional<TargetType>> {
+            auto res = verifier.template verify<TargetType>(token);
+            if (!res.has_value()) co_return std::nullopt;
+            co_return res->claims;
+        },
+        .on_unauthorized = std::move(on_unauthorized)
+    });
+}
+
+/**
  * @brief Cookie-based authentication middleware factory (session cookies).
  *
  * Extracts session identifier or JWT from ctx.req().cookie(cookie_name).
@@ -177,6 +203,31 @@ inline MiddlewareFn cookie_auth(std::string cookie_name, CookieAuthOptions<T> op
         ctx.set<T>(std::move(*principal));
         co_await next(ctx);
     };
+}
+
+/**
+ * @brief Convenience overload for cookie_auth directly accepting a JwtVerifier.
+ *
+ * Verifies the cookie JWT and automatically sets ctx.set<T>(res->claims) on success.
+ *
+ * Example:
+ * @code
+ * jwt::JwtVerifier<UserClaims> verifier(jwt::Algorithm::HS256, "secret");
+ * app.use(cookie_auth("session", verifier));
+ * @endcode
+ */
+template <typename T = void, typename TDefault = void>
+inline MiddlewareFn cookie_auth(std::string cookie_name, jwt::JwtVerifier<TDefault> verifier, std::function<void(Context&)> on_unauthorized = nullptr) {
+    using TargetType = std::conditional_t<std::is_void_v<T>, TDefault, T>;
+    static_assert(!std::is_void_v<TargetType>, "cookie_auth requires a non-void claims type. Specify cookie_auth<MyClaims>(cookie_name, verifier) or use JwtVerifier<MyClaims>.");
+    return cookie_auth<TargetType>(std::move(cookie_name), {
+        .validator = [verifier = std::move(verifier)](std::string_view token, Context&) -> core::Task<std::optional<TargetType>> {
+            auto res = verifier.template verify<TargetType>(token);
+            if (!res.has_value()) co_return std::nullopt;
+            co_return res->claims;
+        },
+        .on_unauthorized = std::move(on_unauthorized)
+    });
 }
 
 /**

@@ -225,6 +225,47 @@ void test_dynamic_key_resolver() {
     std::cout << "  -> PASS\n";
 }
 
+void test_jwks_single_key_fallback() {
+    std::cout << "[TEST] Single-key JWKS fallback when token omits kid..." << std::endl;
+    std::string priv, pub;
+    generate_rsa_keys(priv, pub, 2048);
+
+    // Sign token WITHOUT kid (pass empty string for kid)
+    JwtSigner signer(Algorithm::RS256, priv, "");
+    std::string token_no_kid = signer.sign(UserClaims{777, "fallback_user"});
+
+    // Check that parsed kid is empty
+    auto parsed_kid = JwtParser::get_kid(token_no_kid);
+    assert(!parsed_kid.has_value() || parsed_kid->empty());
+
+    // Setup JWKS with exactly 1 key
+    auto jwks = std::make_shared<Jwks>();
+    jwks->add_key("single-key-id", Algorithm::RS256, pub);
+    assert(jwks->size() == 1);
+
+    // Verifier configured with the 1-key JWKS
+    JwtVerifier<UserClaims> verifier(Algorithm::RS256, {
+        .jwks = jwks
+    });
+
+    // 1. Verifying token_no_kid succeeds via single-key fallback
+    auto res = verifier.verify(token_no_kid);
+    assert(res.has_value());
+    assert(res->claims.sub == 777);
+
+    // 2. When a second key is added to the JWKS, omitting kid is ambiguous and must fail with KeyNotFound
+    std::string priv2, pub2;
+    generate_rsa_keys(priv2, pub2, 2048);
+    jwks->add_key("second-key-id", Algorithm::RS256, pub2);
+    assert(jwks->size() == 2);
+
+    auto res_multi = verifier.verify(token_no_kid);
+    assert(!res_multi.has_value());
+    assert(res_multi.error() == JwtError::KeyNotFound);
+
+    std::cout << "  -> PASS\n";
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "       Aegon JWKS & kid Tests\n";
@@ -235,6 +276,7 @@ int main() {
     test_jwks_serialization_roundtrip();
     test_key_rotation_with_jwks();
     test_dynamic_key_resolver();
+    test_jwks_single_key_fallback();
 
     std::cout << "\nALL JWKS AND KEY ROTATION TESTS PASSED!\n";
     return 0;

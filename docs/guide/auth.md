@@ -38,6 +38,17 @@ app.use(bearer_auth<User>({
 }));
 ```
 
+#### 1-Liner JWT Integration
+
+If you already have a `jwt::JwtVerifier<T>`, you can pass it directly without boilerplate:
+
+```cpp
+jwt::JwtVerifier<User> verifier(jwt::Algorithm::HS256, "secret");
+
+// Automatically verifies JWT and sets ctx.set<User>(claims)
+app.use(bearer_auth(verifier));
+```
+
 ### 2. Cookie Authentication (`cookie_auth`)
 
 Extracts session tokens or encrypted cookies from `Cookie: <name>=<value>`:
@@ -54,6 +65,15 @@ app.use(cookie_auth<Session>("session_id", {
         co_return session;
     }
 }));
+```
+
+#### 1-Liner JWT Cookie Integration
+
+```cpp
+jwt::JwtVerifier<User> verifier(jwt::Algorithm::HS256, "secret");
+
+// Automatically verifies cookie JWT and sets ctx.set<User>(claims)
+app.use(cookie_auth("access_token", verifier));
 ```
 
 ### 3. API Key Authentication (`api_key_auth`)
