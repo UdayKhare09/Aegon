@@ -69,6 +69,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glaze)
 
+# Configuration library (YAML, Env, CLI)
+add_library(aegon_config
+    src/config/DotEnv.cpp
+    src/config/EnvExpander.cpp
+)
+
+target_include_directories(aegon_config PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(aegon_config PUBLIC
+    glaze::glaze
+)
+
 # Redis Client library
 add_library(aegon_redis
     src/data/redis/Resp3.cpp
@@ -310,6 +324,11 @@ add_executable(test_service_registry
 )
 target_link_libraries(test_service_registry PRIVATE aegon_http aegon_core aegon_uuid)
 
+add_executable(test_config
+    tests/test_config.cpp
+)
+target_link_libraries(test_config PRIVATE aegon_config)
+
 # Test Registrations for CTest
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
@@ -342,6 +361,7 @@ add_test(NAME rbac_guard COMMAND test_rbac_guard)
 add_test(NAME jwks COMMAND test_jwks)
 add_test(NAME http_client COMMAND test_http_client)
 add_test(NAME service_registry COMMAND test_service_registry)
+add_test(NAME config COMMAND test_config)
 
 # Samples
 add_subdirectory(samples/adv)
