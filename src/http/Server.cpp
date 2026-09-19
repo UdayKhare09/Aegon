@@ -512,6 +512,25 @@ void Server::run() {
 }
 
 void Server::run(size_t threads) {
+    if (threads == 0) {
+        throw std::invalid_argument("Server::run(threads): threads must be greater than zero");
+    }
+
+    const auto cpus = core::EventLoop::available_cpus();
+    if (cpus.empty()) {
+        throw std::runtime_error("Server::run(threads): no CPUs are available to the process");
+    }
+
+    // Never assume CPU IDs are 0..N-1. Containers and cpusets commonly expose
+    // a sparse CPU mask (for example 4,6,8,10). Pin workers to the CPUs the
+    // process is actually allowed to run on.
+    const size_t worker_count = std::min(threads, cpus.size());
+    if (worker_count != threads) {
+        std::cerr << "Requested " << threads << " workers but only "
+                  << cpus.size() << " CPUs are permitted; using "
+                  << worker_count << " workers.\\n";
+    }
+
     running_ = true;
 
     // 1. Freeze service registry for zero-lock hot-path lookups across all worker threads
@@ -526,7 +545,7 @@ void Server::run(size_t threads) {
 
     workers_.clear();
 
-    for (size_t i = 0; i < threads; ++i) {
+    for (size_t i = 0; i < worker_count; ++i) {
         workers_.emplace_back([this, i]() {
             try {
                 int listen_fd = create_listen_socket();
@@ -534,10 +553,15 @@ void Server::run(size_t threads) {
                 ring_cfg.entries = ring_entries_;
                 ring_cfg.enable_sqpoll = sqpoll_enabled_;
                 ring_cfg.sq_thread_idle_ms = sq_thread_idle_ms_;
-                ring_cfg.sq_thread_cpu = sq_thread_cpu_ >= 0 ? sq_thread_cpu_ : static_cast<int>(i);
+                // In multi-worker mode an explicit SQPOLL CPU is treated as a
+                // starting CPU only; otherwise every ring would pin its kernel
+                // SQ thread to the same CPU and destroy scaling.
+                ring_cfg.sq_thread_cpu = sq_thread_cpu_ >= 0
+                    ? cpus[(static_cast<size_t>(sq_thread_cpu_) + i) % cpus.size()]
+                    : cpus[i];
 
                 core::EventLoop loop(ring_cfg, 512, 4096);
-                loop.pin_to_core(i);
+                loop.pin_to_core(cpus[i]);
                 loop.spawn(accept_loop(loop, listen_fd));
 
                 // Spawn background workers on core 0
