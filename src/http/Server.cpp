@@ -469,7 +469,10 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd) {
 void Server::run() {
     running_ = true;
 
-    // 1. Run asynchronous startup lifecycle hooks before listening
+    // 1. Freeze service registry for zero-lock hot-path lookups during request handling
+    services_->freeze();
+
+    // 2. Run asynchronous startup lifecycle hooks before listening
     for (const auto& hook : startup_hooks_) {
         core::EventLoop init_loop;
         init_loop.spawn(hook(*this));
@@ -511,7 +514,10 @@ void Server::run() {
 void Server::run(size_t threads) {
     running_ = true;
 
-    // 1. Run asynchronous startup lifecycle hooks once across the cluster
+    // 1. Freeze service registry for zero-lock hot-path lookups across all worker threads
+    services_->freeze();
+
+    // 2. Run asynchronous startup lifecycle hooks once across the cluster
     for (const auto& hook : startup_hooks_) {
         core::EventLoop init_loop;
         init_loop.spawn(hook(*this));

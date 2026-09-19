@@ -305,6 +305,11 @@ add_executable(test_http_client
 )
 target_link_libraries(test_http_client PRIVATE aegon_http aegon_core aegon_uuid)
 
+add_executable(test_service_registry
+    tests/test_service_registry.cpp
+)
+target_link_libraries(test_service_registry PRIVATE aegon_http aegon_core aegon_uuid)
+
 # Test Registrations for CTest
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
@@ -336,6 +341,7 @@ add_test(NAME auth_middleware COMMAND test_auth_middleware)
 add_test(NAME rbac_guard COMMAND test_rbac_guard)
 add_test(NAME jwks COMMAND test_jwks)
 add_test(NAME http_client COMMAND test_http_client)
+add_test(NAME service_registry COMMAND test_service_registry)
 
 # Samples
 add_subdirectory(samples/adv)

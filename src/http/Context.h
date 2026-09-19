@@ -108,27 +108,27 @@ public:
      * @brief Retrieve a required service by type, throwing std::runtime_error if not found.
      */
     template <typename T>
-    [[nodiscard]] T& service() const {
+    [[nodiscard]] T& service(std::string_view name = "") const {
         if (!services_) {
             throw std::runtime_error("Context: ServiceRegistry is not attached.");
         }
-        return services_->require<T>();
+        return services_->require<T>(name);
     }
 
     /**
-     * @brief Checks if a service of type T is registered.
+     * @brief Checks if a service of type T (and optional name) is registered.
      */
     template <typename T>
-    [[nodiscard]] bool has_service() const noexcept {
-        return services_ ? services_->has<T>() : false;
+    [[nodiscard]] bool has_service(std::string_view name = "") const noexcept {
+        return services_ ? services_->has<T>(name) : false;
     }
 
     /**
-     * @brief Retrieve an optional service by type, returning nullptr if not registered.
+     * @brief Retrieve an optional service by type (and optional name), returning nullptr if not registered.
      */
     template <typename T>
-    [[nodiscard]] T* try_service() const noexcept {
-        return services_ ? services_->get<T>() : nullptr;
+    [[nodiscard]] T* try_service(std::string_view name = "") const noexcept {
+        return services_ ? services_->get<T>(name) : nullptr;
     }
 
     /**

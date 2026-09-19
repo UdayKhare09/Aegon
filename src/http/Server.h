@@ -78,11 +78,38 @@ public:
     }
 
     /**
+     * @brief Registers a named shared service in the ServiceRegistry.
+     */
+    template <typename T>
+    Server& provide(std::string_view name, std::shared_ptr<T> service) {
+        services_->register_service<T>(name, std::move(service));
+        return *this;
+    }
+
+    /**
      * @brief Instantiates and registers a service of type T in the ServiceRegistry.
      */
     template <typename T, typename... Args>
+        requires (!std::is_convertible_v<std::tuple_element_t<0, std::tuple<Args..., void>>, std::string_view>)
     Server& provide(Args&&... args) {
         services_->register_service<T>(std::make_shared<T>(std::forward<Args>(args)...));
+        return *this;
+    }
+
+    /**
+     * @brief Instantiates and registers a named service of type T in the ServiceRegistry.
+     */
+    template <typename T, typename... Args>
+    Server& provide_named(std::string_view name, Args&&... args) {
+        services_->register_service<T>(name, std::make_shared<T>(std::forward<Args>(args)...));
+        return *this;
+    }
+
+    /**
+     * @brief Freezes the ServiceRegistry, activating the zero-lock hot path for all handler lookups.
+     */
+    Server& freeze_services() {
+        services_->freeze();
         return *this;
     }
 
@@ -98,8 +125,8 @@ public:
     [[nodiscard]] const ServiceRegistry& services() const noexcept { return *services_; }
 
     template <typename T>
-    [[nodiscard]] std::shared_ptr<T> service() const {
-        return services_->get_shared<T>();
+    [[nodiscard]] std::shared_ptr<T> service(std::string_view name = "") const {
+        return services_->get_shared<T>(name);
     }
 
     using LifecycleHook = std::function<core::Task<void>(Server&)>;
