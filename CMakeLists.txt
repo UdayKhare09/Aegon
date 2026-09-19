@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-# Enable aggressive optimization and Zen 4 / modern x86 instruction sets
+# Enable aggressive optimization and modern x86 instruction sets
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(
         -O3
@@ -255,6 +255,11 @@ add_executable(test_error_handling
 )
 target_link_libraries(test_error_handling PRIVATE aegon_http aegon_core aegon_uuid)
 
+add_executable(test_middleware
+    tests/test_middleware.cpp
+)
+target_link_libraries(test_middleware PRIVATE aegon_http aegon_core aegon_uuid)
+
 # Test Registrations for CTest
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
@@ -277,6 +282,7 @@ add_test(NAME redis_advanced COMMAND test_redis_advanced)
 add_test(NAME orm_advanced COMMAND test_orm_advanced)
 add_test(NAME sql_tx_cache_parity COMMAND test_sql_tx_cache_parity)
 add_test(NAME error_handling COMMAND test_error_handling)
+add_test(NAME middleware COMMAND test_middleware)
 
 # Samples
 add_subdirectory(samples/adv)

@@ -8,6 +8,9 @@
 #include <string_view>
 #include <optional>
 #include <stdexcept>
+#include <typeindex>
+#include <unordered_map>
+#include <memory>
 
 namespace aegon::http {
 
@@ -15,17 +18,77 @@ namespace aegon::http {
  * @brief Zero-overhead compile-time Context passed to route handlers.
  *
  * Provides direct access to inbound request data (req), outbound response builder (res),
- * DTO binders (bind_json, bind_query, bind_path), and the type-safe ServiceRegistry.
+ * DTO binders (bind_json, bind_query, bind_path), the type-safe ServiceRegistry,
+ * and a per-request typed data bag (set, get, local, has) for middleware data passing.
  */
 class Context {
 private:
     Request& req_;
     Response& res_;
     const ServiceRegistry* services_{nullptr};
+    std::unordered_map<std::type_index, std::shared_ptr<void>> local_store_;
 
 public:
     Context(Request& req, Response& res, const ServiceRegistry* services = nullptr) noexcept
         : req_(req), res_(res), services_(services) {}
+
+    /**
+     * @brief Stores a typed value in the per-request data bag.
+     */
+    template <typename T>
+    void set(T value) {
+        local_store_[std::type_index(typeid(T))] = std::make_shared<T>(std::move(value));
+    }
+
+    /**
+     * @brief Retrieves a pointer to the typed value in the per-request data bag, or nullptr if not present.
+     */
+    template <typename T>
+    [[nodiscard]] T* get() noexcept {
+        auto it = local_store_.find(std::type_index(typeid(T)));
+        if (it == local_store_.end()) {
+            return nullptr;
+        }
+        return static_cast<T*>(it->second.get());
+    }
+
+    template <typename T>
+    [[nodiscard]] const T* get() const noexcept {
+        auto it = local_store_.find(std::type_index(typeid(T)));
+        if (it == local_store_.end()) {
+            return nullptr;
+        }
+        return static_cast<const T*>(it->second.get());
+    }
+
+    /**
+     * @brief Retrieves a reference to the typed value in the per-request data bag, throwing std::runtime_error if not set.
+     */
+    template <typename T>
+    [[nodiscard]] T& local() {
+        T* ptr = get<T>();
+        if (!ptr) {
+            throw std::runtime_error("Context: local value of type '" + std::string(typeid(T).name()) + "' was not found.");
+        }
+        return *ptr;
+    }
+
+    template <typename T>
+    [[nodiscard]] const T& local() const {
+        const T* ptr = get<T>();
+        if (!ptr) {
+            throw std::runtime_error("Context: local value of type '" + std::string(typeid(T).name()) + "' was not found.");
+        }
+        return *ptr;
+    }
+
+    /**
+     * @brief Checks if a typed value is present in the per-request data bag.
+     */
+    template <typename T>
+    [[nodiscard]] bool has() const noexcept {
+        return local_store_.find(std::type_index(typeid(T))) != local_store_.end();
+    }
 
     // Core accessors
     [[nodiscard]] Request& req() noexcept { return req_; }

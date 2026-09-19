@@ -41,6 +41,15 @@ public:
     [[nodiscard]] const Router& router() const noexcept { return router_; }
     [[nodiscard]] Router& router() noexcept { return router_; }
 
+    /**
+     * @brief Appends global middleware to the server router.
+     */
+    template <typename F>
+    Server& use(F&& middleware) {
+        router_.use(std::forward<F>(middleware));
+        return *this;
+    }
+
     template <typename F>
     Server& set_error_handler(F&& handler) {
         router_.set_error_handler(std::forward<F>(handler));

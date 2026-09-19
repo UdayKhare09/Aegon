@@ -4,6 +4,7 @@
 #include "http/Context.h"
 #include "http/RadixTree.h"
 #include "http/RouteGroup.h"
+#include "http/Middleware.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -11,6 +12,7 @@
 #include <concepts>
 #include <functional>
 #include <unordered_map>
+#include <vector>
 
 namespace aegon::http {
 
@@ -79,9 +81,39 @@ public:
         }
     }
 
+    /**
+     * @brief Appends global middleware applied to all matching routes.
+     */
     template <typename F>
-    Router& add_route(Method method, std::string_view pattern, F&& handler) {
-        auto h = make_handler(std::forward<F>(handler));
+    Router& use(F&& mw) {
+        global_middleware_.push_back(make_middleware(std::forward<F>(mw)));
+        return *this;
+    }
+
+    [[nodiscard]] const std::vector<MiddlewareFn>& global_middleware() const noexcept {
+        return global_middleware_;
+    }
+
+    template <typename F>
+    Router& add_route(Method method, std::string_view pattern,
+                      const std::vector<MiddlewareFn>& group_mw,
+                      const std::vector<MiddlewareFn>& route_mw,
+                      F&& handler) {
+        Handler raw = make_handler(std::forward<F>(handler));
+        Handler h;
+
+        if (group_mw.empty() && route_mw.empty()) {
+            h = std::move(raw);
+        } else {
+            std::vector<MiddlewareFn> chain;
+            chain.reserve(group_mw.size() + route_mw.size());
+            chain.insert(chain.end(), group_mw.begin(), group_mw.end());
+            chain.insert(chain.end(), route_mw.begin(), route_mw.end());
+
+            h = [local_chain = std::move(chain), target = std::move(raw)](Context& ctx) -> core::Task<void> {
+                co_await run_chain({}, local_chain, 0, target, ctx);
+            };
+        }
 
         // Fast-path Tier 1: Check if pattern is purely static (no :param or *wildcard)
         if (pattern.find_first_of(":*") == std::string_view::npos) {
@@ -101,28 +133,63 @@ public:
     }
 
     template <typename F>
+    Router& add_route(Method method, std::string_view pattern, F&& handler) {
+        return add_route(method, pattern, {}, {}, std::forward<F>(handler));
+    }
+
+    template <typename F>
+    Router& add_route(Method method, std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
+        return add_route(method, pattern, {}, std::move(route_mw), std::forward<F>(handler));
+    }
+
+    template <typename F>
     Router& get(std::string_view pattern, F&& handler) {
-        return add_route(Method::GET, pattern, std::forward<F>(handler));
+        return add_route(Method::GET, pattern, {}, {}, std::forward<F>(handler));
+    }
+
+    template <typename F>
+    Router& get(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
+        return add_route(Method::GET, pattern, {}, std::move(route_mw), std::forward<F>(handler));
     }
 
     template <typename F>
     Router& post(std::string_view pattern, F&& handler) {
-        return add_route(Method::POST, pattern, std::forward<F>(handler));
+        return add_route(Method::POST, pattern, {}, {}, std::forward<F>(handler));
+    }
+
+    template <typename F>
+    Router& post(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
+        return add_route(Method::POST, pattern, {}, std::move(route_mw), std::forward<F>(handler));
     }
 
     template <typename F>
     Router& put(std::string_view pattern, F&& handler) {
-        return add_route(Method::PUT, pattern, std::forward<F>(handler));
+        return add_route(Method::PUT, pattern, {}, {}, std::forward<F>(handler));
+    }
+
+    template <typename F>
+    Router& put(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
+        return add_route(Method::PUT, pattern, {}, std::move(route_mw), std::forward<F>(handler));
     }
 
     template <typename F>
     Router& del(std::string_view pattern, F&& handler) {
-        return add_route(Method::DELETE, pattern, std::forward<F>(handler));
+        return add_route(Method::DELETE, pattern, {}, {}, std::forward<F>(handler));
+    }
+
+    template <typename F>
+    Router& del(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
+        return add_route(Method::DELETE, pattern, {}, std::move(route_mw), std::forward<F>(handler));
     }
 
     template <typename F>
     Router& patch(std::string_view pattern, F&& handler) {
-        return add_route(Method::PATCH, pattern, std::forward<F>(handler));
+        return add_route(Method::PATCH, pattern, {}, {}, std::forward<F>(handler));
+    }
+
+    template <typename F>
+    Router& patch(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
+        return add_route(Method::PATCH, pattern, {}, std::move(route_mw), std::forward<F>(handler));
     }
 
     using MatchResult = RadixTree::MatchResult;
@@ -209,7 +276,11 @@ public:
             Context ctx(req, res, services);
             std::exception_ptr ex{nullptr};
             try {
-                co_await (*match_res.handler)(ctx);
+                if (global_middleware_.empty()) {
+                    co_await (*match_res.handler)(ctx);
+                } else {
+                    co_await run_chain(global_middleware_, {}, 0, *match_res.handler, ctx);
+                }
             } catch (...) {
                 ex = std::current_exception();
             }
@@ -280,6 +351,7 @@ public:
 private:
     std::unordered_map<std::string, StaticRouteEntry, StringHash, StringEq> static_routes_;
     RadixTree tree_;
+    std::vector<MiddlewareFn> global_middleware_;
     ErrorHandler error_handler_{nullptr};
     FallbackHandler not_found_handler_{nullptr};
     FallbackHandler method_not_allowed_handler_{nullptr};
@@ -301,36 +373,66 @@ inline std::string join_paths(std::string_view a, std::string_view b) {
 }
 
 inline RouteGroup RouteGroup::group(std::string_view sub_prefix) {
-    return RouteGroup(router_, join_paths(prefix_, sub_prefix));
+    return RouteGroup(router_, join_paths(prefix_, sub_prefix), middleware_);
 }
 
 template <typename F>
 RouteGroup& RouteGroup::get(std::string_view path, F&& handler) {
-    router_.get(join_paths(prefix_, path), std::forward<F>(handler));
+    router_.add_route(Method::GET, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
+    return *this;
+}
+
+template <typename F>
+RouteGroup& RouteGroup::get(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
+    router_.add_route(Method::GET, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
     return *this;
 }
 
 template <typename F>
 RouteGroup& RouteGroup::post(std::string_view path, F&& handler) {
-    router_.post(join_paths(prefix_, path), std::forward<F>(handler));
+    router_.add_route(Method::POST, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
+    return *this;
+}
+
+template <typename F>
+RouteGroup& RouteGroup::post(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
+    router_.add_route(Method::POST, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
     return *this;
 }
 
 template <typename F>
 RouteGroup& RouteGroup::put(std::string_view path, F&& handler) {
-    router_.put(join_paths(prefix_, path), std::forward<F>(handler));
+    router_.add_route(Method::PUT, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
+    return *this;
+}
+
+template <typename F>
+RouteGroup& RouteGroup::put(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
+    router_.add_route(Method::PUT, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
     return *this;
 }
 
 template <typename F>
 RouteGroup& RouteGroup::del(std::string_view path, F&& handler) {
-    router_.del(join_paths(prefix_, path), std::forward<F>(handler));
+    router_.add_route(Method::DELETE, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
+    return *this;
+}
+
+template <typename F>
+RouteGroup& RouteGroup::del(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
+    router_.add_route(Method::DELETE, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
     return *this;
 }
 
 template <typename F>
 RouteGroup& RouteGroup::patch(std::string_view path, F&& handler) {
-    router_.patch(join_paths(prefix_, path), std::forward<F>(handler));
+    router_.add_route(Method::PATCH, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
+    return *this;
+}
+
+template <typename F>
+RouteGroup& RouteGroup::patch(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
+    router_.add_route(Method::PATCH, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
     return *this;
 }
 
