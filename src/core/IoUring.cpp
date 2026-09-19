@@ -7,7 +7,19 @@ namespace aegon::core {
 
 void IoUring::init(const IoUringConfig& config) {
     struct io_uring_params params{};
-    params.flags = config.flags;
+
+    // Each Aegon worker owns exactly one ring and is its sole userspace issuer.
+    // These flags reduce cross-context task-work/IPI overhead and let completion
+    // work be handled at the event-loop's explicit io_uring_enter boundary.
+    // They are available on modern kernels; the fallback below preserves
+    // compatibility with older kernels/liburing combinations.
+    constexpr uint32_t runtime_flags =
+        IORING_SETUP_SINGLE_ISSUER |
+        IORING_SETUP_COOP_TASKRUN |
+        IORING_SETUP_TASKRUN_FLAG |
+        IORING_SETUP_DEFER_TASKRUN;
+
+    params.flags = config.flags | runtime_flags;
     if (config.enable_sqpoll) {
         params.flags |= IORING_SETUP_SQPOLL;
         params.sq_thread_idle = config.sq_thread_idle_ms;
@@ -24,7 +36,29 @@ void IoUring::init(const IoUringConfig& config) {
         return;
     }
 
-    // Graceful fallback for SQPOLL if unprivileged or memory locked limit reached
+    // Some kernels/liburing versions do not support the newer task-run flags.
+    // Retry with the caller's original configuration before applying the more
+    // specific SQPOLL privilege/memlock fallback.
+    if (ret == -EINVAL && (params.flags & runtime_flags) != 0) {
+        std::memset(&params, 0, sizeof(params));
+        params.flags = config.flags;
+        if (config.enable_sqpoll) {
+            params.flags |= IORING_SETUP_SQPOLL;
+            params.sq_thread_idle = config.sq_thread_idle_ms;
+            if (config.sq_thread_cpu >= 0) {
+                params.flags |= IORING_SETUP_SQ_AFF;
+                params.sq_thread_cpu = static_cast<uint32_t>(config.sq_thread_cpu);
+            }
+        }
+        ret = io_uring_queue_init_params(config.entries, &ring_, &params);
+        if (ret == 0) {
+            initialized_ = true;
+            sqpoll_enabled_ = (params.flags & IORING_SETUP_SQPOLL) != 0;
+            return;
+        }
+    }
+
+    // Graceful fallback for SQPOLL if unprivileged or memory locked limit reached.
     if (config.enable_sqpoll && (ret == -EPERM || ret == -EACCES || ret == -ENOMEM)) {
         std::memset(&params, 0, sizeof(params));
         params.flags = config.flags;
