@@ -15,7 +15,7 @@ using namespace aegon;
 using namespace aegon::http;
 using namespace aegon::http::client;
 
-void stop_server(Server& server, uint16_t port, std::thread& server_thread) {
+void stop_server(Server& server, uint16_t port, std::thread& server_thread, bool is_h3 = false) {
     server.stop();
     int dummy = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
@@ -24,6 +24,15 @@ void stop_server(Server& server, uint16_t port, std::thread& server_thread) {
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
     connect(dummy, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
     close(dummy);
+
+    if (is_h3) {
+        int udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (udp_sock >= 0) {
+            sendto(udp_sock, "x", 1, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+            close(udp_sock);
+        }
+    }
+
     if (server_thread.joinable()) {
         server_thread.join();
     }
@@ -306,6 +315,204 @@ void test_async_coroutine_usage() {
     std::cout << "  -> PASS\n";
 }
 
+void test_http3_loopback() {
+    std::cout << "[TEST 6] Native HTTP/3 (QUIC) Loopback Server & Client..." << std::endl;
+
+    constexpr uint16_t PORT = 29879;
+    Router router;
+
+    router.get("/h3-health", [](Context& ctx) {
+        ctx.res().status(StatusCode::Ok).text("Hello HTTP3 from Aegon Server!");
+    });
+
+    router.post("/h3-echo", [](Context& ctx) {
+        auto user = ctx.req().json<UserDto>();
+        assert(user.has_value());
+        ctx.res().status(StatusCode::Created).json(*user);
+    });
+
+    Server server(std::move(router));
+    server.listen(PORT, "127.0.0.1")
+          .enable_tls()
+          .enable_http3();
+
+    std::thread server_thread([&]() {
+        server.run();
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    HttpClient client(ClientConfig{
+        .tls = TlsClientOptions{
+            .insecure_skip_verify = true
+        }
+    });
+
+    // 1. Sync GET request over HTTP/3
+    {
+        Response res = client.get("https://127.0.0.1:29879/h3-health")
+            .http3()
+            .send_sync();
+
+        assert(res.status() == StatusCode::Ok);
+        assert(res.version() == HttpVersion::Http3);
+        assert(res.body() == "Hello HTTP3 from Aegon Server!");
+    }
+
+    // 2. Sync POST with JSON DTO over HTTP/3
+    {
+        UserDto send_user{42, "quic_hero"};
+        Response post_res = client.post("https://127.0.0.1:29879/h3-echo")
+            .http3()
+            .json(send_user)
+            .send_sync();
+
+        assert(post_res.status() == StatusCode::Created);
+        assert(post_res.version() == HttpVersion::Http3);
+        auto recv_user = post_res.json<UserDto>();
+        assert(recv_user.has_value());
+        assert(recv_user->id == 42);
+        assert(recv_user->name == "quic_hero");
+    }
+
+    // 3. Async Coroutine send() over HTTP/3 inside EventLoop
+    {
+        core::EventLoop loop(256, 128, 4096);
+        bool async_h3_done = false;
+        auto h3_task = [&]() -> core::Task<void> {
+            Response ares = co_await client.get("https://127.0.0.1:29879/h3-health")
+                .http3()
+                .send();
+            assert(ares.status() == StatusCode::Ok);
+            assert(ares.version() == HttpVersion::Http3);
+            assert(ares.body() == "Hello HTTP3 from Aegon Server!");
+            async_h3_done = true;
+            loop.stop();
+        };
+        loop.spawn(h3_task());
+        loop.run();
+        assert(async_h3_done);
+    }
+
+    client.close();
+    stop_server(server, PORT, server_thread, true);
+
+    std::cout << "  -> PASS\n";
+}
+
+void test_http2_loopback() {
+    std::cout << "[TEST 7] Native HTTP/2 (h2c & h2) Loopback Server & Client..." << std::endl;
+
+    // 1. HTTP/2 Cleartext (h2c)
+    {
+        constexpr uint16_t PORT = 29880;
+        Router router;
+
+        router.get("/h2c-health", [](Context& ctx) {
+            ctx.res().status(StatusCode::Ok).text("Hello h2c from Aegon Server!");
+        });
+
+        router.post("/h2c-echo", [](Context& ctx) {
+            auto user = ctx.req().json<UserDto>();
+            assert(user.has_value());
+            ctx.res().status(StatusCode::Created).json(*user);
+        });
+
+        Server server(std::move(router));
+        server.listen(PORT, "127.0.0.1");
+
+        std::thread server_thread([&]() {
+            server.run();
+        });
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+        HttpClient client;
+
+        // A. Synchronous GET over h2c
+        Response res = client.get("http://127.0.0.1:29880/h2c-health")
+            .http2()
+            .send_sync();
+
+        assert(res.status() == StatusCode::Ok);
+        assert(res.version() == HttpVersion::Http2);
+        assert(res.body() == "Hello h2c from Aegon Server!");
+
+        // B. Synchronous POST with JSON DTO over h2c
+        UserDto send_user{88, "h2c_master"};
+        Response post_res = client.post("http://127.0.0.1:29880/h2c-echo")
+            .http2()
+            .json(send_user)
+            .send_sync();
+
+        assert(post_res.status() == StatusCode::Created);
+        assert(post_res.version() == HttpVersion::Http2);
+        auto recv_user = post_res.json<UserDto>();
+        assert(recv_user.has_value());
+        assert(recv_user->id == 88);
+        assert(recv_user->name == "h2c_master");
+
+        // C. Asynchronous Coroutine send() over h2c inside EventLoop
+        core::EventLoop loop(256, 128, 4096);
+        bool async_h2c_done = false;
+        auto h2c_task = [&]() -> core::Task<void> {
+            Response ares = co_await client.get("http://127.0.0.1:29880/h2c-health")
+                .http2()
+                .send();
+            assert(ares.status() == StatusCode::Ok);
+            assert(ares.version() == HttpVersion::Http2);
+            assert(ares.body() == "Hello h2c from Aegon Server!");
+            async_h2c_done = true;
+            loop.stop();
+        };
+        loop.spawn(h2c_task());
+        loop.run();
+        assert(async_h2c_done);
+
+        client.close();
+        stop_server(server, PORT, server_thread);
+    }
+
+    // 2. HTTP/2 over TLS (h2)
+    {
+        constexpr uint16_t PORT = 29881;
+        Router router;
+
+        router.get("/h2-secure", [](Context& ctx) {
+            ctx.res().status(StatusCode::Ok).text("Encrypted HTTP/2 Success");
+        });
+
+        Server server(std::move(router));
+        server.enable_tls(); // Self-signed cert with ALPN h2 & http/1.1
+        server.listen(PORT, "127.0.0.1");
+
+        std::thread server_thread([&]() {
+            server.run();
+        });
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+        HttpClient client(ClientConfig{
+            .tls = TlsClientOptions{
+                .insecure_skip_verify = true
+            }
+        });
+
+        Response res = client.get("https://127.0.0.1:29881/h2-secure")
+            .http2()
+            .send_sync();
+
+        assert(res.status() == StatusCode::Ok);
+        assert(res.version() == HttpVersion::Http2);
+        assert(res.body() == "Encrypted HTTP/2 Success");
+
+        client.close();
+        stop_server(server, PORT, server_thread);
+    }
+
+    std::cout << "  -> PASS\n";
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "       Aegon HttpClient Test Suite\n";
@@ -316,6 +523,8 @@ int main() {
     test_http_loopback();
     test_https_loopback();
     test_async_coroutine_usage();
+    test_http3_loopback();
+    test_http2_loopback();
 
     std::cout << "\nALL HTTP CLIENT TESTS PASSED!\n";
     return 0;

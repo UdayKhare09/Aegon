@@ -80,6 +80,8 @@ public:
 
     // Configuration overrides
     RequestBuilder& version(HttpVersion v);
+    RequestBuilder& http2() { return version(HttpVersion::Http2); }
+    RequestBuilder& http3() { return version(HttpVersion::Http3); }
     RequestBuilder& timeout(std::chrono::milliseconds ms);
     RequestBuilder& follow_redirects(bool follow);
     RequestBuilder& retry(uint8_t count, std::chrono::milliseconds backoff = std::chrono::milliseconds(100));

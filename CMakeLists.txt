@@ -100,6 +100,8 @@ add_library(aegon_http
     src/http/client/TlsClientStream.cpp
     src/http/client/ConnectionPool.cpp
     src/http/client/HttpClient.cpp
+    src/http/client/Http2ClientSession.cpp
+    src/http/client/Http3ClientSession.cpp
 )
 
 target_include_directories(aegon_http PUBLIC

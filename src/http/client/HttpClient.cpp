@@ -1,4 +1,6 @@
 #include "http/client/HttpClient.h"
+#include "http/client/Http2ClientSession.h"
+#include "http/client/Http3ClientSession.h"
 #include "http/v1/Http1Parser.h"
 #include <iostream>
 #include <iomanip>
@@ -178,6 +180,14 @@ static core::Task<void> run_sync_request(std::shared_ptr<RequestState> state,
 }
 
 Response RequestBuilder::send_sync() {
+    if (state_->version == HttpVersion::Http2) {
+        Http2ClientSession session(state_->client.config().tls);
+        return session.execute_sync(state_);
+    }
+    if (state_->version == HttpVersion::Http3) {
+        Http3ClientSession session(state_->client.config().tls);
+        return session.execute_sync(state_);
+    }
     core::EventLoop temp_loop(256, 128, 4096);
     std::optional<Response> sync_res;
 
@@ -262,6 +272,14 @@ core::Task<Response> HttpClient::execute(const RequestBuilder& req, core::EventL
 }
 
 core::Task<Response> HttpClient::execute(std::shared_ptr<RequestState> state, core::EventLoop& loop) {
+    if (state->version == HttpVersion::Http2) {
+        Http2ClientSession session(config_.tls);
+        co_return co_await session.execute(state, loop);
+    }
+    if (state->version == HttpVersion::Http3) {
+        Http3ClientSession session(config_.tls);
+        co_return co_await session.execute(state, loop);
+    }
     auto url_opt = Url::parse(state->url);
     if (!url_opt) {
         Response bad_res;

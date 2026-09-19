@@ -252,8 +252,93 @@ enum class HttpVersion : uint8_t {
 |---|---|---|---|
 | **HTTP/1.1** | **Full Support** | **Full Support** | Default protocol (`HttpVersion::Http1_1`). Full keep-alive socket reuse, Content-Length & chunked transfer encoding (`Transfer-Encoding: chunked`). |
 | **HTTP/1.0** | **Full Support** | **Full Support** | Supported via `HttpVersion::Http1_0`. Automatic connection teardown unless explicit `Connection: keep-alive` is exchanged. |
-| **HTTP/2 (h2)** | **ALPN Aware** | **Full Support** | Full zero-copy server implementation (`Http2Connection`). Client performs ALPN negotiation over TLS (`conn->is_h2()`). Client multiplexer is on the active roadmap. |
-| **HTTP/3 (h3)** | **Roadmap** | **Full Support** | High-performance UDP/QUIC server implementation (`Http3Server`). Symmetrical QUIC client engine scheduled for upcoming release. |
+| **HTTP/2 (h2 & h2c)** | **Full Support** | **Full Support** | Native binary framing & multiplexing (RFC 9113, RFC 7541) powered by `nghttp2`. Supports TLS (`h2`) and cleartext prior-knowledge (`h2c`) via `.http2()`. |
+| **HTTP/3 (h3)** | **Full Support** | **Full Support** | Native HTTP/3 over QUIC (RFC 9000, RFC 9114, RFC 9204) powered by `ngtcp2`, `nghttp3`, and OpenSSL quictls. Fluent `.http3()` API. |
+
+### Native HTTP/2 Multiplexer (`.http2()`)
+
+Aegon provides native client-side HTTP/2 stream multiplexing (RFC 9113, RFC 7541) powered by `nghttp2`. The client supports both encrypted TLS connections (**h2**) using ALPN negotiation and cleartext prior-knowledge (**h2c**) for high-performance internal microservices.
+
+Requests can be dispatched over HTTP/2 simply by appending `.http2()` or `.version(HttpVersion::Http2)` to any request builder:
+
+#### Synchronous HTTP/2 Call
+
+```cpp
+HttpClient client;
+
+// Cleartext h2c or TLS h2
+Response res = client.get("http://localhost:8080/api/status")
+    .http2()
+    .send_sync();
+
+if (res.is_success()) {
+    std::cout << "Version: " << (res.version() == HttpVersion::Http2 ? "HTTP/2" : "Other") << "\n";
+    std::cout << "Body: " << res.body() << "\n";
+}
+```
+
+#### Asynchronous HTTP/2 Call with Typed JSON
+
+```cpp
+core::Task<void> call_h2_service(HttpClient& client) {
+    OrderDto order{/* ... */};
+
+    Response res = co_await client.post("https://api.example.com/v2/orders")
+        .http2()
+        .bearer_auth("token_xyz")
+        .json(order)
+        .send();
+
+    if (res.is_success()) {
+        auto conf = res.json<OrderConfirmationDto>();
+        // Process confirmation
+    }
+}
+```
+
+### Native HTTP/3 over QUIC (`.http3()`)
+
+Aegon features native HTTP/3 client support over UDP and QUIC (RFC 9000, RFC 9114, RFC 9204), using `ngtcp2` for transport and `nghttp3` for stream multiplexing and QPACK header compression.
+
+Requests can be dispatched over HTTP/3 simply by appending `.http3()` or `.version(HttpVersion::Http3)` to any request builder:
+
+#### Synchronous HTTP/3 Call
+
+```cpp
+HttpClient client(ClientConfig{
+    .tls = TlsClientOptions{
+        .insecure_skip_verify = true // For self-signed dev/staging certs
+    }
+});
+
+Response res = client.get("https://api.example.com/status")
+    .http3()
+    .send_sync();
+
+if (res.is_success()) {
+    std::cout << "Version: " << (res.version() == HttpVersion::Http3 ? "HTTP/3" : "Other") << "\n";
+    std::cout << "Body: " << res.body() << "\n";
+}
+```
+
+#### Asynchronous HTTP/3 Call with Typed JSON
+
+```cpp
+core::Task<void> call_h3_api(HttpClient& client) {
+    UserDto payload{42, "quic_hero"};
+
+    Response res = co_await client.post("https://api.example.com/v1/users")
+        .http3()
+        .bearer_auth("token123")
+        .json(payload)
+        .send();
+
+    if (res.is_success()) {
+        auto result = res.json<UserDto>();
+        // Process result
+    }
+}
+```
 
 ### Configuring the Protocol Version
 
