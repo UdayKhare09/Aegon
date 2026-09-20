@@ -1,5 +1,7 @@
 #include "http/v2/Http2Connection.h"
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <cstring>
 #include <iostream>
 
@@ -168,46 +170,60 @@ ssize_t Http2Connection::on_data_source_read(int32_t stream_id, uint8_t* buf, si
 }
 
 void Http2Connection::submit_response(Http2Stream* stream) {
-    std::string status_str = std::to_string(static_cast<uint16_t>(stream->res.status()));
-    std::string cl_str = std::to_string(stream->res.body().size());
+    char status_buf[16];
+    auto [p_status, _s] = std::to_chars(status_buf, status_buf + sizeof(status_buf), static_cast<uint16_t>(stream->res.status()));
+    size_t status_len = static_cast<size_t>(p_status - status_buf);
 
-    std::vector<nghttp2_nv> nva;
-    nva.reserve(4 + stream->res.headers().size());
+    char cl_buf[32];
+    auto [p_cl, _c] = std::to_chars(cl_buf, cl_buf + sizeof(cl_buf), stream->res.body().size());
+    size_t cl_len = static_cast<size_t>(p_cl - cl_buf);
 
-    nva.push_back(nghttp2_nv{
-        .name = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(":status")),
-        .value = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(status_str.data())),
-        .namelen = 7,
-        .valuelen = status_str.size(),
-        .flags = NGHTTP2_NV_FLAG_NONE
-    });
+    std::array<nghttp2_nv, 16> nva_stack;
+    std::vector<nghttp2_nv> nva_heap;
+    nghttp2_nv* nva_ptr = nva_stack.data();
+    size_t nva_count = 0;
+
+    auto push_nv = [&](const uint8_t* name, size_t namelen, const uint8_t* val, size_t vallen) {
+        nghttp2_nv nv{
+            .name = const_cast<uint8_t*>(name),
+            .value = const_cast<uint8_t*>(val),
+            .namelen = namelen,
+            .valuelen = vallen,
+            .flags = NGHTTP2_NV_FLAG_NONE
+        };
+        if (nva_count < nva_stack.size() && nva_heap.empty()) {
+            nva_stack[nva_count++] = nv;
+        } else {
+            if (nva_heap.empty()) {
+                nva_heap.reserve(16 + stream->res.headers().size());
+                for (size_t i = 0; i < nva_count; ++i) {
+                    nva_heap.push_back(nva_stack[i]);
+                }
+            }
+            nva_heap.push_back(nv);
+            nva_count = nva_heap.size();
+            nva_ptr = nva_heap.data();
+        }
+    };
+
+    push_nv(reinterpret_cast<const uint8_t*>(":status"), 7,
+            reinterpret_cast<const uint8_t*>(status_buf), status_len);
 
     if (!stream->res.headers().contains("content-length")) {
-        nva.push_back(nghttp2_nv{
-            .name = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>("content-length")),
-            .value = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(cl_str.data())),
-            .namelen = 14,
-            .valuelen = cl_str.size(),
-            .flags = NGHTTP2_NV_FLAG_NONE
-        });
+        push_nv(reinterpret_cast<const uint8_t*>("content-length"), 14,
+                reinterpret_cast<const uint8_t*>(cl_buf), cl_len);
     }
 
     for (const auto& h : stream->res.headers()) {
-        // HTTP/2 header names must be lowercase
-        nva.push_back(nghttp2_nv{
-            .name = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(h.name.data())),
-            .value = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(h.value.data())),
-            .namelen = h.name.size(),
-            .valuelen = h.value.size(),
-            .flags = NGHTTP2_NV_FLAG_NONE
-        });
+        push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+                reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
     }
 
     nghttp2_data_provider prd;
     prd.source.ptr = stream;
     prd.read_callback = data_source_read_cb;
 
-    nghttp2_submit_response(session_, stream->stream_id, nva.data(), nva.size(), &prd);
+    nghttp2_submit_response(session_, stream->stream_id, nva_ptr, nva_count, &prd);
     stream->response_submitted = true;
 }
 
@@ -306,11 +322,10 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
 
         submit_response(stream);
     }
-
-    co_await flush_outbound();
 }
 
 core::Task<bool> Http2Connection::flush_outbound() {
+    outbound_buf_.clear();
     while (nghttp2_session_want_write(session_)) {
         const uint8_t* data = nullptr;
         ssize_t len = nghttp2_session_mem_send(session_, &data);
@@ -322,17 +337,35 @@ core::Task<bool> Http2Connection::flush_outbound() {
             break;
         }
 
+        outbound_buf_.append(reinterpret_cast<const char*>(data), static_cast<size_t>(len));
+
+        if (outbound_buf_.size() >= 65536) {
+            int sent = 0;
+            if (sender_) {
+                sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
+            } else {
+                sent = co_await loop_.ring().send(client_fd_, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
+            }
+            if (sent <= 0) {
+                closed_ = true;
+                co_return false;
+            }
+            outbound_buf_.clear();
+        }
+    }
+
+    if (!outbound_buf_.empty()) {
         int sent = 0;
         if (sender_) {
-            sent = co_await sender_(std::span<const uint8_t>(data, static_cast<size_t>(len)));
+            sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
         } else {
-            sent = co_await loop_.ring().send(client_fd_, std::span<const uint8_t>(data, static_cast<size_t>(len)));
+            sent = co_await loop_.ring().send(client_fd_, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
         }
-
         if (sent <= 0) {
             closed_ = true;
             co_return false;
         }
+        outbound_buf_.clear();
     }
     co_return true;
 }

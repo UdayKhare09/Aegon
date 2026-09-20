@@ -87,6 +87,7 @@ private:
     std::unordered_map<int32_t, std::unique_ptr<Http2Stream>> streams_;
     std::vector<int32_t> pending_dispatch_;
     OutputSender sender_{nullptr};
+    std::string outbound_buf_;
     bool closed_{false};
 };
 
