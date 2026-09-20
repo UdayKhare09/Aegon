@@ -19,7 +19,7 @@
 > Aegon is an ambitious, high-performance web framework **conceived, designed, and guided by human engineering, with the majority of the implementation code written in deep collaboration with advanced AI systems**.
 >
 > Because we are actively pioneering bleeding-edge C++26 language features, kernel `io_uring` multishot pipelines, and hardware-vectorized protocol engines:
-> - **Aegon is in active early alpha development (`v0.1.a2`)**.
+> - **Aegon is in active early alpha development (`v0.1.a2`).**
 > - **Public APIs, configuration structures, and internal behaviors will and can have breaking changes** in future releases as the framework evolves and matures.
 > - Feedback, issue reports, architectural critiques, and pull requests are warmly invited as we shape Aegon towards stability!
 
@@ -62,12 +62,7 @@ The test workload is a standard `GET /health` endpoint returning `200 OK` (`text
 > - **Protocol Support**: Drogon does not implement HTTP/2 or HTTP/3 server protocols. Actix-web does not support cleartext `h2c` and lacks official HTTP/3 support. Axum lacks official production HTTP/3 over QUIC support. Marking a framework as `UNSUPPORTED` reflects actual protocol availability in release builds.
 > - **Workload Scope**: Minimal endpoint testing measures raw protocol engine throughput, memory allocation overhead, and kernel networking latency. Application-level database queries or business logic frequently become the real-world throughput ceiling.
 > - **Hardware**: Benchmarked on bare-metal Zen 4 (Ryzen 5 7600X, 6 physical cores @ up to 5.3GHz, 26GB DDR5, AVX-512 enabled). Results in virtualized hypervisors may vary based on `io_uring` support.
-> - See the full analysis documents:
->   - [Phase 1: HTTP/1.1 Cleartext & TLS](BENCHMARK_ANALYSIS_PHASE1.md)
->   - [Phase 2: HTTP/2 Stream Multiplexing & HPACK](BENCHMARK_ANALYSIS_PHASE2.md)
->   - [Phase 3: HTTP/3 over QUIC](BENCHMARK_ANALYSIS_PHASE3.md)
-
----
+> - Detailed benchmark methodology and protocol-specific results are maintained in the [benchmark documentation](docs/guide/benchmarks.md).
 
 ---
 
