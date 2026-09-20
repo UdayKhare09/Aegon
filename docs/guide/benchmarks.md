@@ -1,6 +1,6 @@
 # Performance & Benchmarks
 
-Aegon is engineered from the ground up for maximum throughput and deterministic, ultra-low tail latency on Linux. By coupling **Linux `io_uring` multishot kernel primitives**, **C++26 symmetric-transfer coroutines**, **zero-copy buffer pooling**, and **stepped SIMD instruction sets (AVX-512 $\to$ AVX2 $\to$ SSE4.2 $\to$ Scalar)**, Aegon sets a new standard for modern web server performance.
+Aegon is engineered from the ground up for maximum throughput and deterministic, ultra-low tail latency on Linux. By coupling **Linux `io_uring` multishot kernel primitives**, **C++26 symmetric-transfer coroutines**, **zero-copy buffer pooling**, and **stepped SIMD instruction sets (AVX-512 → AVX2 → SSE4.2 → Scalar)**, Aegon sets a new standard for modern web server performance.
 
 This page documents the empirical evaluation of Aegon against three world-class, production-grade web frameworks:
 - **Drogon (C++17)** — The top-ranking C++ framework on TechEmpower (`epoll` + thread pool).
@@ -55,7 +55,7 @@ The table below compiles peak performance achieved across all three protocol gen
 
 ### Methodology
 - **Load Tools**: `wrk 4.2.0` (with `--latency`) and `h2load nghttp2/1.70.0` (`-m 1 --h1`).
-- **Concurrency**: Scaled to $100 \times \text{threads}$ (100 to 600 concurrent connections).
+- **Concurrency**: Scaled to 100 × threads (100 to 600 concurrent connections).
 - **Duration**: 10 seconds per test run following a 3-second warmup.
 
 ### HTTP/1.1 Cleartext Performance (`wrk`)
@@ -189,7 +189,9 @@ Aegon registers ring buffers using `io_uring` multishot operations:
 
 ### 2. Stepped SIMD Acceleration Engine
 Aegon executes string, header, and URL operations using compile-time stepped vector fallbacks:
-$$\text{AVX-512BW/VL} \longrightarrow \text{AVX2/BMI2} \longrightarrow \text{SSE4.2} \longrightarrow \text{Scalar}$$
+```
+AVX-512BW/VL  ──>  AVX2/BMI2  ──>  SSE4.2  ──>  Scalar
+```
 - **Case-Insensitive Header Lookups (`HeaderMap::iequals`, `is_prohibited_header`)**: 64-byte and 32-byte masked vector comparisons provide a **6.38x microbenchmark speedup** over scalar comparison.
 - **URL Percent-Decoding (`Request::url_decode_string`)**: SIMD branchless checking skips copying entirely for clean paths (**1.85x speedup**).
 - **Fast Delimiter Scanning (`SimdString::find_char`)**: Hardware-accelerated scanning for query strings (`&`, `=`) and HTTP path delimiters (`?`) in HTTP/1.1, HTTP/2, and HTTP/3.

@@ -5,13 +5,31 @@
   <em>Powered by <code>io_uring</code> multishot primitives, C++26 symmetric-transfer coroutines, stepped SIMD vectorization, and compile-time reflection-free data engines.</em>
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/version-0.1.a2--alpha-blue.svg" alt="Version 0.1.a2" />
+  <img src="https://img.shields.io/badge/C%2B%2B-26-orange.svg" alt="C++26" />
+  <img src="https://img.shields.io/badge/kernel-io__uring-green.svg" alt="io_uring" />
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" />
+</p>
+
+> ### ⚠️ Project Status: Version `0.1.a2` (Early Alpha)
+>
+> **Crafted by Human Vision, Synthesized with AI Assistance**
+>
+> Aegon is an ambitious, high-performance web framework **conceived, designed, and guided by human engineering, with the majority of the implementation code written in deep collaboration with advanced AI systems**.
+>
+> Because we are actively pioneering bleeding-edge C++26 language features, kernel `io_uring` multishot pipelines, and hardware-vectorized protocol engines:
+> - **Aegon is in active early alpha development (`v0.1.a2`)**.
+> - **Public APIs, configuration structures, and internal behaviors will and can have breaking changes** in future releases as the framework evolves and matures.
+> - Feedback, issue reports, architectural critiques, and pull requests are warmly invited as we shape Aegon towards stability!
+
 ---
 
 ## ⚡ Highlights
 
 - **Linux-Native `io_uring` Engine**: Complete kernel bypass with zero-syscall request loops via `IORING_OP_RECV_MULTISHOT`, `IORING_OP_ACCEPT_DIRECT`, and kernel-managed buffer rings (`io_uring_buf_ring`).
 - **C++26 Symmetric-Transfer Coroutines**: Pure `aegon::core::Task<T>` async programming with zero heap frame allocations on hot paths.
-- **Hardware-Aware Stepped SIMD**: 4-tier vector fallback engine ($\text{AVX-512BW/VL} \to \text{AVX2/BMI2} \to \text{SSE4.2} \to \text{Scalar}$) accelerating case-insensitive header matching, URL decoding, and token discovery.
+- **Hardware-Aware Stepped SIMD**: 4-tier vector fallback engine (`AVX-512BW/VL` → `AVX2/BMI2` → `SSE4.2` → `Scalar`) accelerating case-insensitive header matching, URL decoding, and token discovery.
 - **Pure Native HTTP/1.1, HTTP/2, and HTTP/3**:
   - Full **HTTP/1.1** pipelining with batched contiguous response streaming.
   - Full **HTTP/2** multiplexing (`h2c` and `h2-TLS`) with user-space batched frame aggregation and zero-alloc stack header packing.
@@ -35,7 +53,7 @@ The test workload is a standard `GET /health` endpoint returning `200 OK` (`text
 | **HTTP/1.1 TLS (Peak RPS)** | **886,920 req/s** 🏆 | 798,410 req/s | 812,450 req/s | 785,120 req/s | **+9.2% over #2** |
 | **HTTP/2 Cleartext (`h2c`)** | **3,596,346 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | 605,585 req/s | **6.27x faster** |
 | **HTTP/2 TLS (`h2`)** | **3,480,864 req/s** 🏆 | `UNSUPPORTED` | 1,063,276 req/s | 707,069 req/s | **3.27x faster** |
-| **HTTP/3 over QUIC (`h3`)** | **155,062 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | `UNSUPPORTED` | **Only Framework** |
+| **HTTP/3 over QUIC (`h3`)** | **183,574 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | `UNSUPPORTED` | **Only Framework** |
 | **p99 Tail Latency (H2 Stress)** | **4.28 ms** 🏆 | N/A | 45.45 ms | 47.58 ms | **10.6x lower tail** |
 | **Kernel Subsystem** | **`io_uring` multishot** | `epoll` | `epoll` (mio) | `epoll` (mio) | Zero syscall overhead |
 | **Vector Engine** | **AVX-512 / AVX2 / SSE4.2** | None | Auto-vectorized | Auto-vectorized | Stepped SIMD fallback |

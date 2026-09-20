@@ -39,6 +39,13 @@ features:
 
 <div class="vp-doc" style="max-width: 100%; margin: 40px auto 0 auto; padding: 0 48px;">
 
+::: warning Project Status: Version 0.1.a2 (Early Alpha)
+**Crafted by Human Vision, Synthesized with AI Assistance**
+Aegon is an experimental, bleeding-edge framework **conceived, architected, and guided by human engineering, with the majority of the code written in deep collaboration with advanced AI systems**. 
+
+Aegon is in active early development (`v0.1.a2`). **Public APIs and internal behaviors can and will have breaking changes in future releases** as paradigms evolve towards stability.
+:::
+
 ## 📊 Proven Performance at Scale
 
 Aegon was evaluated on bare-metal hardware (**AMD Ryzen 5 7600X, 6 Zen 4 Cores @ 5.3GHz, AVX-512, Linux 6.13**) against **Drogon** (C++), **Actix-web** (Rust), and **Axum** (Rust) on a standard `GET /health` endpoint:

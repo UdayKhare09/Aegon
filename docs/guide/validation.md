@@ -84,12 +84,12 @@ The `FieldValidator<T>` returned by `v.field(name, value)` provides fluent chain
 | Rule | Supported Types | Description |
 | :--- | :--- | :--- |
 | `.required(msg)` | `std::string`, `std::vector`, `std::optional` | Ensures string/vector is non-empty, or optional has a value. |
-| `.min_len(N, msg)` | `std::string`, `std::optional<std::string>` | String length must be $\ge N$. |
-| `.max_len(N, msg)` | `std::string`, `std::optional<std::string>` | String length must be $\le N$. |
+| `.min_len(N, msg)` | `std::string`, `std::optional<std::string>` | String length must be ≥ N. |
+| `.max_len(N, msg)` | `std::string`, `std::optional<std::string>` | String length must be ≤ N. |
 | `.email(msg)` | `std::string`, `std::optional<std::string>` | Validates standard email address formatting. |
-| `.min(val, msg)` | Numeric types, `std::optional<Num>` | Value must be $\ge \text{val}$. |
-| `.max(val, msg)` | Numeric types, `std::optional<Num>` | Value must be $\le \text{val}$. |
-| `.positive(msg)` | Numeric types, `std::optional<Num>` | Value must be $> 0$. |
+| `.min(val, msg)` | Numeric types, `std::optional<Num>` | Value must be ≥ val. |
+| `.max(val, msg)` | Numeric types, `std::optional<Num>` | Value must be ≤ val. |
+| `.positive(msg)` | Numeric types, `std::optional<Num>` | Value must be > 0. |
 | `.not_nil(msg)` | Types with `.is_nil()` (e.g. `UUID`) | Ensures identifier is not nil (`00000000-...`). |
 | `.past(msg)` | Timestamp types | Validates timestamp is in the past. |
 | `.future(msg)` | Timestamp types | Validates timestamp is in the future. |

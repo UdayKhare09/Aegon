@@ -1,6 +1,6 @@
 # Provided Buffer Ring (BufferPool)
 
-In traditional network servers handling 100,000+ idle persistent connections, allocating a 64KB read buffer for each open socket consumes gigabytes of resident memory ($100{,}000 \times 64\text{KB} = 6.4\text{GB}$), even when no traffic is flowing.
+In traditional network servers handling 100,000+ idle persistent connections, allocating a 64KB read buffer for each open socket consumes gigabytes of resident memory (100,000 × 64KB = 6.4GB), even when no traffic is flowing.
 
 Aegon eliminates this memory waste using modern Linux **Provided Buffer Rings (`PBUF_RING`)** via `aegon::core::BufferPool`.
 

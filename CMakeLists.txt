@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
-project(Aegon LANGUAGES CXX)
+
+set(AEGON_VERSION_MAJOR 0)
+set(AEGON_VERSION_MINOR 1)
+set(AEGON_VERSION_PATCH 0)
+set(AEGON_VERSION_PRERELEASE "a2")
+set(AEGON_VERSION_STRING "${AEGON_VERSION_MAJOR}.${AEGON_VERSION_MINOR}.${AEGON_VERSION_PRERELEASE}")
+
+project(Aegon
+    VERSION ${AEGON_VERSION_MAJOR}.${AEGON_VERSION_MINOR}.${AEGON_VERSION_PATCH}
+    LANGUAGES CXX
+)
 
 enable_testing()
 
@@ -358,7 +368,13 @@ add_executable(test_simd_string
 )
 target_link_libraries(test_simd_string PRIVATE aegon_core)
 
+add_executable(test_version
+    tests/test_version.cpp
+)
+target_include_directories(test_version PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 # Test Registrations for CTest
+add_test(NAME version COMMAND test_version)
 add_test(NAME simd_string COMMAND test_simd_string)
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
