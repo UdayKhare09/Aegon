@@ -19,15 +19,7 @@ target_include_directories(aegon_adv_sample PRIVATE
 )
 
 target_link_libraries(aegon_adv_sample PRIVATE
-    aegon_http
-    aegon_redis
-    aegon_core
-    aegon_uuid
-    glaze::glaze
-    sqlite3
-    pq
-    crypto
-    ssl
-    uring
-    pthread
+    Aegon::http
+    Aegon::orm
+    Aegon::redis
 )

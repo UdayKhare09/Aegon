@@ -43,15 +43,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     )
 endif()
 
-# UUID library
-add_library(aegon_uuid
-    src/data/uuid/UUID.cpp
-    src/data/uuid/UUIDGenerator.cpp
-)
+include(GNUInstallDirs)
 
-target_include_directories(aegon_uuid PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
+# Third-party core dependencies
+find_package(Threads REQUIRED)
 
 # Core Async io_uring library
 add_library(aegon_core
@@ -61,23 +56,18 @@ add_library(aegon_core
 )
 
 target_include_directories(aegon_core PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/aegon>
 )
 
 target_link_libraries(aegon_core PUBLIC
     uring
-    pthread
+    Threads::Threads
 )
 
-# Third-party dependencies
-include(FetchContent)
-FetchContent_Declare(
-    glaze
-    GIT_REPOSITORY https://github.com/stephenberry/glaze.git
-    GIT_TAG v8.3.0
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(glaze)
+# Third-party dependencies: Glaze (system package)
+find_package(glaze REQUIRED)
 
 # Configuration library (YAML, Env, CLI)
 add_library(aegon_config
@@ -86,7 +76,9 @@ add_library(aegon_config
 )
 
 target_include_directories(aegon_config PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/aegon>
 )
 
 target_link_libraries(aegon_config PUBLIC
@@ -102,13 +94,34 @@ add_library(aegon_redis
 )
 
 target_include_directories(aegon_redis PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/aegon>
 )
 
 target_link_libraries(aegon_redis PUBLIC
     aegon_core
-    aegon_uuid
     crypto
+)
+
+# Find database drivers for unified ORM
+find_package(PostgreSQL QUIET)
+
+# Unified ORM (Object-Relational Mapping & SQL Query Engine) library
+add_library(aegon_orm INTERFACE)
+
+target_include_directories(aegon_orm INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/aegon>
+    $<$<BOOL:${PostgreSQL_FOUND}>:${PostgreSQL_INCLUDE_DIRS}>
+)
+
+target_link_libraries(aegon_orm INTERFACE
+    aegon_core
+    glaze::glaze
+    sqlite3
+    pq
 )
 
 # HTTP Server and Routing library
@@ -129,7 +142,9 @@ add_library(aegon_http
 )
 
 target_include_directories(aegon_http PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/aegon>
 )
 
 target_link_libraries(aegon_http PUBLIC
@@ -153,115 +168,179 @@ add_library(aegon_gateway
 )
 
 target_include_directories(aegon_gateway PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/aegon>
 )
 
 target_link_libraries(aegon_gateway PUBLIC
     aegon_http
     aegon_core
-    aegon_uuid
+)
+
+# Export names and in-tree aliases for modular targets (Aegon::core, Aegon::http, etc.)
+set_target_properties(aegon_core PROPERTIES EXPORT_NAME core)
+set_target_properties(aegon_config PROPERTIES EXPORT_NAME config)
+set_target_properties(aegon_redis PROPERTIES EXPORT_NAME redis)
+set_target_properties(aegon_orm PROPERTIES EXPORT_NAME orm)
+set_target_properties(aegon_http PROPERTIES EXPORT_NAME http)
+set_target_properties(aegon_gateway PROPERTIES EXPORT_NAME gateway)
+
+add_library(Aegon::core ALIAS aegon_core)
+add_library(Aegon::config ALIAS aegon_config)
+add_library(Aegon::redis ALIAS aegon_redis)
+add_library(Aegon::orm ALIAS aegon_orm)
+add_library(Aegon::http ALIAS aegon_http)
+add_library(Aegon::gateway ALIAS aegon_gateway)
+
+# ==============================================================================
+# Installation & Package Configuration (cmake --install & find_package(Aegon))
+# ==============================================================================
+install(
+    TARGETS aegon_core aegon_config aegon_redis aegon_orm aegon_http aegon_gateway
+    EXPORT AegonTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/aegon
+    FILES_MATCHING
+        PATTERN "*.h"
+        PATTERN "*.hpp"
+)
+
+install(
+    EXPORT AegonTargets
+    FILE AegonTargets.cmake
+    NAMESPACE Aegon::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Aegon
+)
+
+include(CMakePackageConfigHelpers)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/AegonConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/AegonConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Aegon
+    PATH_VARS CMAKE_INSTALL_INCLUDEDIR CMAKE_INSTALL_LIBDIR
+)
+
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/AegonConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+install(
+    FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/AegonConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/AegonConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Aegon
 )
 
 # Test and Benchmark executables
 add_executable(test_uuid
     tests/test_uuid.cpp
 )
-target_link_libraries(test_uuid PRIVATE aegon_uuid)
+target_link_libraries(test_uuid PRIVATE aegon_core)
 
 add_executable(test_async_core
     tests/test_async_core.cpp
 )
-target_link_libraries(test_async_core PRIVATE aegon_core aegon_uuid)
+target_link_libraries(test_async_core PRIVATE aegon_core)
 
 add_executable(test_http_server
     tests/test_http_server.cpp
 )
-target_link_libraries(test_http_server PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_http_server PRIVATE aegon_http aegon_core)
 
 add_executable(test_http2_server
     tests/test_http2_server.cpp
 )
-target_link_libraries(test_http2_server PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_http2_server PRIVATE aegon_http aegon_core)
 
 add_executable(test_tls_server
     tests/test_tls_server.cpp
 )
-target_link_libraries(test_tls_server PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_tls_server PRIVATE aegon_http aegon_core)
 
 add_executable(test_http3_server
     tests/test_http3_server.cpp
 )
-target_link_libraries(test_http3_server PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_http3_server PRIVATE aegon_http aegon_core)
 
 add_executable(test_http3_compliance
     tests/test_http3_compliance.cpp
 )
-target_link_libraries(test_http3_compliance PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_http3_compliance PRIVATE aegon_http aegon_core)
 
 add_executable(test_radix_router
     tests/test_radix_router.cpp
 )
-target_link_libraries(test_radix_router PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_radix_router PRIVATE aegon_http aegon_core)
 
 add_executable(test_dto_validation
     tests/test_dto_validation.cpp
 )
-target_link_libraries(test_dto_validation PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_dto_validation PRIVATE aegon_http aegon_core)
 
 add_executable(test_foundational_types
     tests/test_foundational_types.cpp
 )
-target_link_libraries(test_foundational_types PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_foundational_types PRIVATE aegon_http aegon_core)
 
 add_executable(test_sql_schema
     tests/test_sql_schema.cpp
 )
-target_link_libraries(test_sql_schema PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_sql_schema PRIVATE aegon_orm aegon_http)
 
 add_executable(test_sql_query_builder
     tests/test_sql_query_builder.cpp
 )
-target_link_libraries(test_sql_query_builder PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_sql_query_builder PRIVATE aegon_orm aegon_http)
 
 add_executable(test_sql_transaction
     tests/test_sql_transaction.cpp
 )
-target_link_libraries(test_sql_transaction PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_sql_transaction PRIVATE aegon_orm aegon_http)
 
 add_executable(test_sql_drivers
     tests/test_sql_drivers.cpp
 )
-target_link_libraries(test_sql_drivers PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_sql_drivers PRIVATE aegon_orm aegon_http)
 
 add_executable(test_live_postgres
     tests/test_live_postgres.cpp
 )
-target_link_libraries(test_live_postgres PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_live_postgres PRIVATE aegon_orm aegon_http)
 
 add_executable(test_server_sql_config
     tests/test_server_sql_config.cpp
 )
-target_link_libraries(test_server_sql_config PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_server_sql_config PRIVATE aegon_orm aegon_http)
 
 add_executable(test_sql_relations
     tests/test_sql_relations.cpp
 )
-target_link_libraries(test_sql_relations PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_sql_relations PRIVATE aegon_orm aegon_http)
 
 add_executable(test_sql_advanced_queries
     tests/test_sql_advanced_queries.cpp
 )
-target_link_libraries(test_sql_advanced_queries PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_sql_advanced_queries PRIVATE aegon_orm aegon_http)
 
 add_executable(test_simd_router
     tests/test_simd_router.cpp
 )
-target_link_libraries(test_simd_router PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_simd_router PRIVATE aegon_http aegon_core)
 
 add_executable(test_advanced_io
     tests/test_advanced_io.cpp
 )
-target_link_libraries(test_advanced_io PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_advanced_io PRIVATE aegon_http aegon_core)
 
 add_executable(test_redis_protocol
     tests/test_redis_protocol.cpp
@@ -271,7 +350,7 @@ target_link_libraries(test_redis_protocol PRIVATE aegon_redis aegon_core)
 add_executable(test_orm_cache
     tests/test_orm_cache.cpp
 )
-target_link_libraries(test_orm_cache PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_orm_cache PRIVATE aegon_orm aegon_http)
 
 add_executable(test_live_redis_topologies
     tests/test_live_redis_topologies.cpp
@@ -281,7 +360,7 @@ target_link_libraries(test_live_redis_topologies PRIVATE aegon_redis aegon_core)
 add_executable(test_live_postgres_orm_cache
     tests/test_live_postgres_orm_cache.cpp
 )
-target_link_libraries(test_live_postgres_orm_cache PRIVATE aegon_http aegon_redis aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_live_postgres_orm_cache PRIVATE aegon_orm aegon_redis aegon_http)
 
 add_executable(test_redis_advanced
     tests/test_redis_advanced.cpp
@@ -291,67 +370,67 @@ target_link_libraries(test_redis_advanced PRIVATE aegon_redis aegon_core crypto)
 add_executable(test_orm_advanced
     tests/test_orm_advanced.cpp
 )
-target_link_libraries(test_orm_advanced PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_orm_advanced PRIVATE aegon_orm aegon_http)
 
 add_executable(test_sql_tx_cache_parity
     tests/test_sql_tx_cache_parity.cpp
 )
-target_link_libraries(test_sql_tx_cache_parity PRIVATE aegon_http aegon_core aegon_uuid sqlite3 pq)
+target_link_libraries(test_sql_tx_cache_parity PRIVATE aegon_orm aegon_http)
 
 add_executable(test_error_handling
     tests/test_error_handling.cpp
 )
-target_link_libraries(test_error_handling PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_error_handling PRIVATE aegon_http aegon_core)
 
 add_executable(test_middleware
     tests/test_middleware.cpp
 )
-target_link_libraries(test_middleware PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_middleware PRIVATE aegon_http aegon_core)
 
 add_executable(test_cors
     tests/test_cors.cpp
 )
-target_link_libraries(test_cors PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_cors PRIVATE aegon_http aegon_core)
 
 add_executable(test_security_headers
     tests/test_security_headers.cpp
 )
-target_link_libraries(test_security_headers PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_security_headers PRIVATE aegon_http aegon_core)
 
 add_executable(test_cookie
     tests/test_cookie.cpp
 )
-target_link_libraries(test_cookie PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_cookie PRIVATE aegon_http aegon_core)
 
 add_executable(test_jwt
     tests/test_jwt.cpp
 )
-target_link_libraries(test_jwt PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_jwt PRIVATE aegon_http aegon_core)
 
 add_executable(test_auth_middleware
     tests/test_auth_middleware.cpp
 )
-target_link_libraries(test_auth_middleware PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_auth_middleware PRIVATE aegon_http aegon_core)
 
 add_executable(test_rbac_guard
     tests/test_rbac_guard.cpp
 )
-target_link_libraries(test_rbac_guard PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_rbac_guard PRIVATE aegon_http aegon_core)
 
 add_executable(test_jwks
     tests/test_jwks.cpp
 )
-target_link_libraries(test_jwks PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_jwks PRIVATE aegon_http aegon_core)
 
 add_executable(test_http_client
     tests/test_http_client.cpp
 )
-target_link_libraries(test_http_client PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_http_client PRIVATE aegon_http aegon_core)
 
 add_executable(test_service_registry
     tests/test_service_registry.cpp
 )
-target_link_libraries(test_service_registry PRIVATE aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_service_registry PRIVATE aegon_http aegon_core)
 
 add_executable(test_config
     tests/test_config.cpp
@@ -361,7 +440,7 @@ target_link_libraries(test_config PRIVATE aegon_config)
 add_executable(test_gateway
     tests/test_gateway.cpp
 )
-target_link_libraries(test_gateway PRIVATE aegon_gateway aegon_http aegon_core aegon_uuid)
+target_link_libraries(test_gateway PRIVATE aegon_gateway aegon_http aegon_core)
 
 add_executable(test_simd_string
     tests/test_simd_string.cpp

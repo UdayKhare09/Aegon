@@ -1,5 +1,5 @@
 #include "http/Server.h"
-#include "data/uuid/UUIDGenerator.h"
+#include "data/types/UUIDGenerator.h"
 #include <iostream>
 #include <cassert>
 #include <thread>

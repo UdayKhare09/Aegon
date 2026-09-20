@@ -1,0 +1,19 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Core threads & system libraries
+find_dependency(Threads)
+find_dependency(glaze)
+
+# Database dependencies for Aegon::orm
+find_dependency(PostgreSQL)
+find_dependency(SQLite3)
+
+# TLS & Cryptography dependencies for Aegon::http and Aegon::redis
+find_dependency(OpenSSL)
+
+# Import the Aegon targets
+include("${CMAKE_CURRENT_LIST_DIR}/AegonTargets.cmake")
+
+check_required_components(Aegon)

@@ -4,7 +4,7 @@
 #include "http/tls/TlsContext.h"
 #include "http/Router.h"
 #include "http/Server.h"
-#include "data/uuid/UUIDGenerator.h"
+#include "data/types/UUIDGenerator.h"
 #include <iostream>
 #include <cstdlib>
 #include <thread>

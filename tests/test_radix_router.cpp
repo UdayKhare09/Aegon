@@ -2,7 +2,7 @@
 #include "http/Request.h"
 #include "http/Response.h"
 #include "http/Context.h"
-#include "data/uuid/UUIDGenerator.h"
+#include "data/types/UUIDGenerator.h"
 #include <iostream>
 #include <cassert>
 #include <string>

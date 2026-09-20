@@ -1,7 +1,7 @@
 #pragma once
 
 #include "http/jwt/JwtAlgorithm.h"
-#include "data/uuid/UUIDGenerator.h"
+#include "data/types/UUIDGenerator.h"
 #include <glaze/glaze.hpp>
 #include <string>
 #include <string_view>

@@ -1,8 +1,8 @@
 #include "http/Server.h"
 #include "http/v3/QuicPacket.h"
 #include "http/v3/Http3Server.h"
-#include "data/uuid/UUID.h"
-#include "data/uuid/UUIDGenerator.h"
+#include "data/types/UUID.h"
+#include "data/types/UUIDGenerator.h"
 #include <iostream>
 #include <cassert>
 #include <thread>

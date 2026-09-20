@@ -3,7 +3,7 @@
 #include "http/Response.h"
 #include "http/Router.h"
 #include "data/validation/Validator.h"
-#include "data/uuid/UUID.h"
+#include "data/types/UUID.h"
 #include <iostream>
 #include <cassert>
 #include <string>

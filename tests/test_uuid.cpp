@@ -1,5 +1,5 @@
-#include "data/uuid/UUID.h"
-#include "data/uuid/UUIDGenerator.h"
+#include "data/types/UUID.h"
+#include "data/types/UUIDGenerator.h"
 
 #include <iostream>
 #include <vector>

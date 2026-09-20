@@ -1,6 +1,6 @@
 #include "http/Server.h"
 #include "http/v1/Http1Parser.h"
-#include "data/uuid/UUIDGenerator.h"
+#include "data/types/UUIDGenerator.h"
 #include <iostream>
 #include <cassert>
 #include <cstring>

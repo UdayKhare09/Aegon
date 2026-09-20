@@ -1,6 +1,6 @@
 #include "RedisClient.h"
 #include "RedisLock.h"
-#include "data/uuid/UUIDGenerator.h"
+#include "data/types/UUIDGenerator.h"
 #include <openssl/sha.h>
 #include <thread>
 #include <iomanip>

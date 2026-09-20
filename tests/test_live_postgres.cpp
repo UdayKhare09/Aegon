@@ -1,6 +1,6 @@
 #include "data/orm/sql/Sql.h"
 #include "data/orm/sql/drivers/PostgresDriver.h"
-#include "data/uuid/UUIDGenerator.h"
+#include "data/types/UUIDGenerator.h"
 #include "http/Context.h"
 #include "http/Request.h"
 #include "http/Response.h"
