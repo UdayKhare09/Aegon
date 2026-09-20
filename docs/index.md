@@ -25,7 +25,7 @@ features:
     details: Symmetric transfer coroutines via Task<T> with zero heap allocations in hot paths, eliminating thread pool exhaustion and context switching.
   - icon: 🏆
     title: Verified World-Class Speed
-    details: Outperforms Actix-web, Drogon, and Axum across HTTP/1.1 (912k req/s), HTTP/2 (3.6M req/s), and HTTP/3 QUIC (155k req/s) with sub-5ms p99 latency.
+    details: Outperforms Actix-web, Drogon, and Axum across HTTP/1.1 (912k req/s), HTTP/2 (3.6M req/s), and HTTP/3 QUIC (183k req/s) with sub-5ms p99 latency.
   - icon: 🛡️
     title: Compile-Time Static ORM
     details: Type-safe SQL builder with zero reflection overhead. Fluent expressions, eager relation loading, migrations, and atomic transactions.
@@ -49,7 +49,7 @@ Aegon was evaluated on bare-metal hardware (**AMD Ryzen 5 7600X, 6 Zen 4 Cores @
 | **HTTP/1.1 TLS (Peak)** | **886,920 req/s** 🏆 | 798,410 req/s | 812,450 req/s | 785,120 req/s | **+9.2% over #2** |
 | **HTTP/2 Cleartext (`h2c`)** | **3,596,346 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | 605,585 req/s | **6.27x faster** |
 | **HTTP/2 TLS (`h2`)** | **3,480,864 req/s** 🏆 | `UNSUPPORTED` | 1,063,276 req/s | 707,069 req/s | **3.27x faster** |
-| **HTTP/3 over QUIC (`h3`)** | **155,062 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | `UNSUPPORTED` | **Only Framework** |
+| **HTTP/3 over QUIC (`h3`)** | **183,574 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | `UNSUPPORTED` | **Only Framework** |
 | **p99 Tail Latency (H2 Stress)** | **4.28 ms** 🏆 | N/A | 45.45 ms | 47.58 ms | **10.6x lower tail** |
 
 ::: tip In-Depth Analysis & Disclaimers

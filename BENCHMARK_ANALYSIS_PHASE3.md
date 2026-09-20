@@ -27,25 +27,25 @@
 
 | Cores / Threads | Framework | Throughput (RPS) | Mean Latency | Median (p50) | Tail (p99) | Memory RSS | Status |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| 1 | **Aegon** 🏆 | **    75,362 req/s** | ** 0.663 ms** | ** 0.499 ms** | ** 4.265 ms** | **19.5 MB** | `SUPPORTED` |
-| 1 | Actix-web | *0 req/s* | - | - | - | 10.6 MB | `UNSUPPORTED` |
-| 1 | Axum | *0 req/s* | - | - | - | 6.0 MB | `UNSUPPORTED` |
-| 1 | Drogon | *0 req/s* | - | - | - | 12.5 MB | `UNSUPPORTED` |
+| 1 | **Aegon** 🏆 | **    90,887 req/s** | ** 0.880 ms** | ** 0.610 ms** | ** 6.562 ms** | **34.5 MB** | `SUPPORTED` |
+| 1 | Actix-web | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 1 | Axum | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 1 | Drogon | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
 |---|---|---|---|---|---|---|---|
-| 2 | **Aegon** 🏆 | **   115,642 req/s** | ** 0.864 ms** | ** 0.681 ms** | ** 5.158 ms** | **27.1 MB** | `SUPPORTED` |
-| 2 | Actix-web | *0 req/s* | - | - | - | 10.6 MB | `UNSUPPORTED` |
-| 2 | Axum | *0 req/s* | - | - | - | 5.9 MB | `UNSUPPORTED` |
-| 2 | Drogon | *0 req/s* | - | - | - | 12.4 MB | `UNSUPPORTED` |
+| 2 | **Aegon** 🏆 | **   145,890 req/s** | ** 1.096 ms** | ** 0.802 ms** | ** 7.680 ms** | **33.0 MB** | `SUPPORTED` |
+| 2 | Actix-web | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 2 | Axum | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 2 | Drogon | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
 |---|---|---|---|---|---|---|---|
-| 4 | **Aegon** 🏆 | **   143,298 req/s** | ** 0.697 ms** | ** 0.499 ms** | ** 5.036 ms** | **31.9 MB** | `SUPPORTED` |
-| 4 | Actix-web | *0 req/s* | - | - | - | 10.6 MB | `UNSUPPORTED` |
-| 4 | Axum | *0 req/s* | - | - | - | 5.8 MB | `UNSUPPORTED` |
-| 4 | Drogon | *0 req/s* | - | - | - | 12.6 MB | `UNSUPPORTED` |
+| 4 | **Aegon** 🏆 | **   170,987 req/s** | ** 0.935 ms** | ** 0.626 ms** | ** 8.368 ms** | **37.8 MB** | `SUPPORTED` |
+| 4 | Actix-web | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 4 | Axum | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 4 | Drogon | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
 |---|---|---|---|---|---|---|---|
-| 6 | **Aegon** 🏆 | **   155,062 req/s** | ** 0.645 ms** | ** 0.441 ms** | ** 5.240 ms** | **38.5 MB** | `SUPPORTED` |
-| 6 | Actix-web | *0 req/s* | - | - | - | 10.7 MB | `UNSUPPORTED` |
-| 6 | Axum | *0 req/s* | - | - | - | 6.0 MB | `UNSUPPORTED` |
-| 6 | Drogon | *0 req/s* | - | - | - | 12.8 MB | `UNSUPPORTED` |
+| 6 | **Aegon** 🏆 | **   179,427 req/s** | ** 0.891 ms** | ** 0.582 ms** | ** 8.729 ms** | **43.1 MB** | `SUPPORTED` |
+| 6 | Actix-web | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 6 | Axum | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 6 | Drogon | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
 |---|---|---|---|---|---|---|---|
 
 ---

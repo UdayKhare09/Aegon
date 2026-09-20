@@ -1,18 +1,24 @@
 #include "http/v3/Http3Connection.h"
+#include <array>
+#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <iostream>
 #include <cstdarg>
 #include <openssl/rand.h>
 
+#include "core/simd/SimdString.h"
+
 namespace aegon::http::v3 {
 
 bool is_prohibited_header(std::string_view n) {
-    if (n.size() == 10 && strncasecmp(n.data(), "connection", 10) == 0) return true;
-    if (n.size() == 10 && strncasecmp(n.data(), "keep-alive", 10) == 0) return true;
-    if (n.size() == 16 && strncasecmp(n.data(), "proxy-connection", 16) == 0) return true;
-    if (n.size() == 17 && strncasecmp(n.data(), "transfer-encoding", 17) == 0) return true;
-    if (n.size() == 7 && strncasecmp(n.data(), "upgrade", 7) == 0) return true;
+    if (n.size() == 10) {
+        return core::simd::SimdString::iequals(n, "connection") ||
+               core::simd::SimdString::iequals(n, "keep-alive");
+    }
+    if (n.size() == 16) return core::simd::SimdString::iequals(n, "proxy-connection");
+    if (n.size() == 17) return core::simd::SimdString::iequals(n, "transfer-encoding");
+    if (n.size() == 7) return core::simd::SimdString::iequals(n, "upgrade");
     return false;
 }
 
@@ -335,7 +341,7 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
     if (n == ":method") {
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
-        size_t qmark = v.find('?');
+        size_t qmark = core::simd::SimdString::find_char(v, '?');
         if (qmark != std::string_view::npos) {
             stream->path_storage.assign(v.data(), qmark);
             stream->query_storage.assign(v.data() + qmark + 1, v.size() - qmark - 1);
@@ -377,7 +383,7 @@ int Http3Connection::on_stream_trailer(int64_t stream_id, int32_t, nghttp3_rcbuf
     }
 
     // RFC 9114 §4.3: Prohibited and framing headers are not permitted in trailers
-    if (is_prohibited_header(n) || n == "content-length" || n == "host") {
+    if (is_prohibited_header(n) || core::simd::SimdString::iequals(n, "content-length") || core::simd::SimdString::iequals(n, "host")) {
         return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     }
 
@@ -427,44 +433,59 @@ nghttp3_ssize Http3Connection::on_stream_read(int64_t stream_id, uint32_t* pflag
 }
 
 void Http3Connection::submit_response(Http3Stream* stream) {
-    std::string status_str = std::to_string(static_cast<uint16_t>(stream->res.status()));
-    std::string cl_str = std::to_string(stream->res.body().size());
+    char status_buf[16];
+    auto [p_status, _s] = std::to_chars(status_buf, status_buf + sizeof(status_buf), static_cast<uint16_t>(stream->res.status()));
+    size_t status_len = static_cast<size_t>(p_status - status_buf);
 
-    std::vector<nghttp3_nv> nva;
-    nva.reserve(4 + stream->res.headers().size());
+    char cl_buf[32];
+    auto [p_cl, _c] = std::to_chars(cl_buf, cl_buf + sizeof(cl_buf), stream->res.body().size());
+    size_t cl_len = static_cast<size_t>(p_cl - cl_buf);
 
-    nva.push_back(nghttp3_nv{
-        .name = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(":status")),
-        .value = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(status_str.data())),
-        .namelen = 7,
-        .valuelen = status_str.size(),
-        .flags = NGHTTP3_NV_FLAG_NONE
-    });
+    std::array<nghttp3_nv, 16> nva_stack;
+    std::vector<nghttp3_nv> nva_heap;
+    nghttp3_nv* nva_ptr = nva_stack.data();
+    size_t nva_count = 0;
+
+    auto push_nv = [&](const uint8_t* name, size_t namelen, const uint8_t* val, size_t vallen) {
+        nghttp3_nv nv{
+            .name = const_cast<uint8_t*>(name),
+            .value = const_cast<uint8_t*>(val),
+            .namelen = namelen,
+            .valuelen = vallen,
+            .flags = NGHTTP3_NV_FLAG_NONE
+        };
+        if (nva_count < nva_stack.size() && nva_heap.empty()) {
+            nva_stack[nva_count++] = nv;
+        } else {
+            if (nva_heap.empty()) {
+                nva_heap.reserve(16 + stream->res.headers().size());
+                for (size_t i = 0; i < nva_count; ++i) {
+                    nva_heap.push_back(nva_stack[i]);
+                }
+            }
+            nva_heap.push_back(nv);
+            nva_count = nva_heap.size();
+            nva_ptr = nva_heap.data();
+        }
+    };
+
+    push_nv(reinterpret_cast<const uint8_t*>(":status"), 7,
+            reinterpret_cast<const uint8_t*>(status_buf), status_len);
 
     if (!stream->res.headers().contains("content-length")) {
-        nva.push_back(nghttp3_nv{
-            .name = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>("content-length")),
-            .value = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(cl_str.data())),
-            .namelen = 14,
-            .valuelen = cl_str.size(),
-            .flags = NGHTTP3_NV_FLAG_NONE
-        });
+        push_nv(reinterpret_cast<const uint8_t*>("content-length"), 14,
+                reinterpret_cast<const uint8_t*>(cl_buf), cl_len);
     }
 
     for (const auto& h : stream->res.headers()) {
-        nva.push_back(nghttp3_nv{
-            .name = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(h.name.data())),
-            .value = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(h.value.data())),
-            .namelen = h.name.size(),
-            .valuelen = h.value.size(),
-            .flags = NGHTTP3_NV_FLAG_NONE
-        });
+        push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+                reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
     }
 
     nghttp3_data_reader dr{};
     dr.read_data = h3_read_data;
 
-    nghttp3_conn_submit_response(h3conn_, stream->stream_id, nva.data(), nva.size(), &dr);
+    nghttp3_conn_submit_response(h3conn_, stream->stream_id, nva_ptr, nva_count, &dr);
     stream->response_submitted = true;
 }
 
@@ -515,15 +536,45 @@ void Http3Connection::shutdown() {
 bool Http3Connection::flush_outbound() {
     if (!qconn_) return false;
 
-    alignas(64) uint8_t out[65536];
     size_t max_payload = ngtcp2_conn_get_max_tx_udp_payload_size(qconn_);
-    if (max_payload == 0 || max_payload > sizeof(out)) {
+    if (max_payload == 0 || max_payload > 1500) {
         max_payload = 1452;
     }
 
     ngtcp2_path_storage ps;
     ngtcp2_path_storage_init(&ps, reinterpret_cast<const ngtcp2_sockaddr*>(&local_addr_), local_addr_len_,
                              reinterpret_cast<const ngtcp2_sockaddr*>(&remote_addr_), remote_addr_len_, nullptr);
+
+    constexpr size_t BATCH_SIZE = 16;
+    alignas(64) uint8_t packet_bufs[BATCH_SIZE][1500];
+    iovec iovs[BATCH_SIZE];
+    mmsghdr msgs[BATCH_SIZE];
+    size_t batch_count = 0;
+
+    auto flush_batch = [&]() -> bool {
+        if (batch_count == 0) return true;
+        for (size_t i = 0; i < batch_count; ++i) {
+            msgs[i].msg_hdr.msg_name = const_cast<sockaddr*>(reinterpret_cast<const sockaddr*>(&remote_addr_));
+            msgs[i].msg_hdr.msg_namelen = remote_addr_len_;
+            msgs[i].msg_hdr.msg_iov = &iovs[i];
+            msgs[i].msg_hdr.msg_iovlen = 1;
+            msgs[i].msg_hdr.msg_control = nullptr;
+            msgs[i].msg_hdr.msg_controllen = 0;
+            msgs[i].msg_hdr.msg_flags = 0;
+        }
+
+        int sent = ::sendmmsg(udp_fd_, msgs, static_cast<unsigned int>(batch_count), 0);
+        if (sent < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                batch_count = 0;
+                return true;
+            }
+            batch_count = 0;
+            return false;
+        }
+        batch_count = 0;
+        return true;
+    };
 
     while (true) {
         int64_t stream_id = -1;
@@ -544,13 +595,15 @@ bool Http3Connection::flush_outbound() {
         ngtcp2_pkt_info pi{};
         ngtcp2_ssize nwrite = 0;
 
+        uint8_t* cur_buf = packet_bufs[batch_count];
+
         if (stream_id >= 0) {
             nwrite = ngtcp2_conn_writev_stream(
-                qconn_, &ps.path, &pi, out, max_payload, &pdatalen,
+                qconn_, &ps.path, &pi, cur_buf, max_payload, &pdatalen,
                 flags, stream_id, reinterpret_cast<const ngtcp2_vec*>(vec), static_cast<size_t>(veccnt), get_timestamp_ns());
         } else {
             nwrite = ngtcp2_conn_writev_stream(
-                qconn_, &ps.path, &pi, out, max_payload, &pdatalen,
+                qconn_, &ps.path, &pi, cur_buf, max_payload, &pdatalen,
                 NGTCP2_WRITE_STREAM_FLAG_NONE, -1, nullptr, 0, get_timestamp_ns());
         }
 
@@ -566,15 +619,19 @@ bool Http3Connection::flush_outbound() {
             }
         }
 
-        ssize_t s = sendto(udp_fd_, out, static_cast<size_t>(nwrite), 0,
-                           reinterpret_cast<const sockaddr*>(&remote_addr_), remote_addr_len_);
-        if (s <= 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                break;
-            }
-            return false;
+        iovs[batch_count].iov_base = cur_buf;
+        iovs[batch_count].iov_len = static_cast<size_t>(nwrite);
+        batch_count++;
+
+        if (batch_count == BATCH_SIZE) {
+            if (!flush_batch()) return false;
         }
     }
+
+    if (batch_count > 0) {
+        if (!flush_batch()) return false;
+    }
+
     return true;
 }
 

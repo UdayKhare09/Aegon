@@ -52,6 +52,9 @@ private:
     void send_version_negotiation(const ngtcp2_version_cid& vc,
                                   const sockaddr_storage& remote_addr,
                                   socklen_t remote_addr_len);
+    core::Task<void> dispatch_datagram(std::span<const uint8_t> pkt,
+                                       const sockaddr_storage& from_addr,
+                                       socklen_t from_len);
 
     core::EventLoop& loop_;
     uint16_t port_;
@@ -62,8 +65,25 @@ private:
     int udp_fd_{-1};
     bool running_{false};
 
-    // Map DCID string -> Http3Connection
-    std::unordered_map<std::string, std::shared_ptr<Http3Connection>> connections_;
+    struct CidHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view sv) const noexcept {
+            return std::hash<std::string_view>{}(sv);
+        }
+        size_t operator()(const std::string& s) const noexcept {
+            return std::hash<std::string_view>{}(s);
+        }
+    };
+
+    struct CidEqual {
+        using is_transparent = void;
+        bool operator()(std::string_view a, std::string_view b) const noexcept {
+            return a == b;
+        }
+    };
+
+    // Map DCID string -> Http3Connection with transparent hashing for zero-allocation lookup
+    std::unordered_map<std::string, std::shared_ptr<Http3Connection>, CidHash, CidEqual> connections_;
 };
 
 } // namespace aegon::http::v3

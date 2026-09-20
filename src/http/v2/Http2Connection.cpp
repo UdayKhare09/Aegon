@@ -1,4 +1,5 @@
 #include "http/v2/Http2Connection.h"
+#include "core/simd/SimdString.h"
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -91,7 +92,7 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
     if (n == ":method") {
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
-        size_t qmark = v.find('?');
+        size_t qmark = core::simd::SimdString::find_char(v, '?');
         if (qmark != std::string_view::npos) {
             stream->path_storage.assign(v.data(), qmark);
             stream->query_storage.assign(v.data() + qmark + 1, v.size() - qmark - 1);

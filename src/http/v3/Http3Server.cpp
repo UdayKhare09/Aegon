@@ -30,6 +30,10 @@ bool Http3Server::start() {
         setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
         setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
 
+        int buf_size = 4 * 1024 * 1024;
+        setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
+        setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
+
         sockaddr_in6 addr6{};
         addr6.sin6_family = AF_INET6;
         addr6.sin6_addr = in6addr_any;
@@ -49,6 +53,10 @@ bool Http3Server::start() {
         int reuse = 1;
         setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
         setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
+
+        int buf_size = 4 * 1024 * 1024;
+        setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
+        setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
 
         sockaddr_in addr4{};
         addr4.sin_family = AF_INET;
@@ -155,11 +163,77 @@ core::Task<void> Http3Server::run_timer_loop() {
     }
 }
 
+core::Task<void> Http3Server::dispatch_datagram(std::span<const uint8_t> pkt,
+                                                   const sockaddr_storage& from_addr,
+                                                   socklen_t from_len) {
+    if (!QuicHeader::is_quic_packet(pkt)) {
+        co_return;
+    }
+
+    ngtcp2_version_cid vc{};
+    int rv = ngtcp2_pkt_decode_version_cid(&vc, pkt.data(), pkt.size(), 16);
+    if (rv != 0 && rv != NGTCP2_ERR_VERSION_NEGOTIATION) {
+        co_return;
+    }
+
+    // RFC 9000 §5.2: Send Version Negotiation packet for unsupported versions
+    if (rv == NGTCP2_ERR_VERSION_NEGOTIATION ||
+        (vc.version != 0 && vc.version != NGTCP2_PROTO_VER_V1 && vc.version != NGTCP2_PROTO_VER_V2)) {
+        send_version_negotiation(vc, from_addr, from_len);
+        co_return;
+    }
+
+    // Zero-allocation transparent lookup using std::string_view
+    std::string_view dcid_sv(reinterpret_cast<const char*>(vc.dcid), vc.dcidlen);
+    auto it = connections_.find(dcid_sv);
+    std::shared_ptr<Http3Connection> conn = nullptr;
+
+    if (it != connections_.end()) {
+        conn = it->second;
+    } else if (vc.version != 0 && vc.scidlen > 0) {
+        // New connection triggered by client Initial packet
+        auto new_conn = std::make_shared<Http3Connection>(
+            loop_, udp_fd_, from_addr, from_len, router_, ssl_ctx_, services_);
+
+        if (new_conn->init(vc.dcid, vc.dcidlen, vc.scid, vc.scidlen)) {
+            conn = new_conn;
+            connections_.emplace(dcid_sv, conn);
+
+            // Also map server-generated SCID to this connection
+            for (const auto& scid_str : conn->source_conn_ids()) {
+                connections_.emplace(scid_str, conn);
+            }
+        }
+    }
+
+    if (conn) {
+        co_await conn->feed_datagram(pkt);
+    }
+}
+
 core::Task<void> Http3Server::run_receive_loop() {
     alignas(64) uint8_t buf[65536];
     sockaddr_storage remote_addr{};
     iovec iov{.iov_base = buf, .iov_len = sizeof(buf)};
     msghdr msg{};
+
+    constexpr size_t BURST_BATCH = 16;
+    alignas(64) uint8_t burst_bufs[BURST_BATCH][2048];
+    sockaddr_storage burst_addrs[BURST_BATCH];
+    iovec burst_iovs[BURST_BATCH];
+    mmsghdr burst_msgs[BURST_BATCH];
+
+    for (size_t i = 0; i < BURST_BATCH; ++i) {
+        burst_iovs[i].iov_base = burst_bufs[i];
+        burst_iovs[i].iov_len = sizeof(burst_bufs[i]);
+        burst_msgs[i].msg_hdr.msg_name = &burst_addrs[i];
+        burst_msgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_storage);
+        burst_msgs[i].msg_hdr.msg_iov = &burst_iovs[i];
+        burst_msgs[i].msg_hdr.msg_iovlen = 1;
+        burst_msgs[i].msg_hdr.msg_control = nullptr;
+        burst_msgs[i].msg_hdr.msg_controllen = 0;
+        burst_msgs[i].msg_hdr.msg_flags = 0;
+    }
 
     while (running_) {
         msg.msg_name = &remote_addr;
@@ -176,54 +250,25 @@ core::Task<void> Http3Server::run_receive_loop() {
             continue;
         }
 
-        std::span<const uint8_t> pkt(buf, static_cast<size_t>(bytes));
-        if (!QuicHeader::is_quic_packet(pkt)) {
-            if (!running_) break;
-            continue;
-        }
+        co_await dispatch_datagram(std::span<const uint8_t>(buf, static_cast<size_t>(bytes)),
+                                   remote_addr, msg.msg_namelen);
 
-        ngtcp2_version_cid vc{};
-        int rv = ngtcp2_pkt_decode_version_cid(&vc, pkt.data(), pkt.size(), 16);
-        if (rv != 0 && rv != NGTCP2_ERR_VERSION_NEGOTIATION) {
-            continue;
-        }
+        // Batched multi-packet burst drainage with recvmmsg (cutting syscalls by up to 90%)
+        while (running_) {
+            for (size_t i = 0; i < BURST_BATCH; ++i) {
+                burst_msgs[i].msg_hdr.msg_namelen = sizeof(sockaddr_storage);
+            }
+            int count = ::recvmmsg(udp_fd_, burst_msgs, static_cast<unsigned int>(BURST_BATCH), MSG_DONTWAIT, nullptr);
+            if (count <= 0) break;
 
-        // RFC 9000 §5.2: Send Version Negotiation packet for unsupported versions
-        if (rv == NGTCP2_ERR_VERSION_NEGOTIATION ||
-            (vc.version != 0 && vc.version != NGTCP2_PROTO_VER_V1 && vc.version != NGTCP2_PROTO_VER_V2)) {
-            send_version_negotiation(vc, remote_addr, msg.msg_namelen);
-            continue;
-        }
-
-        std::string dcid_key(reinterpret_cast<const char*>(vc.dcid), vc.dcidlen);
-        auto it = connections_.find(dcid_key);
-        std::shared_ptr<Http3Connection> conn = nullptr;
-
-        if (it != connections_.end()) {
-            conn = it->second;
-        } else if (vc.version != 0 && vc.scidlen > 0) {
-            // New connection triggered by client Initial packet
-            auto new_conn = std::make_shared<Http3Connection>(
-                loop_, udp_fd_, remote_addr, msg.msg_namelen, router_, ssl_ctx_, services_);
-
-            if (new_conn->init(vc.dcid, vc.dcidlen, vc.scid, vc.scidlen)) {
-                conn = new_conn;
-                connections_[dcid_key] = conn;
-
-                // Also map server-generated SCID to this connection
-                for (const auto& scid_str : conn->source_conn_ids()) {
-                    connections_[scid_str] = conn;
+            for (int i = 0; i < count; ++i) {
+                size_t n = burst_msgs[i].msg_len;
+                if (n > 0) {
+                    co_await dispatch_datagram(std::span<const uint8_t>(burst_bufs[i], n),
+                                               burst_addrs[i], burst_msgs[i].msg_hdr.msg_namelen);
                 }
             }
-        }
-
-        if (conn) {
-            co_await conn->feed_datagram(pkt);
-
-            // Register any new source connection IDs negotiated
-            for (const auto& scid_str : conn->source_conn_ids()) {
-                connections_.try_emplace(scid_str, conn);
-            }
+            if (count < static_cast<int>(BURST_BATCH)) break;
         }
     }
 }

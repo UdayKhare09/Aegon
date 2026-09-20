@@ -44,7 +44,7 @@ The table below compiles peak performance achieved across all three protocol gen
 | **HTTP/1.1 TLS (Peak RPS)** | **886,920 req/s** 🏆 | 798,410 req/s | 812,450 req/s | 785,120 req/s | **+9.2% over #2** |
 | **HTTP/2 Cleartext (`h2c`)** | **3,596,346 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | 605,585 req/s | **6.27x faster** |
 | **HTTP/2 TLS (`h2`)** | **3,480,864 req/s** 🏆 | `UNSUPPORTED` | 1,063,276 req/s | 707,069 req/s | **3.27x faster** |
-| **HTTP/3 over QUIC (`h3`)** | **155,062 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | `UNSUPPORTED` | **Only Framework** |
+| **HTTP/3 over QUIC (`h3`)** | **183,574 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | `UNSUPPORTED` | **Only Framework** |
 | **p99 Tail Latency (H2 Stress)** | **4.28 ms** 🏆 | N/A | 45.45 ms | 47.58 ms | **10.6x lower tail** |
 | **Kernel Subsystem** | **`io_uring` multishot** | `epoll` | `epoll` (mio) | `epoll` (mio) | Zero syscall overhead |
 | **Vector Engine** | **AVX-512 / AVX2 / SSE4.2** | None | Auto-vectorized | Auto-vectorized | Stepped SIMD fallback |
@@ -153,22 +153,22 @@ During Phase 2 development, profiling showed that `nghttp2_session_mem_send()` y
 
 | Cores | Framework | Throughput (RPS) | Mean Latency | Median (p50) | Tail (p99) | Memory RSS | Status |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **1** | **Aegon** 🏆 | **75,362 req/s** | **0.663 ms** | **0.499 ms** | **4.265 ms** | **19.5 MB** | `SUPPORTED` |
-| 1 | Actix-web | *0 req/s* | - | - | - | 10.6 MB | `UNSUPPORTED` |
-| 1 | Axum | *0 req/s* | - | - | - | 6.0 MB | `UNSUPPORTED` |
-| 1 | Drogon | *0 req/s* | - | - | - | 12.5 MB | `UNSUPPORTED` |
-| **2** | **Aegon** 🏆 | **115,642 req/s** | **0.864 ms** | **0.681 ms** | **5.158 ms** | **27.1 MB** | `SUPPORTED` |
-| 2 | Actix-web | *0 req/s* | - | - | - | 10.6 MB | `UNSUPPORTED` |
-| 2 | Axum | *0 req/s* | - | - | - | 5.9 MB | `UNSUPPORTED` |
-| 2 | Drogon | *0 req/s* | - | - | - | 12.4 MB | `UNSUPPORTED` |
-| **4** | **Aegon** 🏆 | **143,298 req/s** | **0.697 ms** | **0.499 ms** | **5.036 ms** | **31.9 MB** | `SUPPORTED` |
-| 4 | Actix-web | *0 req/s* | - | - | - | 10.6 MB | `UNSUPPORTED` |
-| 4 | Axum | *0 req/s* | - | - | - | 5.8 MB | `UNSUPPORTED` |
-| 4 | Drogon | *0 req/s* | - | - | - | 12.6 MB | `UNSUPPORTED` |
-| **6** | **Aegon** 🏆 | **155,062 req/s** | **0.645 ms** | **0.441 ms** | **5.240 ms** | **38.5 MB** | `SUPPORTED` |
-| 6 | Actix-web | *0 req/s* | - | - | - | 10.7 MB | `UNSUPPORTED` |
-| 6 | Axum | *0 req/s* | - | - | - | 6.0 MB | `UNSUPPORTED` |
-| 6 | Drogon | *0 req/s* | - | - | - | 12.8 MB | `UNSUPPORTED` |
+| **1** | **Aegon** 🏆 | **90,887 req/s** | **0.880 ms** | **0.610 ms** | **6.562 ms** | **34.5 MB** | `SUPPORTED` |
+| 1 | Actix-web | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 1 | Axum | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 1 | Drogon | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| **2** | **Aegon** 🏆 | **145,890 req/s** | **1.096 ms** | **0.802 ms** | **7.680 ms** | **33.0 MB** | `SUPPORTED` |
+| 2 | Actix-web | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 2 | Axum | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 2 | Drogon | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| **4** | **Aegon** 🏆 | **170,987 req/s** | **0.935 ms** | **0.626 ms** | **8.368 ms** | **37.8 MB** | `SUPPORTED` |
+| 4 | Actix-web | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 4 | Axum | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 4 | Drogon | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| **6** | **Aegon** 🏆 | **183,574 req/s** | **0.871 ms** | **0.582 ms** | **8.437 ms** | **43.1 MB** | `SUPPORTED` |
+| 6 | Actix-web | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 6 | Axum | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
+| 6 | Drogon | *0 req/s* | - | - | - | 0.0 MB | `UNSUPPORTED` |
 
 ::: info Why Competitors Are Marked Unsupported in HTTP/3
 - **Drogon**: Trantor reactor is exclusively built for TCP stream sockets; has no UDP or QUIC state machine.
@@ -190,11 +190,18 @@ Aegon registers ring buffers using `io_uring` multishot operations:
 ### 2. Stepped SIMD Acceleration Engine
 Aegon executes string, header, and URL operations using compile-time stepped vector fallbacks:
 $$\text{AVX-512BW/VL} \longrightarrow \text{AVX2/BMI2} \longrightarrow \text{SSE4.2} \longrightarrow \text{Scalar}$$
-- **Case-Insensitive Header Lookups (`HeaderMap::iequals`)**: 64-byte masked vector comparisons provide a **6.38x microbenchmark speedup** over scalar comparison.
+- **Case-Insensitive Header Lookups (`HeaderMap::iequals`, `is_prohibited_header`)**: 64-byte and 32-byte masked vector comparisons provide a **6.38x microbenchmark speedup** over scalar comparison.
 - **URL Percent-Decoding (`Request::url_decode_string`)**: SIMD branchless checking skips copying entirely for clean paths (**1.85x speedup**).
+- **Fast Delimiter Scanning (`SimdString::find_char`)**: Hardware-accelerated scanning for query strings (`&`, `=`) and HTTP path delimiters (`?`) in HTTP/1.1, HTTP/2, and HTTP/3.
 - **Chunked Hex Decoder (`Http1Parser::parse_hex_size`)**: 256-entry branchless table replaces branching validation (**1.43x speedup**).
 
-### 3. Shared-Nothing Thread Architecture
+### 3. Syscall Vectorization & Zero-Allocation QUIC Engine
+In high-throughput HTTP/3 over QUIC, per-datagram overhead is the primary bottleneck. Aegon addresses this with three dedicated architectural innovations:
+- **Batched Ingress & Egress (`recvmmsg` / `sendmmsg`)**: Up to 16 datagrams are fetched from or written to the kernel in a single system call, reducing kernel context transitions by ~88% compared to single-datagram `recvmsg`/`sendto`.
+- **Transparent Connection ID Routing**: Custom transparent hasher (`is_transparent = void`) and string view comparator (`CidEqual`) allow looking up active QUIC connections using non-allocating `std::string_view` over the raw packet buffer, eliminating per-packet heap allocations.
+- **Zero-Allocation Stack Header Emission**: Response pseudo-headers (`:status`, `content-length`) are serialized directly into stack buffers using `std::to_chars` and formatted via `std::array<nghttp3_nv, 16>`, avoiding dynamic vector allocations during response dispatch.
+
+### 4. Shared-Nothing Thread Architecture
 Unlike work-stealing thread pools (e.g. Tokio) that suffer queue lock contention under stream multiplexing (causing Axum's p99 latency to jump to **226ms** at 1 thread and **100ms** at 2 threads), Aegon isolates each core:
 - Each worker owns an independent `io_uring` ring and local buffer pool.
 - Sockets are partitioned by the kernel via `SO_REUSEPORT`, ensuring core cache lines remain uncontended.

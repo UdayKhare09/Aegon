@@ -81,9 +81,9 @@ public:
         if (query_.empty()) return std::nullopt;
         std::string_view q = query_;
         while (!q.empty()) {
-            size_t amp = q.find('&');
+            size_t amp = core::simd::SimdString::find_char(q, '&');
             std::string_view pair = (amp != std::string_view::npos) ? q.substr(0, amp) : q;
-            size_t eq = pair.find('=');
+            size_t eq = core::simd::SimdString::find_char(pair, '=');
             if (eq != std::string_view::npos) {
                 std::string_view k = pair.substr(0, eq);
                 std::string_view v = pair.substr(eq + 1);
