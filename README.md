@@ -39,7 +39,7 @@
 
 ---
 
-## 🏆 Benchmark Summary (Empirical World Championship)
+## 🏆 Benchmark Summary
 
 Aegon was systematically evaluated against three industry-leading, production web servers on identical bare-metal hardware (**AMD Ryzen 5 7600X, 6 Zen 4 Cores, AVX-512, Linux 6.13**).
 
