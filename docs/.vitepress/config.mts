@@ -14,6 +14,7 @@ export default defineConfig({
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Benchmarks', link: '/guide/benchmarks' },
       {
         text: 'GitHub',
         link: 'https://github.com/UdayKhare09/Aegon'
@@ -26,6 +27,7 @@ export default defineConfig({
           text: 'Getting Started',
           items: [
             { text: 'Getting Started', link: '/guide/getting-started' },
+            { text: 'Benchmarks & Performance', link: '/guide/benchmarks' },
           ]
         },
         {
