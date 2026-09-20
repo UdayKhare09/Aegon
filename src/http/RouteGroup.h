@@ -64,6 +64,18 @@ public:
     template <typename F>
     RouteGroup& patch(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler);
 
+    template <typename F>
+    RouteGroup& all(std::string_view path, F&& handler);
+
+    template <typename F>
+    RouteGroup& all(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler);
+
+    template <typename ClusterT, typename OptionsT>
+    RouteGroup& proxy(std::string_view path,
+                      ClusterT cluster,
+                      OptionsT options,
+                      std::vector<MiddlewareFn> per_route = {});
+
     [[nodiscard]] std::string_view prefix() const noexcept { return prefix_; }
     [[nodiscard]] const std::vector<MiddlewareFn>& middleware() const noexcept { return middleware_; }
 

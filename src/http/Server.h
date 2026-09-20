@@ -50,6 +50,31 @@ public:
         return *this;
     }
 
+    [[nodiscard]] RouteGroup group(std::string_view prefix) {
+        return router_.group(prefix);
+    }
+
+    template <typename F>
+    Server& all(std::string_view pattern, F&& handler) {
+        router_.all(pattern, std::forward<F>(handler));
+        return *this;
+    }
+
+    template <typename F>
+    Server& all(std::string_view pattern, std::vector<MiddlewareFn> middlewares, F&& handler) {
+        router_.all(pattern, std::move(middlewares), std::forward<F>(handler));
+        return *this;
+    }
+
+    template <typename ClusterT, typename OptionsT>
+    Server& proxy(std::string_view pattern,
+                  ClusterT cluster,
+                  OptionsT options,
+                  std::vector<MiddlewareFn> middlewares = {}) {
+        router_.proxy(pattern, std::move(cluster), std::move(options), std::move(middlewares));
+        return *this;
+    }
+
     template <typename F>
     Server& set_error_handler(F&& handler) {
         router_.set_error_handler(std::forward<F>(handler));

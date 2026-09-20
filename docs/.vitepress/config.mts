@@ -49,6 +49,7 @@ export default defineConfig({
             },
             { text: 'JWT Engine', link: '/guide/jwt' },
             { text: 'HTTP Client', link: '/guide/http-client' },
+            { text: 'API Gateway & Reverse Proxy', link: '/guide/gateway' },
           ]
         },
         {

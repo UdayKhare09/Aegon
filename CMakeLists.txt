@@ -133,6 +133,25 @@ target_link_libraries(aegon_http PUBLIC
     crypto
 )
 
+# Cloud-Native API Gateway & Reverse Proxy library
+add_library(aegon_gateway
+    src/gateway/UpstreamNode.cpp
+    src/gateway/LoadBalancer.cpp
+    src/gateway/CircuitBreaker.cpp
+    src/gateway/UpstreamCluster.cpp
+    src/gateway/ProxyHandler.cpp
+)
+
+target_include_directories(aegon_gateway PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(aegon_gateway PUBLIC
+    aegon_http
+    aegon_core
+    aegon_uuid
+)
+
 # Test and Benchmark executables
 add_executable(test_uuid
     tests/test_uuid.cpp
@@ -329,6 +348,11 @@ add_executable(test_config
 )
 target_link_libraries(test_config PRIVATE aegon_config)
 
+add_executable(test_gateway
+    tests/test_gateway.cpp
+)
+target_link_libraries(test_gateway PRIVATE aegon_gateway aegon_http aegon_core aegon_uuid)
+
 # Test Registrations for CTest
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
@@ -362,6 +386,7 @@ add_test(NAME jwks COMMAND test_jwks)
 add_test(NAME http_client COMMAND test_http_client)
 add_test(NAME service_registry COMMAND test_service_registry)
 add_test(NAME config COMMAND test_config)
+add_test(NAME gateway COMMAND test_gateway)
 
 # Samples
 add_subdirectory(samples/adv)

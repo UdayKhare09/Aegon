@@ -192,6 +192,41 @@ public:
         return add_route(Method::PATCH, pattern, {}, std::move(route_mw), std::forward<F>(handler));
     }
 
+    template <typename F>
+    Router& all(std::string_view pattern,
+                const std::vector<MiddlewareFn>& group_mw,
+                const std::vector<MiddlewareFn>& route_mw,
+                F&& handler) {
+        static constexpr Method all_methods[] = {
+            Method::GET, Method::POST, Method::PUT, Method::DELETE,
+            Method::PATCH, Method::HEAD, Method::OPTIONS
+        };
+        Handler h = make_handler(std::forward<F>(handler));
+        for (Method m : all_methods) {
+            add_route(m, pattern, group_mw, route_mw, h);
+        }
+        return *this;
+    }
+
+    template <typename F>
+    Router& all(std::string_view pattern, F&& handler) {
+        return all(pattern, {}, {}, std::forward<F>(handler));
+    }
+
+    template <typename F>
+    Router& all(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
+        return all(pattern, {}, std::move(route_mw), std::forward<F>(handler));
+    }
+
+    template <typename ClusterT, typename OptionsT>
+    Router& proxy(std::string_view pattern,
+                  ClusterT cluster,
+                  OptionsT options,
+                  std::vector<MiddlewareFn> middlewares = {}) {
+        return all(pattern, {}, std::move(middlewares),
+                   make_proxy_handler(std::move(cluster), std::move(options)));
+    }
+
     using MatchResult = RadixTree::MatchResult;
 
     [[nodiscard]] MatchResult match(Request& req) const {
@@ -438,6 +473,28 @@ RouteGroup& RouteGroup::patch(std::string_view path, F&& handler) {
 template <typename F>
 RouteGroup& RouteGroup::patch(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
     router_.add_route(Method::PATCH, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
+    return *this;
+}
+
+template <typename F>
+RouteGroup& RouteGroup::all(std::string_view path, F&& handler) {
+    router_.all(join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
+    return *this;
+}
+
+template <typename F>
+RouteGroup& RouteGroup::all(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
+    router_.all(join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
+    return *this;
+}
+
+template <typename ClusterT, typename OptionsT>
+RouteGroup& RouteGroup::proxy(std::string_view path,
+                              ClusterT cluster,
+                              OptionsT options,
+                              std::vector<MiddlewareFn> per_route) {
+    router_.all(join_paths(prefix_, path), middleware_, std::move(per_route),
+        make_proxy_handler(std::move(cluster), std::move(options)));
     return *this;
 }
 
