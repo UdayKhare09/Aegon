@@ -27,6 +27,7 @@ export default defineConfig({
           text: 'Getting Started',
           items: [
             { text: 'Getting Started', link: '/guide/getting-started' },
+            { text: 'CLI Tooling (aegon)', link: '/guide/cli' },
             { text: 'Benchmarks & Performance', link: '/guide/benchmarks' },
           ]
         },

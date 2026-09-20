@@ -17,33 +17,60 @@ Because Aegon directly drives modern Linux kernel interfaces and modern C++ stan
 | **Build System** | `CMake 3.20+` | Standard CMake toolchain with Ninja or Make. |
 | **System Libraries** | `liburing`, `OpenSSL`, `libnghttp2` | Core dependencies for ring I/O, TLS, and HTTP/2 framing. |
 
-### Installing Dependencies (Ubuntu / Debian)
+### Installing Dependencies (Arch Linux)
 
 ```bash
-sudo apt update
-sudo apt install -y \
-    build-essential \
-    cmake \
-    ninja-build \
-    liburing-dev \
-    libssl-dev \
-    libnghttp2-dev \
-    libngtcp2-dev \
-    libnghttp3-dev \
-    libsqlite3-dev \
-    libpq-dev
+sudo pacman -Syu base-devel cmake ninja liburing openssl glaze postgresql-libs sqlite
+```
+
+### Installing Aegon
+
+#### Option A: Arch Linux Package
+```bash
+# Build and install the Arch package
+cd packaging/arch
+makepkg -si
+```
+
+#### Option B: From Source via CMake
+```bash
+git clone https://github.com/UdayKhare09/Aegon.git
+cd Aegon
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+sudo cmake --install build
 ```
 
 ---
 
-## Project Structure & CMake Setup
+## Quick Start via Aegon CLI (Recommended)
 
-To use Aegon in your application, include Aegon as a subdirectory in your CMake project.
+The fastest way to get up and running is using the `aegon` CLI tool:
 
-### Minimal `CMakeLists.txt`
+```bash
+# 1. Verify your system environment and kernel capabilities
+aegon doctor
+
+# 2. Scaffold a new production-ready C++26 service
+aegon new my_service
+
+# 3. Enter directory and launch the application
+cd my_service
+aegon run
+```
+
+This immediately spins up a high-performance HTTP service on `http://0.0.0.0:8080` configured with structured YAML settings, `.env` overrides, and C++26 coroutines.
+
+---
+
+## Manual CMake Integration
+
+If integrating Aegon into an existing codebase, use CMake's `find_package(Aegon REQUIRED)`:
+
+### Modern `CMakeLists.txt`
 
 ```cmake
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.25)
 project(MyAegonApp LANGUAGES CXX)
 
 # Enforce C++26 standard
@@ -51,37 +78,49 @@ set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Add Aegon subdirectory
-add_subdirectory(extern/Aegon)
+# Optimize for modern CPU architecture
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_compile_options(-O3 -march=native -Wall -Wextra)
+endif()
+
+# Find Aegon installed package
+find_package(Aegon REQUIRED)
 
 # Your executable
-add_executable(my_app main.cpp)
+add_executable(my_app src/main.cpp)
 
-# Link Aegon targets
+# Link modular Aegon component targets
 target_link_libraries(my_app PRIVATE
-    aegon_http
-    aegon_core
-    aegon_uuid
+    Aegon::http
+    Aegon::core
+    Aegon::config
+    Aegon::orm     # Optional: if using SQL ORM
+    Aegon::redis   # Optional: if using Redis
 )
 ```
 
-### Available CMake Targets
+### Modular CMake Targets
+
+Aegon exports strictly modular targets:
 
 | Target | Description |
 | :--- | :--- |
-| `aegon_core` | Core runtime: `IoUring`, `EventLoop`, `BufferPool`, `Task<T>` coroutine primitives. |
-| `aegon_http` | High-performance HTTP server, radix router, HTTP/1.1, HTTP/2, TLS, and RFC 7807 problem details. |
-| `aegon_redis` | Native async Redis client (RESP3, Sentinel, Cluster, per-core pools, locks, streams). |
-| `aegon_uuid` | High-speed SIMD-accelerated UUIDv4 generator and parser. |
+| `Aegon::core` | Core runtime: `IoUring`, `EventLoop`, `BufferPool`, `Task<T>` coroutine primitives, and SIMD UUID. |
+| `Aegon::http` | High-performance HTTP/1.1, HTTP/2, and HTTP/3 QUIC server, radix router, and middleware. |
+| `Aegon::orm` | Unified SQL ORM, query builder, transactions, schema migrations, SQLite3, and PostgreSQL drivers. |
+| `Aegon::redis` | Native async Redis client (RESP3, Sentinel, Cluster, per-core pools, distributed locks, streams). |
+| `Aegon::config` | Layered YAML 1.2 and `.env` configuration builder with `${VAR:default}` expansion. |
+| `Aegon::gateway` | High-performance reverse proxy, dynamic routing, and cluster circuit breakers. |
 
 ---
 
 ## Writing Your First Server
 
-Create a `main.cpp` file:
+Create `src/main.cpp`:
 
 ```cpp
 #include <aegon/http/Server.h>
+#include <aegon/core/Task.h>
 #include <iostream>
 
 using namespace aegon::http;
@@ -91,25 +130,23 @@ int main() {
     // 1. Create the server instance
     Server server;
 
-    // 2. Define routes on the router
+    // 2. Define asynchronous coroutine route
     server.router().get("/", [](Context& ctx) -> Task<void> {
         ctx.res().text("Hello, Aegon World!");
         co_return;
     });
 
-    server.router().get("/ping", [](Context& ctx) -> Task<void> {
+    // 3. Define synchronous route (zero-overhead)
+    server.router().get("/ping", [](Context& ctx) {
         ctx.res().json(R"({"status":"ok","engine":"io_uring"})");
-        co_return;
     });
 
-    // 3. Configure port and bind
+    // 4. Configure port and bind
     server.listen(8080);
-
     std::cout << "⚡ Aegon server listening on http://0.0.0.0:8080\n";
 
-    // 4. Start the event loop
+    // 5. Start the event loop
     server.run();
-
     return 0;
 }
 ```

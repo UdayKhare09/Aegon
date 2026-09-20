@@ -69,31 +69,76 @@ The test workload is a standard `GET /health` endpoint returning `200 OK` (`text
 
 ---
 
+---
+
 ## 🚀 Quick Start
 
-### Minimal Server
+### 1. Fast Track via `aegon` CLI
+
+The fastest way to build with Aegon is using the developer CLI:
+
+```bash
+# Verify kernel and hardware acceleration capabilities
+aegon doctor
+
+# Create a modern C++26 application with layered YAML and .env config
+aegon new my_service
+
+# Build and run with hot execution
+cd my_service
+aegon run
+```
+
+### 2. Modern CMake Integration (`find_package`)
+
+Install Aegon system-wide (e.g., on Arch Linux via `pacman -S aegon` or building from source with `sudo cmake --install build`):
+
+```cmake
+cmake_minimum_required(VERSION 3.25)
+project(my_service LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 26)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(Aegon REQUIRED)
+
+add_executable(my_service src/main.cpp)
+
+# Link strictly modular component targets
+target_link_libraries(my_service PRIVATE
+    Aegon::http
+    Aegon::core
+    Aegon::config
+    Aegon::orm     # Unified SQL ORM (SQLite3 & PostgreSQL)
+    Aegon::redis   # Native async Redis
+)
+```
+
+### 3. Asynchronous Server (`src/main.cpp`)
 
 ```cpp
 #include <aegon/http/Server.h>
+#include <aegon/core/Task.h>
+#include <iostream>
 
 using namespace aegon::http;
 
 int main() {
     Server server;
 
-    // Register routes
-    server.router().get("/health", [](Context& ctx) -> aegon::core::Task<void> {
-        ctx.res().text("OK");
-        co_return;
-    });
-
+    // Asynchronous coroutine route (co_await ready)
     server.router().get("/user/:id", [](Context& ctx) -> aegon::core::Task<void> {
-        std::string_view user_id = ctx.req().param("id");
-        ctx.res().json({{"id", user_id}, {"status", "active"}});
+        auto user_id = ctx.req().param("id").value_or("unknown");
+        ctx.res().json({{"id", std::string(user_id)}, {"status", "active"}});
         co_return;
     });
 
-    // Start server on port 8080 using 6 physical worker threads
+    // Zero-overhead synchronous route
+    server.router().get("/health", [](Context& ctx) {
+        ctx.res().text("OK");
+    });
+
+    // Start server on port 8080 with 6 worker threads
     server.listen(8080).run(6);
     return 0;
 }
@@ -122,9 +167,11 @@ npm run docs:dev
 ```
 
 Topics covered:
-- [Getting Started](docs/guide/getting-started.md)
+- [Getting Started & Installation](docs/guide/getting-started.md)
+- [CLI Tooling (`aegon`)](docs/guide/cli.md)
 - [Comprehensive Benchmarks & Architecture](docs/guide/benchmarks.md)
 - [Routing, Param Matching & Groups](docs/guide/routing.md)
+- [Layered Configuration (`config.yml` & `.env`)](docs/guide/config.md)
 - [C++26 Tasks & io_uring Kernel Engine](docs/guide/core/task.md)
 - [Type-Safe SQL Engine & Static ORM](docs/guide/data/sql/schema.md)
 - [Native Async Redis Client](docs/guide/data/redis/client.md)
