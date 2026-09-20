@@ -308,6 +308,35 @@ public:
         auto match_res = match(req);
         Context ctx(req, res, services);
 
+        // Fast-path hot path: Exact route found, no global middleware
+        if (__builtin_expect(match_res.route_found && match_res.handler != nullptr && global_middleware_.empty(), 1)) {
+            std::exception_ptr ex{nullptr};
+            try {
+                co_await (*match_res.handler)(ctx);
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            if (__builtin_expect(!ex, 1)) {
+                co_return;
+            }
+            if (error_handler_) {
+                try {
+                    co_await error_handler_(ctx, ex);
+                } catch (...) {
+                    ctx.problem(StatusCode::InternalServerError, "Internal Server Error", "Unknown error in custom error handler");
+                }
+            } else {
+                std::string detail = "An internal server error occurred.";
+                try {
+                    std::rethrow_exception(ex);
+                } catch (const std::exception& e) {
+                    detail = e.what();
+                } catch (...) {}
+                ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+            }
+            co_return;
+        }
+
         auto execute_route = [&]() -> core::Task<void> {
             if (match_res.route_found && match_res.handler) {
                 co_await (*match_res.handler)(ctx);

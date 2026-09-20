@@ -1,6 +1,7 @@
 #pragma once
 
 #include "http/Request.h"
+#include "core/simd/SimdString.h"
 #include <string_view>
 #include <cstdint>
 #include <cstring>
@@ -19,22 +20,27 @@ enum class ParseStatus {
 class Http1Parser {
 public:
     /**
-     * @brief Parse hex chunk size per RFC 9112 §7.1
+     * @brief Parse hex chunk size per RFC 9112 §7.1 using branchless lookup table
      */
     static bool parse_hex_size(std::string_view hex_str, size_t& size) noexcept {
-        if (hex_str.empty()) return false;
+        if (hex_str.empty() || hex_str.size() > 16) return false;
+
+        static constexpr auto HEX_TABLE = []() consteval {
+            std::array<uint8_t, 256> table{};
+            table.fill(0xFF);
+            for (uint8_t i = 0; i <= 9; ++i) table[static_cast<size_t>('0' + i)] = i;
+            for (uint8_t i = 0; i < 6; ++i) {
+                table[static_cast<size_t>('a' + i)] = static_cast<uint8_t>(10 + i);
+                table[static_cast<size_t>('A' + i)] = static_cast<uint8_t>(10 + i);
+            }
+            return table;
+        }();
+
         size = 0;
         for (char c : hex_str) {
-            size <<= 4;
-            if (c >= '0' && c <= '9') {
-                size += (c - '0');
-            } else if (c >= 'a' && c <= 'f') {
-                size += (c - 'a' + 10);
-            } else if (c >= 'A' && c <= 'F') {
-                size += (c - 'A' + 10);
-            } else {
-                return false;
-            }
+            uint8_t val = HEX_TABLE[static_cast<uint8_t>(c)];
+            if (val == 0xFF) return false;
+            size = (size << 4) | val;
         }
         return true;
     }
@@ -49,7 +55,7 @@ public:
         bytes_consumed = 0;
 
         // 1. Locate Request Line (\r\n)
-        size_t req_line_end = buffer.find("\r\n");
+        size_t req_line_end = aegon::core::simd::SimdString::find_crlf(buffer);
         if (req_line_end == std::string_view::npos) {
             return ParseStatus::NeedMoreData;
         }
@@ -57,7 +63,7 @@ public:
         std::string_view req_line = buffer.substr(0, req_line_end);
 
         // Parse method
-        size_t sp1 = req_line.find(' ');
+        size_t sp1 = aegon::core::simd::SimdString::find_char(req_line, ' ');
         if (sp1 == std::string_view::npos) return ParseStatus::Error;
         std::string_view method_sv = req_line.substr(0, sp1);
         Method m = string_to_method(method_sv);
@@ -65,7 +71,7 @@ public:
         req.set_method(m);
 
         // Parse target URI & query string
-        size_t sp2 = req_line.find(' ', sp1 + 1);
+        size_t sp2 = aegon::core::simd::SimdString::find_char(req_line, ' ', sp1 + 1);
         if (sp2 == std::string_view::npos) return ParseStatus::Error;
         std::string_view full_path = req_line.substr(sp1 + 1, sp2 - (sp1 + 1));
         if (full_path.empty() || full_path[0] != '/') {
@@ -75,7 +81,7 @@ public:
             }
         }
 
-        size_t qmark = full_path.find('?');
+        size_t qmark = aegon::core::simd::SimdString::find_char(full_path, '?');
         if (qmark != std::string_view::npos) {
             req.set_path(full_path.substr(0, qmark));
             req.set_query(full_path.substr(qmark + 1));
@@ -114,13 +120,13 @@ public:
                 break;
             }
 
-            size_t header_end = buffer.find("\r\n", cursor);
+            size_t header_end = aegon::core::simd::SimdString::find_crlf(buffer, cursor);
             if (header_end == std::string_view::npos) {
                 return ParseStatus::NeedMoreData;
             }
 
             std::string_view line = buffer.substr(cursor, header_end - cursor);
-            size_t colon = line.find(':');
+            size_t colon = aegon::core::simd::SimdString::find_char(line, ':');
             if (colon == std::string_view::npos || colon == 0) {
                 return ParseStatus::Error; // Missing colon or empty field-name
             }
@@ -199,14 +205,14 @@ public:
             size_t chunk_cursor = cursor;
 
             while (true) {
-                size_t line_end = buffer.find("\r\n", chunk_cursor);
+                size_t line_end = aegon::core::simd::SimdString::find_crlf(buffer, chunk_cursor);
                 if (line_end == std::string_view::npos) {
                     return ParseStatus::NeedMoreData;
                 }
 
                 std::string_view size_line = buffer.substr(chunk_cursor, line_end - chunk_cursor);
                 // Strip chunk-ext if present (e.g. "4;foo=bar")
-                size_t semi = size_line.find(';');
+                size_t semi = aegon::core::simd::SimdString::find_char(size_line, ';');
                 if (semi != std::string_view::npos) {
                     size_line = size_line.substr(0, semi);
                 }
@@ -220,7 +226,7 @@ public:
 
                 if (chunk_size == 0) {
                     // Last-chunk reached. Now consume trailer section up to \r\n\r\n
-                    size_t trailer_end = buffer.find("\r\n\r\n", chunk_cursor);
+                    size_t trailer_end = aegon::core::simd::SimdString::find_double_crlf(buffer, chunk_cursor);
                     if (trailer_end == std::string_view::npos) {
                         // Check if immediate \r\n (empty trailers)
                         if (buffer.size() >= chunk_cursor + 2 &&
@@ -276,7 +282,7 @@ public:
         bytes_consumed = 0;
 
         // 1. Locate Status Line (\r\n)
-        size_t status_line_end = buffer.find("\r\n");
+        size_t status_line_end = aegon::core::simd::SimdString::find_crlf(buffer);
         if (status_line_end == std::string_view::npos) {
             return ParseStatus::NeedMoreData;
         }
@@ -284,7 +290,7 @@ public:
         std::string_view status_line = buffer.substr(0, status_line_end);
 
         // Format: HTTP/1.1 <status_code> [reason phrase]
-        size_t sp1 = status_line.find(' ');
+        size_t sp1 = aegon::core::simd::SimdString::find_char(status_line, ' ');
         if (sp1 == std::string_view::npos) return ParseStatus::Error;
 
         std::string_view proto_sv = status_line.substr(0, sp1);
@@ -298,7 +304,7 @@ public:
             res.version(HttpVersion::Http3);
         }
 
-        size_t sp2 = status_line.find(' ', sp1 + 1);
+        size_t sp2 = aegon::core::simd::SimdString::find_char(status_line, ' ', sp1 + 1);
         std::string_view code_sv = (sp2 == std::string_view::npos)
             ? status_line.substr(sp1 + 1)
             : status_line.substr(sp1 + 1, sp2 - sp1 - 1);
@@ -311,7 +317,7 @@ public:
         res.status(status_code);
 
         // 2. Locate Header Termination (\r\n\r\n)
-        size_t headers_end = buffer.find("\r\n\r\n");
+        size_t headers_end = aegon::core::simd::SimdString::find_double_crlf(buffer);
         if (headers_end == std::string_view::npos) {
             return ParseStatus::NeedMoreData;
         }
@@ -323,7 +329,7 @@ public:
         bool has_content_length = false;
 
         while (cursor < headers_end) {
-            size_t line_end = buffer.find("\r\n", cursor);
+            size_t line_end = aegon::core::simd::SimdString::find_crlf(buffer, cursor);
             if (line_end == std::string_view::npos || line_end > headers_end) {
                 break;
             }
@@ -333,7 +339,7 @@ public:
 
             if (line.empty()) continue;
 
-            size_t colon = line.find(':');
+            size_t colon = aegon::core::simd::SimdString::find_char(line, ':');
             if (colon == std::string_view::npos || colon == 0) {
                 return ParseStatus::Error;
             }

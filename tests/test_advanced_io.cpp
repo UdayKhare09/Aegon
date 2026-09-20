@@ -84,14 +84,14 @@ void test_send_zc() {
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = 0;
     socklen_t len = sizeof(addr);
-    assert(bind(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0);
-    assert(getsockname(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), &len) == 0);
-    assert(listen(listen_fd, 1) == 0);
+    if (bind(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) abort();
+    if (getsockname(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), &len) != 0) abort();
+    if (listen(listen_fd, 1) != 0) abort();
 
     int client = socket(AF_INET, SOCK_STREAM, 0);
-    assert(connect(client, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0);
+    if (connect(client, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) abort();
     int server = accept(listen_fd, nullptr, nullptr);
-    assert(server >= 0);
+    if (server < 0) abort();
 
     IoUring ring(128);
 
@@ -139,10 +139,10 @@ void test_multishot_accept_stream() {
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = 0; // Ephemeral port
     socklen_t addrlen = sizeof(addr);
-    assert(bind(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == 0);
-    assert(getsockname(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), &addrlen) == 0);
+    if (bind(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) abort();
+    if (getsockname(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), &addrlen) != 0) abort();
     uint16_t port = ntohs(addr.sin_port);
-    assert(::listen(listen_fd, 128) == 0);
+    if (::listen(listen_fd, 128) != 0) abort();
 
     IoUring ring(256);
     auto stream = ring.accept_multishot(listen_fd);
@@ -154,7 +154,10 @@ void test_multishot_accept_stream() {
     auto accept_worker = [&]() -> Task<void> {
         while (accept_loop_running && accepted_fds.size() < TOTAL_CLIENTS) {
             auto res = co_await stream.next();
-            if (res.fd < 0) break;
+            if (res.fd < 0) {
+                std::cout << "res.fd < 0: " << res.fd << "\n";
+                break;
+            }
             accepted_fds.push_back(res.fd);
         }
     };
@@ -238,10 +241,10 @@ void test_zero_copy_file_serving() {
     saddr.sin_family = AF_INET;
     saddr.sin_port = htons(18989);
     inet_pton(AF_INET, "127.0.0.1", &saddr.sin_addr);
-    assert(connect(cfd, reinterpret_cast<struct sockaddr*>(&saddr), sizeof(saddr)) == 0);
+    if (connect(cfd, reinterpret_cast<struct sockaddr*>(&saddr), sizeof(saddr)) != 0) abort();
 
     std::string req = "GET /static/file.dat HTTP/1.1\r\nHost: 127.0.0.1:18989\r\nConnection: close\r\n\r\n";
-    assert(::send(cfd, req.data(), req.size(), 0) == static_cast<ssize_t>(req.size()));
+    if (::send(cfd, req.data(), req.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(req.size())) abort();
 
     std::vector<char> response_data;
     char chunk[8192];

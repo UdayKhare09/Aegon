@@ -347,6 +347,9 @@ private:
     }
 
     static inline std::string url_decode_string(std::string_view in) {
+        if (!core::simd::SimdString::has_url_encoding_chars(in)) {
+            return std::string(in);
+        }
         std::string out;
         out.reserve(in.size());
         for (size_t i = 0; i < in.size(); ++i) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/simd/SimdString.h"
 #include <string_view>
 #include <vector>
 #include <array>
@@ -13,15 +14,7 @@ namespace aegon::http {
  * @brief Case-insensitive ASCII comparison for HTTP header names.
  */
 inline bool iequals(std::string_view a, std::string_view b) noexcept {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        char ca = a[i];
-        char cb = b[i];
-        if (ca >= 'A' && ca <= 'Z') ca += 32;
-        if (cb >= 'A' && cb <= 'Z') cb += 32;
-        if (ca != cb) return false;
-    }
-    return true;
+    return core::simd::SimdString::iequals(a, b);
 }
 
 struct HeaderEntry {

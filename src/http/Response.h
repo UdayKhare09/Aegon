@@ -197,20 +197,27 @@ public:
     }
 
     /**
-     * @brief Serialize only the status line and headers (ending in \r\n\r\n).
+     * @brief Append only the status line and headers (ending in \r\n\r\n) to existing buffer.
      */
-    void serialize_http1_headers(std::string& out) const {
-        out.clear();
-        out.reserve(256);
+    void append_http1_headers(std::string& out) const {
+        out.reserve(out.size() + 256);
 
-        // Status line: HTTP/1.1 200 OK\r\n
-        out.append("HTTP/1.1 ");
-        char code_buf[8];
-        auto [ptr, _] = std::to_chars(code_buf, code_buf + 8, static_cast<uint16_t>(status_));
-        out.append(code_buf, ptr - code_buf);
-        out.push_back(' ');
-        out.append(status_phrase(status_));
-        out.append("\r\n");
+        // Fast status line
+        if (status_ == StatusCode::Ok) {
+            out.append("HTTP/1.1 200 OK\r\n");
+        } else if (status_ == StatusCode::NotFound) {
+            out.append("HTTP/1.1 404 Not Found\r\n");
+        } else if (status_ == StatusCode::InternalServerError) {
+            out.append("HTTP/1.1 500 Internal Server Error\r\n");
+        } else {
+            out.append("HTTP/1.1 ");
+            char code_buf[8];
+            auto [ptr, _] = std::to_chars(code_buf, code_buf + 8, static_cast<uint16_t>(status_));
+            out.append(code_buf, ptr - code_buf);
+            out.push_back(' ');
+            out.append(status_phrase(status_));
+            out.append("\r\n");
+        }
 
         if (is_chunked_) {
             if (!headers_.contains("Transfer-Encoding")) {
@@ -218,12 +225,17 @@ public:
             }
         } else if (!headers_.contains("Content-Length")) {
             out.append("Content-Length: ");
-            char len_buf[24];
             size_t len = is_file_ ? file_size_ : body_.size();
-            auto [lptr, unused] = std::to_chars(len_buf, len_buf + 24, len);
-            (void)unused;
-            out.append(len_buf, lptr - len_buf);
-            out.append("\r\n");
+            if (len < 10) {
+                out.push_back(static_cast<char>('0' + len));
+                out.append("\r\n");
+            } else {
+                char len_buf[24];
+                auto [lptr, unused] = std::to_chars(len_buf, len_buf + 24, len);
+                (void)unused;
+                out.append(len_buf, lptr - len_buf);
+                out.append("\r\n");
+            }
         }
 
         for (const auto& h : headers_) {
@@ -237,10 +249,18 @@ public:
     }
 
     /**
-     * @brief Serialize complete HTTP/1.1 response into output string buffer.
+     * @brief Serialize only the status line and headers (ending in \r\n\r\n).
      */
-    void serialize_http1(std::string& out) const {
-        serialize_http1_headers(out);
+    void serialize_http1_headers(std::string& out) const {
+        out.clear();
+        append_http1_headers(out);
+    }
+
+    /**
+     * @brief Append complete HTTP/1.1 response into output string buffer without clearing.
+     */
+    void append_http1(std::string& out) const {
+        append_http1_headers(out);
 
         if (is_chunked_) {
             if (!body_.empty()) {
@@ -250,6 +270,14 @@ public:
         } else if (!is_file_) {
             out.append(body_);
         }
+    }
+
+    /**
+     * @brief Serialize complete HTTP/1.1 response into output string buffer.
+     */
+    void serialize_http1(std::string& out) const {
+        out.clear();
+        append_http1(out);
     }
 
 private:

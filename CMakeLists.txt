@@ -353,7 +353,13 @@ add_executable(test_gateway
 )
 target_link_libraries(test_gateway PRIVATE aegon_gateway aegon_http aegon_core aegon_uuid)
 
+add_executable(test_simd_string
+    tests/test_simd_string.cpp
+)
+target_link_libraries(test_simd_string PRIVATE aegon_core)
+
 # Test Registrations for CTest
+add_test(NAME simd_string COMMAND test_simd_string)
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)
 add_test(NAME simd_router COMMAND test_simd_router)

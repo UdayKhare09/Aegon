@@ -191,44 +191,72 @@ inline constexpr char BASE64URL_CHARS[] =
  * @brief Decodes a Base64 or Base64URL encoded string (accepts both padded and unpadded).
  */
 [[nodiscard]] inline std::optional<std::string> base64url_decode(std::string_view in) {
-    auto decode_char = [](char c) -> int {
-        if (c >= 'A' && c <= 'Z') return c - 'A';
-        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-        if (c >= '0' && c <= '9') return c - '0' + 52;
-        if (c == '+' || c == '-') return 62;
-        if (c == '/' || c == '_') return 63;
-        if (c == '=') return -2;
-        return -1;
-    };
-
-    std::string clean;
-    clean.reserve(in.size() + 4);
-    for (char c : in) {
-        if (c == '\r' || c == '\n' || c == ' ' || c == '\t') continue;
-        clean.push_back(c);
+    while (!in.empty() && (in.back() == '=' || in.back() == ' ' || in.back() == '\r' || in.back() == '\n' || in.back() == '\t')) {
+        in.remove_suffix(1);
     }
-    while (clean.size() % 4 != 0) {
-        clean.push_back('=');
+    while (!in.empty() && (in.front() == ' ' || in.front() == '\r' || in.front() == '\n' || in.front() == '\t')) {
+        in.remove_prefix(1);
     }
+    if (in.empty()) return std::string{};
 
+    static constexpr auto B64_TABLE = []() consteval {
+        std::array<int8_t, 256> table{};
+        table.fill(-1);
+        for (uint8_t i = 0; i < 26; ++i) {
+            table[static_cast<size_t>('A' + i)] = static_cast<int8_t>(i);
+            table[static_cast<size_t>('a' + i)] = static_cast<int8_t>(26 + i);
+        }
+        for (uint8_t i = 0; i < 10; ++i) {
+            table[static_cast<size_t>('0' + i)] = static_cast<int8_t>(52 + i);
+        }
+        table[static_cast<size_t>('+')] = 62;
+        table[static_cast<size_t>('-')] = 62;
+        table[static_cast<size_t>('/')] = 63;
+        table[static_cast<size_t>('_')] = 63;
+        table[static_cast<size_t>('=')] = -2;
+        return table;
+    }();
+
+    const size_t in_len = in.size();
+    const size_t out_len = (in_len * 3) / 4;
     std::string out;
-    out.reserve((clean.size() * 3) / 4);
-    for (size_t i = 0; i + 3 < clean.size(); i += 4) {
-        int a = decode_char(clean[i]);
-        int b = decode_char(clean[i + 1]);
-        int c = decode_char(clean[i + 2]);
-        int d = decode_char(clean[i + 3]);
-        if (a < 0 || b < 0) return std::nullopt;
-        out.push_back(static_cast<char>((a << 2) | (b >> 4)));
-        if (clean[i + 2] != '=') {
-            if (c < 0) return std::nullopt;
-            out.push_back(static_cast<char>(((b & 0x0F) << 4) | (c >> 2)));
-        }
-        if (clean[i + 3] != '=') {
-            if (d < 0) return std::nullopt;
-            out.push_back(static_cast<char>(((c & 0x03) << 6) | d));
-        }
+    out.reserve(out_len + 3);
+
+    size_t i = 0;
+    for (; i + 4 <= in_len; i += 4) {
+        int8_t a = B64_TABLE[static_cast<uint8_t>(in[i])];
+        int8_t b = B64_TABLE[static_cast<uint8_t>(in[i + 1])];
+        int8_t c = B64_TABLE[static_cast<uint8_t>(in[i + 2])];
+        int8_t d = B64_TABLE[static_cast<uint8_t>(in[i + 3])];
+        if ((a | b | c | d) < 0) return std::nullopt;
+
+        uint32_t triple = (static_cast<uint32_t>(a) << 18) |
+                          (static_cast<uint32_t>(b) << 12) |
+                          (static_cast<uint32_t>(c) << 6)  |
+                           static_cast<uint32_t>(d);
+
+        out.push_back(static_cast<char>((triple >> 16) & 0xFF));
+        out.push_back(static_cast<char>((triple >> 8) & 0xFF));
+        out.push_back(static_cast<char>(triple & 0xFF));
     }
+
+    size_t remainder = in_len - i;
+    if (remainder == 2) {
+        int8_t a = B64_TABLE[static_cast<uint8_t>(in[i])];
+        int8_t b = B64_TABLE[static_cast<uint8_t>(in[i + 1])];
+        if ((a | b) < 0) return std::nullopt;
+        out.push_back(static_cast<char>((a << 2) | (b >> 4)));
+    } else if (remainder == 3) {
+        int8_t a = B64_TABLE[static_cast<uint8_t>(in[i])];
+        int8_t b = B64_TABLE[static_cast<uint8_t>(in[i + 1])];
+        int8_t c = B64_TABLE[static_cast<uint8_t>(in[i + 2])];
+        if ((a | b | c) < 0) return std::nullopt;
+        out.push_back(static_cast<char>((a << 2) | (b >> 4)));
+        out.push_back(static_cast<char>(((b & 0x0F) << 4) | (c >> 2)));
+    } else if (remainder != 0) {
+        return std::nullopt;
+    }
+
     return out;
 }
 
