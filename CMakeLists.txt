@@ -241,6 +241,29 @@ install(
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Aegon
 )
 
+# ==============================================================================
+# Aegon Developer CLI Tool (aegon)
+# ==============================================================================
+add_executable(aegon_cli
+    tools/cli/main.cpp
+)
+set_target_properties(aegon_cli PROPERTIES OUTPUT_NAME aegon)
+
+target_include_directories(aegon_cli PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/cli
+)
+
+target_link_libraries(aegon_cli PRIVATE
+    Aegon::core
+    Aegon::config
+)
+
+install(
+    TARGETS aegon_cli
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
 # Test and Benchmark executables
 add_executable(test_uuid
     tests/test_uuid.cpp
@@ -488,6 +511,9 @@ add_test(NAME http_client COMMAND test_http_client)
 add_test(NAME service_registry COMMAND test_service_registry)
 add_test(NAME config COMMAND test_config)
 add_test(NAME gateway COMMAND test_gateway)
+add_test(NAME cli_version COMMAND aegon version)
+add_test(NAME cli_help COMMAND aegon help)
+add_test(NAME cli_doctor COMMAND aegon doctor)
 
 # Samples
 add_subdirectory(samples/adv)
