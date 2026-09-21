@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: aegon-appstack-postgres
+    network_mode: host
+    cpuset: "6,7"
+    tmpfs:
+      - /var/lib/postgresql:rw,size=2g
+    environment:
+      - POSTGRES_USER=bench
+      - POSTGRES_PASSWORD=bench
+      - POSTGRES_DB=benchmark
+    volumes:
+      - ../data/pgdb-seed.sql:/docker-entrypoint-initdb.d/seed.sql:ro
+    command: postgres -c max_connections=256
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bench -d benchmark && psql -U bench -d benchmark -tAc 'SELECT 1 FROM items LIMIT 1' | grep -q 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: aegon-appstack-redis
+    network_mode: host
+    cpuset: "6,7"
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

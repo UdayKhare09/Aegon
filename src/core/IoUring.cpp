@@ -320,6 +320,20 @@ int IoUring::TimeoutAwaiter::await_resume() noexcept {
     return result;
 }
 
+void IoUring::PollAwaiter::submit() noexcept {
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    if (!sqe) [[unlikely]] {
+        ring.submit_and_wait(0);
+        sqe = io_uring_get_sqe(&ring.ring_);
+    }
+    io_uring_prep_poll_add(sqe, fd, poll_mask);
+    io_uring_sqe_set_data(sqe, this);
+}
+
+int IoUring::PollAwaiter::await_resume() noexcept {
+    return result;
+}
+
 size_t IoUring::process_completions() noexcept {
     struct io_uring_cqe* cqe = nullptr;
     unsigned head = 0;

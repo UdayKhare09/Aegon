@@ -192,6 +192,81 @@ async fn json_endpoint(
         .body(body)
 }
 
+type PgPool = deadpool_postgres::Pool;
+
+#[derive(Deserialize)]
+struct PriceQuery {
+    min: Option<i32>,
+    max: Option<i32>,
+    limit: Option<i64>,
+}
+
+fn row_to_item(row: &tokio_postgres::Row) -> serde_json::Value {
+    serde_json::json!({
+        "id": row.get::<_, i32>(0) as i64,
+        "name": row.get::<_, &str>(1),
+        "category": row.get::<_, &str>(2),
+        "price": row.get::<_, i32>(3),
+        "quantity": row.get::<_, i32>(4),
+        "active": row.get::<_, bool>(5),
+        "tags": row.get::<_, serde_json::Value>(6),
+        "rating": {
+            "score": row.get::<_, i32>(7),
+            "count": row.get::<_, i32>(8) as i64,
+        }
+    })
+}
+
+async fn pgdb_endpoint(
+    query: web::Query<PriceQuery>,
+    pool: web::Data<Option<PgPool>>,
+) -> HttpResponse {
+    let pool = match pool.as_ref() {
+        Some(p) => p,
+        None => {
+            return HttpResponse::Ok()
+                .insert_header((SERVER, SERVER_HDR.clone()))
+                .content_type(ContentType::json())
+                .body(r#"{"items":[],"count":0}"#);
+        }
+    };
+    let min: i32 = query.min.unwrap_or(10);
+    let max: i32 = query.max.unwrap_or(50);
+    let limit: i64 = query.limit.unwrap_or(50).clamp(1, 50);
+
+    let client = match pool.get().await {
+        Ok(c) => c,
+        Err(_) => {
+            return HttpResponse::Ok()
+                .insert_header((SERVER, SERVER_HDR.clone()))
+                .content_type(ContentType::json())
+                .body(r#"{"items":[],"count":0}"#);
+        }
+    };
+    let stmt = client
+        .prepare_cached(
+            "SELECT id, name, category, price, quantity, active, tags, rating_score, rating_count \
+             FROM items WHERE price BETWEEN $1 AND $2 LIMIT $3",
+        )
+        .await
+        .unwrap();
+    let rows = match client.query(&stmt, &[&min, &max, &limit]).await {
+        Ok(r) => r,
+        Err(_) => {
+            return HttpResponse::Ok()
+                .insert_header((SERVER, SERVER_HDR.clone()))
+                .content_type(ContentType::json())
+                .body(r#"{"items":[],"count":0}"#);
+        }
+    };
+    let items: Vec<serde_json::Value> = rows.iter().map(row_to_item).collect();
+    let result = serde_json::json!({"items": items, "count": items.len()});
+    HttpResponse::Ok()
+        .insert_header((SERVER, SERVER_HDR.clone()))
+        .content_type(ContentType::json())
+        .body(result.to_string())
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -205,15 +280,40 @@ async fn main() -> std::io::Result<()> {
         dataset: dataset.clone(),
     });
 
+    let pg_pool: Option<PgPool> = {
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://bench:bench@127.0.0.1:5432/benchmark".to_string()
+        });
+        if let Ok(pg_config) = url.parse::<tokio_postgres::Config>() {
+            let mgr = deadpool_postgres::Manager::from_config(
+                pg_config,
+                deadpool_postgres::tokio_postgres::NoTls,
+                deadpool_postgres::ManagerConfig {
+                    recycling_method: deadpool_postgres::RecyclingMethod::Fast,
+                },
+            );
+            let pool_size: usize = std::env::var("DATABASE_MAX_CONN")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(32);
+            deadpool_postgres::Pool::builder(mgr).max_size(pool_size).build().ok()
+        } else {
+            None
+        }
+    };
+    let pg_data = web::Data::new(pg_pool);
+
     HttpServer::new(move || {
         App::new()
             .app_data(app_state.clone())
+            .app_data(pg_data.clone())
             .route("/baseline11", web::get().to(baseline11_get))
             .route("/baseline11", web::post().to(baseline11_post))
             .route("/baseline2", web::get().to(baseline2))
             .route("/baseline2", web::post().to(baseline11_post))
             .route("/delay/{ms}", web::get().to(delay))
             .route("/json/{count}", web::get().to(json_endpoint))
+            .route("/async-db", web::get().to(pgdb_endpoint))
     })
     .workers(workers)
     .bind(("0.0.0.0", port))?

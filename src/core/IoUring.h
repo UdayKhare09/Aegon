@@ -250,7 +250,24 @@ public:
         int await_resume() noexcept;
     };
 
+    // Async Poll (for non-blocking socket and pipe polling)
+    struct PollAwaiter : IoAwaiter {
+        IoUring& ring;
+        int fd;
+        unsigned poll_mask;
+
+        PollAwaiter(IoUring& r, int f, unsigned mask) noexcept
+            : ring(r), fd(f), poll_mask(mask) {}
+
+        void submit() noexcept override;
+        [[nodiscard]] int await_resume() noexcept;
+    };
+
     // Helper builders
+    [[nodiscard]] PollAwaiter poll(int fd, unsigned poll_mask) noexcept {
+        return PollAwaiter{*this, fd, poll_mask};
+    }
+
     [[nodiscard]] MultishotAcceptAwaiter accept(int listen_fd) noexcept {
         return MultishotAcceptAwaiter{*this, listen_fd};
     }

@@ -19,7 +19,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    exe_module.linkSystemLibrary("z", .{});
     exe_module.addImport("swerver", swerver_dep.module("swerver"));
 
     const exe = b.addExecutable(.{

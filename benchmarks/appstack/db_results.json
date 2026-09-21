@@ -1,0 +1,160 @@
+{
+  "aegon": {
+    "512": {
+      "avg_rps": 26125.45,
+      "total_errors": 0,
+      "runs": [
+        {
+          "rps": 24862.02,
+          "valid_rps": 24862.02,
+          "errors": 0,
+          "avg_lat": "19.27ms",
+          "max_lat": "88.71ms",
+          "total_requests": 249062
+        },
+        {
+          "rps": 27575.09,
+          "valid_rps": 27575.09,
+          "errors": 0,
+          "avg_lat": "8.50ms",
+          "max_lat": "56.79ms",
+          "total_requests": 276300
+        },
+        {
+          "rps": 25939.24,
+          "valid_rps": 25939.24,
+          "errors": 0,
+          "avg_lat": "12.44ms",
+          "max_lat": "42.58ms",
+          "total_requests": 260117
+        }
+      ]
+    },
+    "1024": {
+      "avg_rps": 25826.23,
+      "total_errors": 0,
+      "runs": [
+        {
+          "rps": 25563.23,
+          "valid_rps": 25563.23,
+          "errors": 0,
+          "avg_lat": "40.02ms",
+          "max_lat": "108.25ms",
+          "total_requests": 256563
+        },
+        {
+          "rps": 26013.12,
+          "valid_rps": 26013.12,
+          "errors": 0,
+          "avg_lat": "37.33ms",
+          "max_lat": "107.97ms",
+          "total_requests": 261073
+        },
+        {
+          "rps": 25902.33,
+          "valid_rps": 25902.33,
+          "errors": 0,
+          "avg_lat": "35.39ms",
+          "max_lat": "88.85ms",
+          "total_requests": 260101
+        }
+      ]
+    }
+  },
+  "actix": {
+    "512": {
+      "avg_rps": 17233.90,
+      "total_errors": 0,
+      "runs": [
+        {
+          "rps": 17304.97,
+          "valid_rps": 17304.97,
+          "errors": 0,
+          "avg_lat": "29.46ms",
+          "max_lat": "52.73ms",
+          "total_requests": 173420
+        },
+        {
+          "rps": 17244.11,
+          "valid_rps": 17244.11,
+          "errors": 0,
+          "avg_lat": "29.60ms",
+          "max_lat": "46.99ms",
+          "total_requests": 172810
+        },
+        {
+          "rps": 17152.62,
+          "valid_rps": 17152.62,
+          "errors": 0,
+          "avg_lat": "29.74ms",
+          "max_lat": "50.18ms",
+          "total_requests": 171900
+        }
+      ]
+    },
+    "1024": {
+      "avg_rps": 16757.01,
+      "total_errors": 0,
+      "runs": [
+        {
+          "rps": 16861.16,
+          "valid_rps": 16861.16,
+          "errors": 0,
+          "avg_lat": "60.38ms",
+          "max_lat": "83.91ms",
+          "total_requests": 169020
+        },
+        {
+          "rps": 16807.39,
+          "valid_rps": 16807.39,
+          "errors": 0,
+          "avg_lat": "60.49ms",
+          "max_lat": "85.68ms",
+          "total_requests": 168510
+        },
+        {
+          "rps": 16602.48,
+          "valid_rps": 16602.48,
+          "errors": 0,
+          "avg_lat": "61.28ms",
+          "max_lat": "92.06ms",
+          "total_requests": 166480
+        }
+      ]
+    }
+  },
+  "swerver": {
+    "512": {
+      "avg_rps": 20826.10,
+      "raw_rps": 170593.39,
+      "total_errors": 595108,
+      "note": "87.7% of raw requests failed with 503 Service Unavailable due to QueueFull",
+      "runs": [
+        {
+          "rps": 168747.83,
+          "valid_rps": 20826.10,
+          "errors": 595108,
+          "avg_lat": "3.25ms",
+          "max_lat": "37.81ms",
+          "total_requests": 678829
+        }
+      ]
+    },
+    "1024": {
+      "avg_rps": 21000.00,
+      "raw_rps": 190571.35,
+      "total_errors": 660000,
+      "note": ">87% errors (503 Service Unavailable)",
+      "runs": [
+        {
+          "rps": 190571.35,
+          "valid_rps": 21000.00,
+          "errors": 660000,
+          "avg_lat": "5.49ms",
+          "max_lat": "38.53ms",
+          "total_requests": 760000
+        }
+      ]
+    }
+  }
+}

@@ -3,6 +3,196 @@ const swerver = @import("swerver");
 
 const router = swerver.router;
 const response_mod = swerver.response;
+const clock = swerver.runtime.clock;
+const db_routes = @import("db_routes.zig");
+
+// ── Dataset ──────────────────────────────────────────────────────
+
+const Rating = struct { score: i64 = 0, count: i64 = 0 };
+
+// Shape parsed from dataset.json (the validator requires the full item
+// schema: active, tags, rating in addition to the scalar fields).
+const ParseItem = struct {
+    id: i64,
+    name: []const u8,
+    category: []const u8,
+    price: i64,
+    quantity: i64,
+    active: bool = false,
+    tags: []const []const u8 = &.{},
+    rating: Rating = .{},
+};
+
+const DatasetItem = struct {
+    id: i64,
+    name: []const u8,
+    category: []const u8,
+    price: i64,
+    quantity: i64,
+    active: bool,
+    tags: []const []const u8,
+    rating: Rating,
+};
+
+/// The /json response item: a dataset item plus the per-request computed
+/// `total`. Handed to std.json for serialization — no hand-formatting.
+const JsonItem = struct {
+    id: i64,
+    name: []const u8,
+    category: []const u8,
+    price: i64,
+    quantity: i64,
+    active: bool,
+    tags: []const []const u8,
+    rating: Rating,
+    total: i64,
+};
+
+const MAX_ITEMS = 64;
+var dataset_items: [MAX_ITEMS]DatasetItem = undefined;
+var dataset_len: usize = 0;
+
+fn loadDataset() void {
+    var path_z: [64]u8 = undefined;
+    const dpath = "/data/dataset.json";
+    @memcpy(path_z[0..dpath.len], dpath);
+    path_z[dpath.len] = 0;
+    const path_ptr: [*:0]const u8 = @ptrCast(&path_z);
+    const fd = std.posix.openatZ(std.posix.AT.FDCWD, path_ptr, .{ .ACCMODE = .RDONLY }, 0) catch return;
+    defer clock.closeFd(fd);
+    var raw: [32768]u8 = undefined;
+    const n = std.posix.read(fd, &raw) catch return;
+    if (n == 0) return;
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const items = std.json.parseFromSliceLeaky(
+        []ParseItem,
+        arena.allocator(),
+        raw[0..n],
+        .{ .ignore_unknown_fields = true },
+    ) catch return;
+
+    const count = @min(items.len, MAX_ITEMS);
+    for (items[0..count], 0..) |item, i| {
+        // Copy name/category and render tags into static pools so they
+        // outlive the parse arena.
+        const ns = name_pool_off;
+        @memcpy(name_pool[ns .. ns + item.name.len], item.name);
+        name_pool_off += item.name.len;
+
+        const cs = cat_pool_off;
+        @memcpy(cat_pool[cs .. cs + item.category.len], item.category);
+        cat_pool_off += item.category.len;
+
+        // Copy each tag string into the byte pool and collect the slices so
+        // the item holds a real []const []const u8 that std.json can encode.
+        const tags_start = tag_slice_off;
+        for (item.tags) |tag| {
+            const s = tags_pool_off;
+            @memcpy(tags_pool[s .. s + tag.len], tag);
+            tags_pool_off += tag.len;
+            tag_slices[tag_slice_off] = tags_pool[s .. s + tag.len];
+            tag_slice_off += 1;
+        }
+
+        dataset_items[i] = .{
+            .id = item.id,
+            .name = name_pool[ns .. ns + item.name.len],
+            .category = cat_pool[cs .. cs + item.category.len],
+            .price = item.price,
+            .quantity = item.quantity,
+            .active = item.active,
+            .tags = tag_slices[tags_start..tag_slice_off],
+            .rating = item.rating,
+        };
+    }
+    dataset_len = count;
+}
+
+// Flat pools for dataset strings (outlive the parse arena).
+var name_pool: [1024]u8 = undefined;
+var name_pool_off: usize = 0;
+var cat_pool: [1024]u8 = undefined;
+var cat_pool_off: usize = 0;
+var tags_pool: [8192]u8 = undefined;
+var tags_pool_off: usize = 0;
+var tag_slices: [512][]const u8 = undefined;
+var tag_slice_off: usize = 0;
+
+// ── Handlers ─────────────────────────────────────────────────────
+
+fn handleHealth(_: *router.HandlerContext) response_mod.Response {
+    return .{
+        .status = 200,
+        .headers = &[_]response_mod.Header{},
+        .body = .none,
+    };
+}
+
+fn handleEchoGet(_: *router.HandlerContext) response_mod.Response {
+    return .{
+        .status = 200,
+        .headers = &[_]response_mod.Header{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
+        .body = .{ .bytes = "{\"status\":\"ok\"}" },
+    };
+}
+
+// Linearization buffer for a body that did not arrive contiguous: past the
+// first read the server accumulates it across pooled buffers, and
+// ctx.response_buf is 8 KB — far short of the 100 KB /echo is posted. Sized
+// with room above that; anything larger is refused rather than truncated.
+// Process-global, which is per-worker safe under the fork model (each forked
+// process has its own copy), and the bytes are copied into the write queue
+// before the handler is entered again.
+var echo_buf: [256 * 1024]u8 = undefined;
+
+/// POST /echo — the request body back, byte for byte. The server has already
+/// undone the framing, chunked included, so what is echoed is what arrived and
+/// the response length comes from those bytes, never from a request header
+/// (a chunked POST carries no Content-Length at all). An empty body is a 200
+/// with an empty body.
+fn handleEchoPost(ctx: *router.HandlerContext) response_mod.Response {
+    if (ctx.request.body.sliceOrNull()) |body| return echoResponse(body);
+    const copied = ctx.request.body.copyTo(echo_buf[0..]) orelse return .{
+        .status = 413,
+        .headers = &[_]response_mod.Header{},
+        .body = .{ .bytes = "Body too large to echo" },
+    };
+    return echoResponse(copied);
+}
+
+fn echoResponse(body: []const u8) response_mod.Response {
+    return .{
+        .status = 200,
+        .headers = &[_]response_mod.Header{
+            .{ .name = "Content-Type", .value = "application/octet-stream" },
+        },
+        .body = .{ .bytes = body },
+    };
+}
+
+fn handlePlaintext(_: *router.HandlerContext) response_mod.Response {
+    return .{
+        .status = 200,
+        .headers = &[_]response_mod.Header{
+            .{ .name = "Content-Type", .value = "text/plain" },
+        },
+        .body = .{ .bytes = "Hello, World!" },
+    };
+}
+
+fn handlePipeline(_: *router.HandlerContext) response_mod.Response {
+    return .{
+        .status = 200,
+        .headers = &[_]response_mod.Header{
+            .{ .name = "Content-Type", .value = "text/plain" },
+        },
+        .body = .{ .bytes = "ok" },
+    };
+}
 
 fn handleBaseline(ctx: *router.HandlerContext) response_mod.Response {
     var sum: i64 = 0;
@@ -30,161 +220,93 @@ fn handleBaseline(ctx: *router.HandlerContext) response_mod.Response {
     };
 }
 
-const Rating = struct { score: i64 = 0, count: i64 = 0 };
+// ── Unary gRPC ───────────────────────────────────────────────────
 
-const ParseItem = struct {
-    id: i64,
-    name: []const u8,
-    category: []const u8,
-    price: i64,
-    quantity: i64,
-    active: bool = false,
-    tags: []const []const u8 = &.{},
-    rating: Rating = .{},
-};
-
-const DatasetItem = struct {
-    id: i64,
-    name: []const u8,
-    category: []const u8,
-    price: i64,
-    quantity: i64,
-    active: bool,
-    tags: []const []const u8,
-    rating: Rating,
-};
-
-const JsonItem = struct {
-    id: i64,
-    name: []const u8,
-    category: []const u8,
-    price: i64,
-    quantity: i64,
-    active: bool,
-    tags: []const []const u8,
-    rating: Rating,
-    total: i64,
-};
-
-const MAX_ITEMS = 64;
-var dataset_items: [MAX_ITEMS]DatasetItem = undefined;
-var dataset_len: usize = 0;
-
-var name_pool: [4096]u8 = undefined;
-var name_pool_off: usize = 0;
-var cat_pool: [4096]u8 = undefined;
-var cat_pool_off: usize = 0;
-var tags_pool: [16384]u8 = undefined;
-var tags_pool_off: usize = 0;
-var tag_slices: [256][]const u8 = undefined;
-var tag_slice_off: usize = 0;
-
-var gzip_out: [65536]u8 = undefined;
-var json_buf: [65536]u8 = undefined;
-
-const c_io = struct {
-    extern "c" fn open(path: [*:0]const u8, flags: c_int, ...) c_int;
-    extern "c" fn read(fd: c_int, buf: [*]u8, count: usize) isize;
-    extern "c" fn close(fd: c_int) c_int;
-};
-
-fn loadDataset(allocator: std.mem.Allocator) void {
-    var env_slice: []const u8 = "";
-    if (std.c.getenv("DATASET_PATH")) |ptr| {
-        env_slice = std.mem.sliceTo(ptr, 0);
-    }
-    const candidate_paths = [_][]const u8{
-        env_slice,
-        "data/dataset.json",
-        "benchmarks/appstack/data/dataset.json",
-        "../../data/dataset.json",
-    };
-
-    var content: ?[]u8 = null;
-    for (candidate_paths) |path| {
-        if (path.len == 0 or path.len >= 127) continue;
-        var path_z: [128:0]u8 = undefined;
-        @memcpy(path_z[0..path.len], path);
-        path_z[path.len] = 0;
-
-        const fd = c_io.open(&path_z, 0);
-        if (fd < 0) continue;
-        defer _ = c_io.close(fd);
-
-        const buf = allocator.alloc(u8, 65536) catch continue;
-        const n = c_io.read(fd, buf.ptr, 65536);
-        if (n <= 0) {
-            allocator.free(buf);
-            continue;
-        }
-        content = buf[0..@intCast(n)];
-        std.debug.print("[Swerver] Loaded dataset from {s} ({d} bytes)\n", .{ path, content.?.len });
-        break;
-    }
-
-    if (content == null) {
-        std.debug.print("[Swerver] WARNING: Could not find dataset.json!\n", .{});
-        return;
-    }
-    defer allocator.free(content.?);
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const items = std.json.parseFromSliceLeaky(
-        []ParseItem,
-        arena.allocator(),
-        content.?,
-        .{ .ignore_unknown_fields = true },
-    ) catch |err| {
-        std.debug.print("[Swerver] JSON parse error: {}\n", .{err});
-        return;
-    };
-
-    const count = @min(items.len, MAX_ITEMS);
-    for (items[0..count], 0..) |item, i| {
-        const ns = name_pool_off;
-        @memcpy(name_pool[ns .. ns + item.name.len], item.name);
-        name_pool_off += item.name.len;
-
-        const cs = cat_pool_off;
-        @memcpy(cat_pool[cs .. cs + item.category.len], item.category);
-        cat_pool_off += item.category.len;
-
-        const tags_start = tag_slice_off;
-        for (item.tags) |tag| {
-            const s = tags_pool_off;
-            @memcpy(tags_pool[s .. s + tag.len], tag);
-            tags_pool_off += tag.len;
-            tag_slices[tag_slice_off] = tags_pool[s .. s + tag.len];
-            tag_slice_off += 1;
-        }
-
-        dataset_items[i] = .{
-            .id = item.id,
-            .name = name_pool[ns .. ns + item.name.len],
-            .category = cat_pool[cs .. cs + item.category.len],
-            .price = item.price,
-            .quantity = item.quantity,
-            .active = item.active,
-            .tags = tag_slices[tags_start..tag_slice_off],
-            .rating = item.rating,
-        };
-    }
-    dataset_len = count;
-    std.debug.print("[Swerver] Parsed {d} items into memory\n", .{dataset_len});
-}
-
-fn jsonError() response_mod.Response {
+fn grpcError(status: []const u8) response_mod.Response {
     return .{
-        .status = 500,
+        .status = 200,
         .headers = &[_]response_mod.Header{
-            .{ .name = "Content-Type", .value = "application/json" },
+            .{ .name = "Content-Type", .value = "application/grpc" },
+            .{ .name = "grpc-status", .value = status },
         },
-        .body = .{ .bytes = "{\"error\":\"json/gzip failed\"}" },
+        .body = .none,
     };
 }
 
+fn readProtoVarint(data: []const u8, offset: *usize) ?u64 {
+    var value: u64 = 0;
+    var shift: u6 = 0;
+    var count: usize = 0;
+    while (offset.* < data.len and count < 10) : (count += 1) {
+        const byte = data[offset.*];
+        offset.* += 1;
+        value |= @as(u64, byte & 0x7f) << shift;
+        if (byte & 0x80 == 0) return value;
+        if (shift == 63) return null;
+        shift += 7;
+    }
+    return null;
+}
+
+fn writeProtoVarint(dst: []u8, value_arg: u64) ?usize {
+    var value = value_arg;
+    var written: usize = 0;
+    while (true) {
+        if (written == dst.len) return null;
+        var byte: u8 = @intCast(value & 0x7f);
+        value >>= 7;
+        if (value != 0) byte |= 0x80;
+        dst[written] = byte;
+        written += 1;
+        if (value == 0) return written;
+    }
+}
+
+/// POST /benchmark.BenchmarkService/GetSum — unary gRPC SumRequest → SumReply.
+/// The benchmark schema is two int32 varints (`a` field 1, `b` field 2) and a
+/// single int32 varint result. The gRPC envelope is the standard compression
+/// flag plus a four-byte big-endian protobuf length.
+fn handleGrpcSum(ctx: *router.HandlerContext) response_mod.Response {
+    const request_body = ctx.request.body.sliceOrNull() orelse
+        ctx.request.body.copyTo(ctx.response_buf) orelse return grpcError("8");
+    if (request_body.len < 5 or request_body[0] != 0) return grpcError("3");
+
+    const message_len = std.mem.readInt(u32, request_body[1..5], .big);
+    if (message_len != request_body.len - 5) return grpcError("3");
+    const message = request_body[5..];
+
+    var a: u64 = 0;
+    var b: u64 = 0;
+    var offset: usize = 0;
+    while (offset < message.len) {
+        const tag = readProtoVarint(message, &offset) orelse return grpcError("3");
+        if (tag & 0x7 != 0) return grpcError("3");
+        const value = readProtoVarint(message, &offset) orelse return grpcError("3");
+        switch (tag >> 3) {
+            1 => a = value,
+            2 => b = value,
+            else => {},
+        }
+    }
+
+    const out = ctx.response_buf;
+    out[0] = 0;
+    out[5] = 0x08; // SumReply.result, protobuf field 1 / wire type 0
+    const value_len = writeProtoVarint(out[6..], a +% b) orelse return grpcError("13");
+    const protobuf_len: u32 = @intCast(1 + value_len);
+    std.mem.writeInt(u32, out[1..5], protobuf_len, .big);
+
+    return .{
+        .status = 200,
+        .headers = &[_]response_mod.Header{
+            .{ .name = "Content-Type", .value = "application/grpc" },
+            .{ .name = "grpc-status", .value = "0" },
+        },
+        .body = .{ .bytes = out[0 .. 5 + protobuf_len] },
+    };
+}
+
+/// GET /json/:count?m=X — return `count` items with total = price * quantity * m
 fn handleJson(ctx: *router.HandlerContext) response_mod.Response {
     const count_str = ctx.getParam("count") orelse "50";
     const count = @min(
@@ -203,6 +325,8 @@ fn handleJson(ctx: *router.HandlerContext) response_mod.Response {
         }
     }
 
+    // Assemble the payload as real structs and let std.json encode it — no
+    // hand-formatting. `total` is the per-request price * quantity * m.
     var items: [MAX_ITEMS]JsonItem = undefined;
     for (dataset_items[0..count], 0..) |item, i| {
         items[i] = .{
@@ -218,8 +342,11 @@ fn handleJson(ctx: *router.HandlerContext) response_mod.Response {
         };
     }
 
-    const payload = .{ .items = items[0..count], .count = count };
+    const payload = .{ .count = count, .items = items[0..count] };
 
+    // json-comp profile: gzip when the client offers it. Serialize once with
+    // std.json into a process-global buffer (per-worker safe under the fork
+    // model), then compress.
     if (ctx.request.getHeader("accept-encoding")) |ae| {
         if (std.mem.indexOf(u8, ae, "gzip") != null) {
             var w = std.Io.Writer.fixed(json_buf[0..]);
@@ -230,7 +357,6 @@ fn handleJson(ctx: *router.HandlerContext) response_mod.Response {
                     .headers = &[_]response_mod.Header{
                         .{ .name = "Content-Type", .value = "application/json" },
                         .{ .name = "Content-Encoding", .value = "gzip" },
-                        .{ .name = "Vary", .value = "Accept-Encoding" },
                     },
                     .body = .{ .bytes = gzip_out[0..clen] },
                 };
@@ -238,47 +364,65 @@ fn handleJson(ctx: *router.HandlerContext) response_mod.Response {
         }
     }
 
+    // Plain JSON: ctx.jsonValue serializes the struct — the idiomatic way to
+    // return JSON from a swerver handler, no hand-formatting.
     return ctx.jsonValue(200, payload);
 }
 
+// Process-global scratch for the gzipped json-comp variant. Per-worker safe
+// under the fork model — each forked process has its own copy.
+var gzip_out: [65536]u8 = undefined;
+var json_buf: [65536]u8 = undefined;
+
+fn jsonError() response_mod.Response {
+    return .{
+        .status = 500,
+        .headers = &[_]response_mod.Header{
+            .{ .name = "Content-Type", .value = "application/json" },
+        },
+        .body = .{ .bytes = "{\"error\":\"render failed\"}" },
+    };
+}
+
+// ── Main ─────────────────────────────────────────────────────────
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
-    var num_workers: u16 = 2;
-    var port: u16 = 18094;
+    const args = try parseArgs(init.minimal.args, allocator);
 
-    var it = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
-    defer it.deinit();
-    _ = it.next(); // skip program name
-    if (it.next()) |w_arg| {
-        const w_str = std.mem.sliceTo(w_arg, 0);
-        num_workers = std.fmt.parseInt(u16, w_str, 10) catch 2;
-    }
-    if (it.next()) |p_arg| {
-        const p_str = std.mem.sliceTo(p_arg, 0);
-        port = std.fmt.parseInt(u16, p_str, 10) catch 18094;
-    }
+    var loaded_config: ?swerver.config_file.LoadedConfig = null;
+    defer if (loaded_config) |*lc| lc.deinit();
 
-    loadDataset(allocator);
+    var cfg: swerver.config.ServerConfig = blk: {
+        if (args.config_path) |path| {
+            loaded_config = swerver.config_file.loadConfigFile(allocator, path) catch |err| {
+                std.log.err("failed to load config: {}", .{err});
+                return err;
+            };
+            break :blk loaded_config.?.server_config;
+        }
+        break :blk swerver.config.ServerConfig.default();
+    };
 
-    var cfg = swerver.config.ServerConfig.default();
-    cfg.address = "0.0.0.0";
-    cfg.port = port;
-    cfg.workers = num_workers;
-    cfg.disable_middleware = true;
-    cfg.cache_static_files = true;
-    cfg.max_connections = 4096;
-    cfg.buffer_pool.buffer_size = 65536;
-    cfg.buffer_pool.buffer_count = 8192;
+    if (args.cert_path) |c| cfg.tls.cert_path = c;
+    if (args.key_path) |k| cfg.tls.key_path = k;
     try cfg.validate();
 
+    loadDataset();
+
     var app_router = router.Router.init(.{});
+    try app_router.get("/health", handleHealth);
+    try app_router.get("/echo", handleEchoGet);
+    try app_router.post("/echo", handleEchoPost);
+    try app_router.get("/plaintext", handlePlaintext);
+    try app_router.get("/pipeline", handlePipeline);
     try app_router.get("/baseline11", handleBaseline);
     try app_router.post("/baseline11", handleBaseline);
     try app_router.get("/baseline2", handleBaseline);
     try app_router.post("/baseline2", handleBaseline);
     try app_router.get("/json/:count", handleJson);
-
-    std.debug.print("Swerver appstack benchmark listening on http://0.0.0.0:{d} with {d} workers\n", .{ port, num_workers });
+    try app_router.post("/benchmark.BenchmarkService/GetSum", handleGrpcSum);
+    try db_routes.register(&app_router);
 
     if (cfg.workers != 1) {
         var master = try swerver.Master.init(allocator, cfg, app_router, null);
@@ -295,4 +439,37 @@ pub fn main(init: std.process.Init) !void {
         }
         try srv.run(null);
     }
+}
+
+const Args = struct {
+    config_path: ?[]const u8 = null,
+    cert_path: ?[:0]const u8 = null,
+    key_path: ?[:0]const u8 = null,
+};
+
+fn parseArgs(args: std.process.Args, allocator: std.mem.Allocator) !Args {
+    var result: Args = .{};
+    var it = try std.process.Args.Iterator.initAllocator(args, allocator);
+    defer it.deinit();
+    _ = it.next();
+    while (it.next()) |arg_z| {
+        const arg = std.mem.sliceTo(arg_z, 0);
+        if (std.mem.eql(u8, arg, "--config")) {
+            const value = it.next() orelse return error.MissingValue;
+            result.config_path = std.mem.sliceTo(value, 0);
+        } else if (std.mem.startsWith(u8, arg, "--config=")) {
+            result.config_path = arg["--config=".len..];
+        } else if (std.mem.eql(u8, arg, "--cert")) {
+            const value = it.next() orelse return error.MissingValue;
+            result.cert_path = std.mem.sliceTo(value, 0);
+        } else if (std.mem.startsWith(u8, arg, "--cert=")) {
+            result.cert_path = @ptrCast(arg["--cert=".len..]);
+        } else if (std.mem.eql(u8, arg, "--key")) {
+            const value = it.next() orelse return error.MissingValue;
+            result.key_path = std.mem.sliceTo(value, 0);
+        } else if (std.mem.startsWith(u8, arg, "--key=")) {
+            result.key_path = @ptrCast(arg["--key=".len..]);
+        }
+    }
+    return result;
 }
