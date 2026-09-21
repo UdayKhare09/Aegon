@@ -5,3 +5,11 @@ cmake-build-release
 node_modules
 docs/.vitepress/dist
 docs/.vitepress/cache
+**/target
+**/build
+**/bench_fiber
+**/upstream
+**/.zig-cache
+**__pycache__
+**/bin
+**/settle-failures.jsonl

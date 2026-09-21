@@ -39,33 +39,6 @@
 
 ---
 
-## 🏆 Benchmark Summary
-
-Aegon was systematically evaluated against three industry-leading, production web servers on identical bare-metal hardware (**AMD Ryzen 5 7600X, 6 Zen 4 Cores, AVX-512, Linux 6.13**).
-
-The test workload is a standard `GET /health` endpoint returning `200 OK` (`text/plain`, `"OK"`).
-
-### Protocol Matrix Peak Performance (6 Physical Cores)
-
-| Protocol / Generation | Aegon (C++26) | Drogon (C++17) | Actix-web (Rust) | Axum (Rust) | Aegon Advantage |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **HTTP/1.1 Cleartext (Peak RPS)** | **912,374 req/s** 🏆 | 836,580 req/s | 854,544 req/s | 824,885 req/s | **+6.8% over #2** |
-| **HTTP/1.1 TLS (Peak RPS)** | **886,920 req/s** 🏆 | 798,410 req/s | 812,450 req/s | 785,120 req/s | **+9.2% over #2** |
-| **HTTP/2 Cleartext (`h2c`)** | **3,596,346 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | 605,585 req/s | **6.27x faster** |
-| **HTTP/2 TLS (`h2`)** | **3,480,864 req/s** 🏆 | `UNSUPPORTED` | 1,063,276 req/s | 707,069 req/s | **3.27x faster** |
-| **HTTP/3 over QUIC (`h3`)** | **183,574 req/s** 🏆 | `UNSUPPORTED` | `UNSUPPORTED` | `UNSUPPORTED` | **Only Framework** |
-| **p99 Tail Latency (H2 Stress)** | **4.28 ms** 🏆 | N/A | 45.45 ms | 47.58 ms | **10.6x lower tail** |
-| **Kernel Subsystem** | **`io_uring` multishot** | `epoll` | `epoll` (mio) | `epoll` (mio) | Zero syscall overhead |
-| **Vector Engine** | **AVX-512 / AVX2 / SSE4.2** | None | Auto-vectorized | Auto-vectorized | Stepped SIMD fallback |
-
-> ⚠️ **Benchmark Disclaimers & Notes**:
-> - **Protocol Support**: Drogon does not implement HTTP/2 or HTTP/3 server protocols. Actix-web does not support cleartext `h2c` and lacks official HTTP/3 support. Axum lacks official production HTTP/3 over QUIC support. Marking a framework as `UNSUPPORTED` reflects actual protocol availability in release builds.
-> - **Workload Scope**: Minimal endpoint testing measures raw protocol engine throughput, memory allocation overhead, and kernel networking latency. Application-level database queries or business logic frequently become the real-world throughput ceiling.
-> - **Hardware**: Benchmarked on bare-metal Zen 4 (Ryzen 5 7600X, 6 physical cores @ up to 5.3GHz, 26GB DDR5, AVX-512 enabled). Results in virtualized hypervisors may vary based on `io_uring` support.
-> - Detailed benchmark methodology and protocol-specific results are maintained in the [benchmark documentation](docs/guide/benchmarks.md).
-
----
-
 ## 🚀 Quick Start
 
 ### 1. Fast Track via `aegon` CLI
@@ -164,7 +137,6 @@ npm run docs:dev
 Topics covered:
 - [Getting Started & Installation](docs/guide/getting-started.md)
 - [CLI Tooling (`aegon`)](docs/guide/cli.md)
-- [Comprehensive Benchmarks & Architecture](docs/guide/benchmarks.md)
 - [Routing, Param Matching & Groups](docs/guide/routing.md)
 - [Layered Configuration (`config.yml` & `.env`)](docs/guide/config.md)
 - [C++26 Tasks & io_uring Kernel Engine](docs/guide/core/task.md)

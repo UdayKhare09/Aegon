@@ -153,8 +153,8 @@ void RadixTree::insert(Method method, std::string_view pattern, Handler handler)
 }
 
 bool RadixTree::match_node(const RadixNode* node, std::string_view path,
-                          std::vector<std::pair<std::string_view, std::string_view>>& params,
-                          const RadixNode*& matched_node) const {
+                           StackRouteParams& params,
+                           const RadixNode*& matched_node) const {
     if (!node) return false;
 
     if (node->type == RadixNodeType::Static) {
@@ -179,11 +179,13 @@ bool RadixTree::match_node(const RadixNode* node, std::string_view path,
             }
         }
 
-        // Try static children first for highest specificity
+        // Try static children first for highest specificity with 1st-byte pruning
         for (const auto& c : node->children) {
             if (c->type == RadixNodeType::Static) {
-                if (match_node(c.get(), path, params, matched_node)) {
-                    return true;
+                if (path.empty() || c->prefix.empty() || c->prefix[0] == path[0]) {
+                    if (match_node(c.get(), path, params, matched_node)) {
+                        return true;
+                    }
                 }
             }
         }
@@ -214,7 +216,7 @@ bool RadixTree::match_node(const RadixNode* node, std::string_view path,
         std::string_view val = (slash == std::string_view::npos) ? path : path.substr(0, slash);
         if (val.empty()) return false;
 
-        params.emplace_back(node->param_name, val);
+        params.push_back(node->param_name, val);
         std::string_view rest = (slash == std::string_view::npos) ? "" : path.substr(slash);
 
         if (rest.empty() || rest == "/") {
@@ -236,7 +238,7 @@ bool RadixTree::match_node(const RadixNode* node, std::string_view path,
 
     if (node->type == RadixNodeType::Wildcard) {
         if (!node->param_name.empty()) {
-            params.emplace_back(node->param_name, path);
+            params.push_back(node->param_name, path);
         }
         if (node->has_any_handler) {
             matched_node = node;
@@ -251,7 +253,7 @@ bool RadixTree::match_node(const RadixNode* node, std::string_view path,
 RadixTree::MatchResult RadixTree::match(Request& req) const {
     std::string_view path = normalize_path(req.path());
 
-    std::vector<std::pair<std::string_view, std::string_view>> extracted_params;
+    StackRouteParams extracted_params;
     const RadixNode* matched_node = nullptr;
 
     if (!match_node(root_.get(), path, extracted_params, matched_node)) {
@@ -260,8 +262,8 @@ RadixTree::MatchResult RadixTree::match(Request& req) const {
 
     size_t midx = static_cast<size_t>(req.method());
     if (matched_node && midx < matched_node->handlers.size() && matched_node->has_handler[midx]) {
-        for (const auto& [k, v] : extracted_params) {
-            req.add_param(k, v);
+        for (size_t i = 0; i < extracted_params.count; ++i) {
+            req.add_param(extracted_params.entries[i].first, extracted_params.entries[i].second);
         }
         return MatchResult{
             .handler = &matched_node->handlers[midx],

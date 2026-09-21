@@ -14,7 +14,6 @@ export default defineConfig({
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Guide', link: '/guide/getting-started' },
-      { text: 'Benchmarks', link: '/guide/benchmarks' },
       {
         text: 'GitHub',
         link: 'https://github.com/UdayKhare09/Aegon'
@@ -28,7 +27,6 @@ export default defineConfig({
           items: [
             { text: 'Getting Started', link: '/guide/getting-started' },
             { text: 'CLI Tooling (aegon)', link: '/guide/cli' },
-            { text: 'Benchmarks & Performance', link: '/guide/benchmarks' },
           ]
         },
         {

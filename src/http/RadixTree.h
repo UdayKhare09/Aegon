@@ -64,8 +64,24 @@ public:
 private:
     std::unique_ptr<RadixNode> root_;
 
+    struct StackRouteParams {
+        static constexpr size_t MAX = 8;
+        std::pair<std::string_view, std::string_view> entries[MAX];
+        size_t count = 0;
+
+        void push_back(std::string_view k, std::string_view v) noexcept {
+            if (count < MAX) {
+                entries[count++] = {k, v};
+            }
+        }
+
+        void pop_back() noexcept {
+            if (count > 0) --count;
+        }
+    };
+
     bool match_node(const RadixNode* node, std::string_view path,
-                    std::vector<std::pair<std::string_view, std::string_view>>& params,
+                    StackRouteParams& params,
                     const RadixNode*& matched_node) const;
 };
 
