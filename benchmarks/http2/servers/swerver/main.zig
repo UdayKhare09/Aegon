@@ -74,6 +74,8 @@ pub fn main(init: std.process.Init) !void {
     cfg.max_connections = 512;
     cfg.buffer_pool.buffer_size = 65536;
     cfg.buffer_pool.buffer_count = 1024;
+    cfg.http2.initial_window_size = 1048576;
+    cfg.http2.max_streams = 256;
     cfg.tls.cert_path = "benchmarks/http2/certs/server.crt";
     cfg.tls.key_path = "benchmarks/http2/certs/server.key";
     try cfg.validate();

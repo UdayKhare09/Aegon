@@ -91,6 +91,8 @@ async fn main() -> std::io::Result<()> {
             .service(json)
             .service(user_post)
     })
+    .h2_initial_window_size(1_048_576)
+    .h2_initial_connection_window_size(1_048_576)
     .workers(workers)
     .bind_rustls_0_23(("0.0.0.0", port), tls_config)?
     .run()

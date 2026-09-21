@@ -70,9 +70,9 @@ Tool: `h2load` (100 connections × 10 streams = **1,000 active concurrent multip
 
 | Workload | Aegon (C++26) | Actix-web (Rust, `rustls`) | Swerver (Zig) | Drogon (C++) | Fiber (Go) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **`/plaintext`** | **1,778,203.67 req/s** | 693,127.00 req/s | 460,517.57 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
-| **`/json`** | **1,678,171.33 req/s** | 640,796.00 req/s | 467,039.00 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
-| **`/users/42/posts/101`** | **1,643,887.00 req/s** | 616,159.33 req/s | 460,464.87 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
+| **`/plaintext`** | **1,750,028.67 req/s** | 693,620.67 req/s | 475,583.73 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
+| **`/json`** | **1,695,960.00 req/s** | 651,131.33 req/s | 476,690.33 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
+| **`/users/42/posts/101`** | **1,667,803.33 req/s** | 627,524.00 req/s | 466,247.10 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
 
 *Note: Drogon (Trantor) and Fiber (`fasthttp`) do not implement RFC 7540 binary framing; ALPN falls back to HTTP/1.1.*
 
