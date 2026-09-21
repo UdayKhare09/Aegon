@@ -76,7 +76,7 @@ To ensure rigorous, fair, and reproducible scientific comparisons, all server pa
 | Parameter | Aegon | Actix-web | Swerver | Parity Status |
 |:---|:---:|:---:|:---:|:---:|
 | **Initial Stream Flow-Control Window** | `1,048,576 B` (1 MiB) | `1,048,576 B` (1 MiB) | `1,048,576 B` (1 MiB) | **Exact Parity** (aligned via `.h2_initial_window_size` on Actix and `cfg.http2.initial_window_size` on Swerver) |
-| **Max Concurrent Streams** | `256` | Unconstrained (`>256`) | `256` | **Exact Parity** (aligned via `cfg.http2.max_streams = 256` on Swerver; Actix `h2` permits unconstrained streams) |
+| **Max Concurrent Streams** | `256` | Unconstrained (`>256`) | `256` | **Disclosed Difference** (see notes below) |
 | **Max Frame Size (`SETTINGS_MAX_FRAME_SIZE`)** | `16,384 B` | `16,384 B` | `16,384 B` | **Exact Parity** (RFC 7540 default across all implementations) |
 | **TLS Version & Cipher Suite** | TLS 1.3 / `TLS_AES_256_GCM_SHA384` | TLS 1.3 / `TLS_AES_256_GCM_SHA384` | TLS 1.3 / `TLS_AES_256_GCM_SHA384` | **Exact Parity** (All negotiate identical TLS 1.3 cipher suites) |
 | **TLS Session Resumption** | Disabled | Disabled | Disabled | **Exact Parity** (Clean per-connection handshakes under keep-alive) |
@@ -95,6 +95,10 @@ To ensure rigorous, fair, and reproducible scientific comparisons, all server pa
    - **Swerver**: Uses 65,536-byte (64 KiB) buffers (`cfg.buffer_pool.buffer_size = 65536`).
    - **Actix-web**: Uses Tokio's dynamic chunking (`BytesMut`).
    - *Reason left different*: Buffer allocation strategies are integral to each runtime's design; benchmark payloads are compact (13–120 bytes) and fit easily into any standard buffer size.
+3. **Max Concurrent Streams**:
+   - **Aegon & Swerver**: Configured explicitly to 256 max concurrent streams per connection (`NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS = 256` in Aegon; `cfg.http2.max_streams = 256` in Swerver).
+   - **Actix-web**: Uses the underlying `h2` crate default which leaves max concurrent streams unconstrained (bound only by memory). Actix-web's high-level `HttpServer` and `actix-http` configuration APIs do not expose a knob for `max_concurrent_streams`.
+   - *Reason left different*: Actix does not expose the knob at the application server layer. Under the benchmark's load pattern of 10 concurrent streams per connection (1,000 total across 100 connections), all three servers operate well below the 256 limit, so the unconstrained setting provides no structural advantage during the test.
 
 ---
 
