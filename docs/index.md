@@ -40,9 +40,6 @@ features:
 <div class="vp-doc" style="max-width: 100%; margin: 40px auto 0 auto; padding: 0 48px;">
 
 ::: warning Project Status: Version 0.1.a2 (Early Alpha)
-**Crafted by Human Vision, Synthesized with AI Assistance**
-Aegon is an experimental, bleeding-edge framework **conceived, architected, and guided by human engineering, with the majority of the code written in deep collaboration with advanced AI systems**. 
-
 Aegon is in active early development (`v0.1.a2`). **Public APIs and internal behaviors can and will have breaking changes in future releases** as paradigms evolve towards stability.
 :::
 

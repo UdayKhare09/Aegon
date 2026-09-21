@@ -1,0 +1,440 @@
+{
+  "plaintext": {
+    "aegon": {
+      "framework": "aegon",
+      "endpoint": "plaintext",
+      "runs": [
+        {
+          "total_requests": 17244230,
+          "succeeded": 17244230,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1724423.0,
+          "avg_lat_us": 520.0,
+          "p50_us": 509.0,
+          "p95_us": 670.0,
+          "p99_us": 849.0
+        },
+        {
+          "total_requests": 17047630,
+          "succeeded": 17047630,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1704763.0,
+          "avg_lat_us": 527.0,
+          "p50_us": 521.0,
+          "p95_us": 650.0,
+          "p99_us": 793.0
+        },
+        {
+          "total_requests": 17713170,
+          "succeeded": 17713170,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1771317.0,
+          "avg_lat_us": 518.0,
+          "p50_us": 514.0,
+          "p95_us": 664.0,
+          "p99_us": 748.0
+        }
+      ],
+      "avg_rps": 1733501.0,
+      "avg_lat_us": 521.6666666666666,
+      "avg_p50_us": 514.6666666666666,
+      "avg_p99_us": 796.6666666666666,
+      "avg_total": 17335010.0
+    },
+    "swerver": {
+      "framework": "swerver",
+      "endpoint": "plaintext",
+      "runs": [
+        {
+          "total_requests": 4593569,
+          "succeeded": 4593569,
+          "failed": 0,
+          "errored": 0,
+          "rps": 459356.9,
+          "avg_lat_us": 2140.0,
+          "p50_us": 2220.0,
+          "p95_us": 2670.0,
+          "p99_us": 3710.0
+        },
+        {
+          "total_requests": 4567843,
+          "succeeded": 4567843,
+          "failed": 0,
+          "errored": 0,
+          "rps": 456784.3,
+          "avg_lat_us": 2160.0,
+          "p50_us": 2130.0,
+          "p95_us": 2670.0,
+          "p99_us": 4280.0
+        },
+        {
+          "total_requests": 4654115,
+          "succeeded": 4654115,
+          "failed": 0,
+          "errored": 0,
+          "rps": 465411.5,
+          "avg_lat_us": 2120.0,
+          "p50_us": 2080.0,
+          "p95_us": 2400.0,
+          "p99_us": 4050.0
+        }
+      ],
+      "avg_rps": 460517.56666666665,
+      "avg_lat_us": 2140.0,
+      "avg_p50_us": 2143.3333333333335,
+      "avg_p99_us": 4013.3333333333335,
+      "avg_total": 4605175.666666667
+    },
+    "actix": {
+      "framework": "actix",
+      "endpoint": "plaintext",
+      "runs": [
+        {
+          "total_requests": 6205620,
+          "succeeded": 6205620,
+          "failed": 0,
+          "errored": 0,
+          "rps": 620562.0,
+          "avg_lat_us": 1610.0,
+          "p50_us": 1570.0,
+          "p95_us": 1770.0,
+          "p99_us": 1900.0
+        },
+        {
+          "total_requests": 6175120,
+          "succeeded": 6175120,
+          "failed": 0,
+          "errored": 0,
+          "rps": 617512.0,
+          "avg_lat_us": 1620.0,
+          "p50_us": 1570.0,
+          "p95_us": 1830.0,
+          "p99_us": 2400.0
+        },
+        {
+          "total_requests": 6018570,
+          "succeeded": 6018570,
+          "failed": 0,
+          "errored": 0,
+          "rps": 601857.0,
+          "avg_lat_us": 1660.0,
+          "p50_us": 1610.0,
+          "p95_us": 1880.0,
+          "p99_us": 2400.0
+        }
+      ],
+      "avg_rps": 613310.3333333334,
+      "avg_lat_us": 1630.0,
+      "avg_p50_us": 1583.3333333333333,
+      "avg_p99_us": 2233.3333333333335,
+      "avg_total": 6133103.333333333
+    },
+    "drogon": {
+      "framework": "drogon",
+      "endpoint": "plaintext",
+      "status": "UNSUPPORTED",
+      "reason": "Trantor reactor does not implement RFC 7540 HTTP/2 binary framing; ALPN falls back to HTTP/1.1."
+    },
+    "fiber": {
+      "framework": "fiber",
+      "endpoint": "plaintext",
+      "status": "UNSUPPORTED",
+      "reason": "fasthttp core does not implement RFC 7540 HTTP/2 binary framing; ALPN falls back to HTTP/1.1."
+    }
+  },
+  "json": {
+    "aegon": {
+      "framework": "aegon",
+      "endpoint": "json",
+      "runs": [
+        {
+          "total_requests": 16721700,
+          "succeeded": 16721700,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1672170.0,
+          "avg_lat_us": 542.0,
+          "p50_us": 536.0,
+          "p95_us": 660.0,
+          "p99_us": 768.0
+        },
+        {
+          "total_requests": 16333070,
+          "succeeded": 16333070,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1633307.0,
+          "avg_lat_us": 558.0,
+          "p50_us": 548.0,
+          "p95_us": 703.0,
+          "p99_us": 845.0
+        },
+        {
+          "total_requests": 16622840,
+          "succeeded": 16622840,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1662284.0,
+          "avg_lat_us": 560.0,
+          "p50_us": 561.0,
+          "p95_us": 760.0,
+          "p99_us": 935.0
+        }
+      ],
+      "avg_rps": 1655920.3333333333,
+      "avg_lat_us": 553.3333333333334,
+      "avg_p50_us": 548.3333333333334,
+      "avg_p99_us": 849.3333333333334,
+      "avg_total": 16559203.333333334
+    },
+    "swerver": {
+      "framework": "swerver",
+      "endpoint": "json",
+      "runs": [
+        {
+          "total_requests": 4709618,
+          "succeeded": 4709618,
+          "failed": 0,
+          "errored": 0,
+          "rps": 470961.8,
+          "avg_lat_us": 2090.0,
+          "p50_us": 2260.0,
+          "p95_us": 2770.0,
+          "p99_us": 4400.0
+        },
+        {
+          "total_requests": 4661430,
+          "succeeded": 4661430,
+          "failed": 0,
+          "errored": 0,
+          "rps": 466143.0,
+          "avg_lat_us": 2110.0,
+          "p50_us": 2080.0,
+          "p95_us": 2450.0,
+          "p99_us": 3960.0
+        },
+        {
+          "total_requests": 4640122,
+          "succeeded": 4640122,
+          "failed": 0,
+          "errored": 0,
+          "rps": 464012.2,
+          "avg_lat_us": 2140.0,
+          "p50_us": 2120.0,
+          "p95_us": 2640.0,
+          "p99_us": 3810.0
+        }
+      ],
+      "avg_rps": 467039.0,
+      "avg_lat_us": 2113.3333333333335,
+      "avg_p50_us": 2153.3333333333335,
+      "avg_p99_us": 4056.6666666666665,
+      "avg_total": 4670390.0
+    },
+    "actix": {
+      "framework": "actix",
+      "endpoint": "json",
+      "runs": [
+        {
+          "total_requests": 5651060,
+          "succeeded": 5651060,
+          "failed": 0,
+          "errored": 0,
+          "rps": 565106.0,
+          "avg_lat_us": 1770.0,
+          "p50_us": 1690.0,
+          "p95_us": 2040.0,
+          "p99_us": 2730.0
+        },
+        {
+          "total_requests": 5656290,
+          "succeeded": 5656290,
+          "failed": 0,
+          "errored": 0,
+          "rps": 565629.0,
+          "avg_lat_us": 1770.0,
+          "p50_us": 1720.0,
+          "p95_us": 2009.9999999999998,
+          "p99_us": 2210.0
+        },
+        {
+          "total_requests": 5746990,
+          "succeeded": 5746990,
+          "failed": 0,
+          "errored": 0,
+          "rps": 574699.0,
+          "avg_lat_us": 1740.0,
+          "p50_us": 1700.0,
+          "p95_us": 1920.0,
+          "p99_us": 2090.0
+        }
+      ],
+      "avg_rps": 568478.0,
+      "avg_lat_us": 1760.0,
+      "avg_p50_us": 1703.3333333333333,
+      "avg_p99_us": 2343.3333333333335,
+      "avg_total": 5684780.0
+    },
+    "drogon": {
+      "framework": "drogon",
+      "endpoint": "json",
+      "status": "UNSUPPORTED",
+      "reason": "Trantor reactor does not implement RFC 7540 HTTP/2 binary framing; ALPN falls back to HTTP/1.1."
+    },
+    "fiber": {
+      "framework": "fiber",
+      "endpoint": "json",
+      "status": "UNSUPPORTED",
+      "reason": "fasthttp core does not implement RFC 7540 HTTP/2 binary framing; ALPN falls back to HTTP/1.1."
+    }
+  },
+  "user_post": {
+    "aegon": {
+      "framework": "aegon",
+      "endpoint": "user_post",
+      "runs": [
+        {
+          "total_requests": 16245780,
+          "succeeded": 16245780,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1624578.0,
+          "avg_lat_us": 560.0,
+          "p50_us": 548.0,
+          "p95_us": 697.0,
+          "p99_us": 881.0
+        },
+        {
+          "total_requests": 16405950,
+          "succeeded": 16405950,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1640595.0,
+          "avg_lat_us": 566.0,
+          "p50_us": 551.0,
+          "p95_us": 749.0,
+          "p99_us": 936.0
+        },
+        {
+          "total_requests": 16433600,
+          "succeeded": 16433600,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1643360.0,
+          "avg_lat_us": 562.0,
+          "p50_us": 556.0,
+          "p95_us": 679.0,
+          "p99_us": 774.0
+        }
+      ],
+      "avg_rps": 1636177.6666666667,
+      "avg_lat_us": 562.6666666666666,
+      "avg_p50_us": 551.6666666666666,
+      "avg_p99_us": 863.6666666666666,
+      "avg_total": 16361776.666666666
+    },
+    "swerver": {
+      "framework": "swerver",
+      "endpoint": "user_post",
+      "runs": [
+        {
+          "total_requests": 4582369,
+          "succeeded": 4582369,
+          "failed": 0,
+          "errored": 0,
+          "rps": 458236.9,
+          "avg_lat_us": 2160.0,
+          "p50_us": 2320.0,
+          "p95_us": 2610.0,
+          "p99_us": 3490.0
+        },
+        {
+          "total_requests": 4576281,
+          "succeeded": 4576281,
+          "failed": 0,
+          "errored": 0,
+          "rps": 457628.1,
+          "avg_lat_us": 2150.0,
+          "p50_us": 2080.0,
+          "p95_us": 2560.0,
+          "p99_us": 4080.0
+        },
+        {
+          "total_requests": 4655296,
+          "succeeded": 4655296,
+          "failed": 0,
+          "errored": 0,
+          "rps": 465529.6,
+          "avg_lat_us": 2130.0,
+          "p50_us": 2100.0,
+          "p95_us": 2320.0,
+          "p99_us": 2860.0
+        }
+      ],
+      "avg_rps": 460464.8666666667,
+      "avg_lat_us": 2146.6666666666665,
+      "avg_p50_us": 2166.6666666666665,
+      "avg_p99_us": 3476.6666666666665,
+      "avg_total": 4604648.666666667
+    },
+    "actix": {
+      "framework": "actix",
+      "endpoint": "user_post",
+      "runs": [
+        {
+          "total_requests": 5580510,
+          "succeeded": 5580510,
+          "failed": 0,
+          "errored": 0,
+          "rps": 558051.0,
+          "avg_lat_us": 1790.0,
+          "p50_us": 1750.0,
+          "p95_us": 1940.0,
+          "p99_us": 2170.0
+        },
+        {
+          "total_requests": 5505620,
+          "succeeded": 5505620,
+          "failed": 0,
+          "errored": 0,
+          "rps": 550562.0,
+          "avg_lat_us": 1820.0,
+          "p50_us": 1770.0,
+          "p95_us": 2020.0,
+          "p99_us": 2150.0
+        },
+        {
+          "total_requests": 5434260,
+          "succeeded": 5434260,
+          "failed": 0,
+          "errored": 0,
+          "rps": 543426.0,
+          "avg_lat_us": 1850.0,
+          "p50_us": 1770.0,
+          "p95_us": 2080.0,
+          "p99_us": 3030.0
+        }
+      ],
+      "avg_rps": 550679.6666666666,
+      "avg_lat_us": 1820.0,
+      "avg_p50_us": 1763.3333333333333,
+      "avg_p99_us": 2450.0,
+      "avg_total": 5506796.666666667
+    },
+    "drogon": {
+      "framework": "drogon",
+      "endpoint": "user_post",
+      "status": "UNSUPPORTED",
+      "reason": "Trantor reactor does not implement RFC 7540 HTTP/2 binary framing; ALPN falls back to HTTP/1.1."
+    },
+    "fiber": {
+      "framework": "fiber",
+      "endpoint": "user_post",
+      "status": "UNSUPPORTED",
+      "reason": "fasthttp core does not implement RFC 7540 HTTP/2 binary framing; ALPN falls back to HTTP/1.1."
+    }
+  }
+}

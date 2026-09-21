@@ -207,29 +207,38 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
         return 0;
     };
 
-    qcb.stream_close = [](ngtcp2_conn*, uint32_t, int64_t stream_id,
+    qcb.stream_close = [](ngtcp2_conn* conn, uint32_t, int64_t stream_id,
                           uint64_t app_error_code, void* user_data, void*) -> int {
         auto* self = static_cast<Http3Connection*>(user_data);
         if (self->h3conn()) {
             nghttp3_conn_close_stream(self->h3conn(), stream_id, app_error_code);
         }
+        if ((stream_id & 0x03) == 0) {
+            ngtcp2_conn_extend_max_streams_bidi(conn, 1);
+        }
         return 0;
     };
 
-    qcb.stream_reset = [](ngtcp2_conn*, int64_t stream_id, uint64_t,
+    qcb.stream_reset = [](ngtcp2_conn* conn, int64_t stream_id, uint64_t,
                           uint64_t app_error_code, void* user_data, void*) -> int {
         auto* self = static_cast<Http3Connection*>(user_data);
         if (self->h3conn()) {
             nghttp3_conn_close_stream(self->h3conn(), stream_id, app_error_code);
         }
+        if ((stream_id & 0x03) == 0) {
+            ngtcp2_conn_extend_max_streams_bidi(conn, 1);
+        }
         return 0;
     };
 
-    qcb.stream_stop_sending = [](ngtcp2_conn*, int64_t stream_id,
+    qcb.stream_stop_sending = [](ngtcp2_conn* conn, int64_t stream_id,
                                 uint64_t app_error_code, void* user_data, void*) -> int {
         auto* self = static_cast<Http3Connection*>(user_data);
         if (self->h3conn()) {
             nghttp3_conn_close_stream(self->h3conn(), stream_id, app_error_code);
+        }
+        if ((stream_id & 0x03) == 0) {
+            ngtcp2_conn_extend_max_streams_bidi(conn, 1);
         }
         return 0;
     };
@@ -253,12 +262,12 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
 
     ngtcp2_transport_params qparams{};
     ngtcp2_transport_params_default(&qparams);
-    qparams.initial_max_streams_bidi = 100;
-    qparams.initial_max_streams_uni = 100;
-    qparams.initial_max_stream_data_bidi_remote = 1048576;
-    qparams.initial_max_stream_data_bidi_local = 1048576;
-    qparams.initial_max_stream_data_uni = 1048576;
-    qparams.initial_max_data = 10485760;
+    qparams.initial_max_streams_bidi = 65535;
+    qparams.initial_max_streams_uni = 65535;
+    qparams.initial_max_stream_data_bidi_remote = 10485760;
+    qparams.initial_max_stream_data_bidi_local = 10485760;
+    qparams.initial_max_stream_data_uni = 10485760;
+    qparams.initial_max_data = 104857600;
     qparams.max_idle_timeout = 30 * NGTCP2_SECONDS;
     qparams.active_connection_id_limit = 8;
 

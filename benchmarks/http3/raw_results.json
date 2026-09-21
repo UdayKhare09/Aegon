@@ -1,0 +1,326 @@
+{
+  "plaintext": {
+    "aegon": {
+      "framework": "aegon",
+      "endpoint": "plaintext",
+      "runs": [
+        {
+          "total_requests": 3301223,
+          "succeeded": 3301223,
+          "failed": 0,
+          "errored": 0,
+          "rps": 330122.3,
+          "avg_lat_us": 3030.0,
+          "p50_us": 2670.0,
+          "p95_us": 4350.0,
+          "p99_us": 5450.0
+        },
+        {
+          "total_requests": 3412624,
+          "succeeded": 3412624,
+          "failed": 0,
+          "errored": 0,
+          "rps": 341262.4,
+          "avg_lat_us": 2950.0,
+          "p50_us": 2710.0,
+          "p95_us": 4180.0,
+          "p99_us": 5120.0
+        },
+        {
+          "total_requests": 3379375,
+          "succeeded": 3379375,
+          "failed": 0,
+          "errored": 0,
+          "rps": 337937.5,
+          "avg_lat_us": 2970.0,
+          "p50_us": 2610.0,
+          "p95_us": 4020.0,
+          "p99_us": 4880.0
+        }
+      ],
+      "avg_rps": 336440.73,
+      "avg_lat_us": 2983.33,
+      "avg_p50_us": 2663.33,
+      "avg_p99_us": 5150.0,
+      "avg_total": 3364407.0
+    },
+    "swerver": {
+      "framework": "swerver",
+      "endpoint": "plaintext",
+      "runs": [
+        {
+          "total_requests": 1086807,
+          "succeeded": 1086807,
+          "failed": 0,
+          "errored": 0,
+          "rps": 108680.7,
+          "avg_lat_us": 9200.0,
+          "p50_us": 7400.0,
+          "p95_us": 18200.0,
+          "p99_us": 27370.0
+        },
+        {
+          "total_requests": 1098837,
+          "succeeded": 1098837,
+          "failed": 0,
+          "errored": 0,
+          "rps": 109883.7,
+          "avg_lat_us": 9090.0,
+          "p50_us": 7250.0,
+          "p95_us": 18100.0,
+          "p99_us": 31620.0
+        },
+        {
+          "total_requests": 1101474,
+          "succeeded": 1101474,
+          "failed": 0,
+          "errored": 0,
+          "rps": 110147.4,
+          "avg_lat_us": 9060.0,
+          "p50_us": 7280.0,
+          "p95_us": 17800.0,
+          "p99_us": 22400.0
+        }
+      ],
+      "avg_rps": 109570.6,
+      "avg_lat_us": 9116.67,
+      "avg_p50_us": 7310.0,
+      "avg_p99_us": 27130.0,
+      "avg_total": 1095706.0
+    },
+    "actix": {
+      "framework": "actix",
+      "endpoint": "plaintext",
+      "status": "UNSUPPORTED",
+      "reason": "actix-server and actix-http do not implement RFC 9000 / RFC 9114 QUIC/UDP transport; strictly TCP-only."
+    },
+    "drogon": {
+      "framework": "drogon",
+      "endpoint": "plaintext",
+      "status": "UNSUPPORTED",
+      "reason": "Trantor reactor does not implement RFC 9000 / RFC 9114 QUIC/UDP transport; strictly TCP-only."
+    },
+    "fiber": {
+      "framework": "fiber",
+      "endpoint": "plaintext",
+      "status": "UNSUPPORTED",
+      "reason": "fasthttp core does not implement RFC 9000 / RFC 9114 QUIC/UDP transport; strictly TCP-only."
+    }
+  },
+  "json": {
+    "aegon": {
+      "framework": "aegon",
+      "endpoint": "json",
+      "runs": [
+        {
+          "total_requests": 3277058,
+          "succeeded": 3277058,
+          "failed": 0,
+          "errored": 0,
+          "rps": 327705.8,
+          "avg_lat_us": 3060.0,
+          "p50_us": 2720.0,
+          "p95_us": 4450.0,
+          "p99_us": 5850.0
+        },
+        {
+          "total_requests": 3362846,
+          "succeeded": 3362846,
+          "failed": 0,
+          "errored": 0,
+          "rps": 336284.6,
+          "avg_lat_us": 2980.0,
+          "p50_us": 2720.0,
+          "p95_us": 4200.0,
+          "p99_us": 5310.0
+        },
+        {
+          "total_requests": 3308337,
+          "succeeded": 3308337,
+          "failed": 0,
+          "errored": 0,
+          "rps": 330833.7,
+          "avg_lat_us": 3010.0,
+          "p50_us": 2650.0,
+          "p95_us": 4120.0,
+          "p99_us": 5080.0
+        }
+      ],
+      "avg_rps": 331608.03,
+      "avg_lat_us": 3016.67,
+      "avg_p50_us": 2696.67,
+      "avg_p99_us": 5413.33,
+      "avg_total": 3316080.0
+    },
+    "swerver": {
+      "framework": "swerver",
+      "endpoint": "json",
+      "runs": [
+        {
+          "total_requests": 1090006,
+          "succeeded": 1090006,
+          "failed": 0,
+          "errored": 0,
+          "rps": 109000.6,
+          "avg_lat_us": 9160.0,
+          "p50_us": 7380.0,
+          "p95_us": 18200.0,
+          "p99_us": 23260.0
+        },
+        {
+          "total_requests": 1092842,
+          "succeeded": 1092842,
+          "failed": 0,
+          "errored": 0,
+          "rps": 109284.2,
+          "avg_lat_us": 9150.0,
+          "p50_us": 7350.0,
+          "p95_us": 18100.0,
+          "p99_us": 23330.0
+        },
+        {
+          "total_requests": 1097427,
+          "succeeded": 1097427,
+          "failed": 0,
+          "errored": 0,
+          "rps": 109742.7,
+          "avg_lat_us": 9100.0,
+          "p50_us": 7270.0,
+          "p95_us": 18000.0,
+          "p99_us": 28190.0
+        }
+      ],
+      "avg_rps": 109342.5,
+      "avg_lat_us": 9136.67,
+      "avg_p50_us": 7333.33,
+      "avg_p99_us": 24926.67,
+      "avg_total": 1093425.0
+    },
+    "actix": {
+      "framework": "actix",
+      "endpoint": "json",
+      "status": "UNSUPPORTED",
+      "reason": "actix-server and actix-http do not implement RFC 9000 / RFC 9114 QUIC/UDP transport; strictly TCP-only."
+    },
+    "drogon": {
+      "framework": "drogon",
+      "endpoint": "json",
+      "status": "UNSUPPORTED",
+      "reason": "Trantor reactor does not implement RFC 9000 / RFC 9114 QUIC/UDP transport; strictly TCP-only."
+    },
+    "fiber": {
+      "framework": "fiber",
+      "endpoint": "json",
+      "status": "UNSUPPORTED",
+      "reason": "fasthttp core does not implement RFC 9000 / RFC 9114 QUIC/UDP transport; strictly TCP-only."
+    }
+  },
+  "user_post": {
+    "aegon": {
+      "framework": "aegon",
+      "endpoint": "user_post",
+      "runs": [
+        {
+          "total_requests": 3281773,
+          "succeeded": 3281773,
+          "failed": 0,
+          "errored": 0,
+          "rps": 328177.3,
+          "avg_lat_us": 3060.0,
+          "p50_us": 2820.0,
+          "p95_us": 4350.0,
+          "p99_us": 5230.0
+        },
+        {
+          "total_requests": 3346991,
+          "succeeded": 3346991,
+          "failed": 0,
+          "errored": 0,
+          "rps": 334699.1,
+          "avg_lat_us": 2990.0,
+          "p50_us": 2680.0,
+          "p95_us": 4180.0,
+          "p99_us": 5210.0
+        },
+        {
+          "total_requests": 3171715,
+          "succeeded": 3171715,
+          "failed": 0,
+          "errored": 0,
+          "rps": 317171.5,
+          "avg_lat_us": 3250.0,
+          "p50_us": 2830.0,
+          "p95_us": 4820.0,
+          "p99_us": 7730.0
+        }
+      ],
+      "avg_rps": 326682.63,
+      "avg_lat_us": 3100.0,
+      "avg_p50_us": 2776.67,
+      "avg_p99_us": 6056.67,
+      "avg_total": 3266826.0
+    },
+    "swerver": {
+      "framework": "swerver",
+      "endpoint": "user_post",
+      "runs": [
+        {
+          "total_requests": 1080398,
+          "succeeded": 1080398,
+          "failed": 0,
+          "errored": 0,
+          "rps": 108039.8,
+          "avg_lat_us": 9250.0,
+          "p50_us": 7420.0,
+          "p95_us": 18200.0,
+          "p99_us": 23110.0
+        },
+        {
+          "total_requests": 1090220,
+          "succeeded": 1090220,
+          "failed": 0,
+          "errored": 0,
+          "rps": 109022.0,
+          "avg_lat_us": 9160.0,
+          "p50_us": 7320.0,
+          "p95_us": 18100.0,
+          "p99_us": 28100.0
+        },
+        {
+          "total_requests": 1073520,
+          "succeeded": 1073520,
+          "failed": 0,
+          "errored": 0,
+          "rps": 107352.0,
+          "avg_lat_us": 9290.0,
+          "p50_us": 7440.0,
+          "p95_us": 18300.0,
+          "p99_us": 26210.0
+        }
+      ],
+      "avg_rps": 108137.93,
+      "avg_lat_us": 9233.33,
+      "avg_p50_us": 7393.33,
+      "avg_p99_us": 25806.67,
+      "avg_total": 1081379.0
+    },
+    "actix": {
+      "framework": "actix",
+      "endpoint": "user_post",
+      "status": "UNSUPPORTED",
+      "reason": "actix-server and actix-http do not implement RFC 9000 / RFC 9114 QUIC/UDP transport; strictly TCP-only."
+    },
+    "drogon": {
+      "framework": "drogon",
+      "endpoint": "user_post",
+      "status": "UNSUPPORTED",
+      "reason": "Trantor reactor does not implement RFC 9000 / RFC 9114 QUIC/UDP transport; strictly TCP-only."
+    },
+    "fiber": {
+      "framework": "fiber",
+      "endpoint": "user_post",
+      "status": "UNSUPPORTED",
+      "reason": "fasthttp core does not implement RFC 9000 / RFC 9114 QUIC/UDP transport; strictly TCP-only."
+    }
+  }
+}

@@ -1,0 +1,18 @@
+[package]
+name = "bench_actix"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = { version = "4", features = ["openssl"] }
+openssl = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.10", features = ["v4"] }
+mimalloc = { version = "0.1", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"

@@ -14,11 +14,7 @@
 
 > ### ⚠️ Project Status: Version `0.1.a2` (Early Alpha)
 >
-> **Crafted by Human Vision, Synthesized with AI Assistance**
->
-> Aegon is an ambitious, high-performance web framework **conceived, designed, and guided by human engineering, with the majority of the implementation code written in deep collaboration with advanced AI systems**.
->
-> Because we are actively pioneering bleeding-edge C++26 language features, kernel `io_uring` multishot pipelines, and hardware-vectorized protocol engines:
+> Aegon is pioneering bleeding-edge C++26 language features, kernel `io_uring` multishot pipelines, and hardware-vectorized protocol engines:
 > - **Aegon is in active early alpha development (`v0.1.a2`).**
 > - **Public APIs, configuration structures, and internal behaviors will and can have breaking changes** in future releases as the framework evolves and matures.
 > - Feedback, issue reports, architectural critiques, and pull requests are warmly invited as we shape Aegon towards stability!
@@ -36,6 +32,21 @@
   - Full **HTTP/3 over QUIC** (RFC 9000 / RFC 9114) via `ngtcp2` + `nghttp3` on dual-stack `SO_REUSEPORT` UDP sockets.
 - **Static Compile-Time ORM**: Type-safe SQL query builder, migrations, optimistic concurrency control (OCC), and transactional look-aside caching.
 - **Native Async Redis**: High-throughput Redis client built directly onto the `io_uring` ring buffer supporting standalone, Sentinel, and Redis Cluster.
+
+---
+
+## 📊 Performance & Benchmarks
+
+Aegon is engineered for extreme throughput and deterministic sub-millisecond tail latencies. All benchmarks follow strict scientific methodology (physical CPU core pinning, 3s warm-up + 3 runs × 10s triplicate averages, un-cherry-picked):
+
+| Protocol Suite | Aegon (C++26) | Swerver (Zig) | Actix-web (Rust) | Drogon (C++) | Fiber (Go) |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **HTTP/1.1 Plaintext** | **547,144 req/s** | 468,443 req/s | 400,242 req/s | 388,416 req/s | 352,504 req/s |
+| **HTTP/1.1 TLS (HTTPS)** | **407,247 req/s** | 391,373 req/s | 338,810 req/s | 323,371 req/s | 308,016 req/s |
+| **HTTP/2 (Multiplexing)** | **1,733,501 req/s** | 460,517 req/s | 619,958 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
+| **HTTP/3 (QUIC / UDP)** | **336,440 req/s** | 109,570 req/s | *UNSUPPORTED* | *UNSUPPORTED* | *UNSUPPORTED* |
+
+> 📖 **Full Scientific Reports**: See detailed breakdowns, latency percentiles, and reproduction instructions in the [Benchmark Documentation](docs/guide/benchmarks.md) and [`benchmarks/`](benchmarks/) suite directories.
 
 ---
 
@@ -59,7 +70,7 @@ aegon run
 
 ### 2. Modern CMake Integration (`find_package`)
 
-Install Aegon system-wide (e.g., on Arch Linux via `pacman -S aegon` or building from source with `sudo cmake --install build`):
+Install Aegon system-wide (e.g. building from source with `sudo cmake --install build`):
 
 ```cmake
 cmake_minimum_required(VERSION 3.25)
