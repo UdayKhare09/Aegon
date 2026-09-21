@@ -16,7 +16,7 @@ RedisNodeConfig config{
     .host = "127.0.0.1",
     .port = 6379,
     .password = "secret", // optional
-    .db = 0
+    .database = 0
 };
 
 RedisClient redis(loop.ring(), config, /*pool_size=*/16);
