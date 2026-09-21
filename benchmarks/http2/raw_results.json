@@ -5,44 +5,44 @@
       "endpoint": "plaintext",
       "runs": [
         {
-          "total_requests": 17244230,
-          "succeeded": 17244230,
+          "total_requests": 17877870,
+          "succeeded": 17877870,
           "failed": 0,
           "errored": 0,
-          "rps": 1724423.0,
-          "avg_lat_us": 520.0,
-          "p50_us": 509.0,
-          "p95_us": 670.0,
-          "p99_us": 849.0
+          "rps": 1787787.0,
+          "avg_lat_us": 506.0,
+          "p50_us": 507.0,
+          "p95_us": 601.0,
+          "p99_us": 681.0
         },
         {
-          "total_requests": 17047630,
-          "succeeded": 17047630,
+          "total_requests": 17728360,
+          "succeeded": 17728360,
           "failed": 0,
           "errored": 0,
-          "rps": 1704763.0,
-          "avg_lat_us": 527.0,
-          "p50_us": 521.0,
-          "p95_us": 650.0,
-          "p99_us": 793.0
-        },
-        {
-          "total_requests": 17713170,
-          "succeeded": 17713170,
-          "failed": 0,
-          "errored": 0,
-          "rps": 1771317.0,
+          "rps": 1772836.0,
           "avg_lat_us": 518.0,
           "p50_us": 514.0,
-          "p95_us": 664.0,
-          "p99_us": 748.0
+          "p95_us": 621.0,
+          "p99_us": 709.0
+        },
+        {
+          "total_requests": 17739880,
+          "succeeded": 17739880,
+          "failed": 0,
+          "errored": 0,
+          "rps": 1773988.0,
+          "avg_lat_us": 521.0,
+          "p50_us": 515.0,
+          "p95_us": 655.0,
+          "p99_us": 760.0
         }
       ],
-      "avg_rps": 1733501.0,
-      "avg_lat_us": 521.6666666666666,
-      "avg_p50_us": 514.6666666666666,
-      "avg_p99_us": 796.6666666666666,
-      "avg_total": 17335010.0
+      "avg_rps": 1778203.6666666667,
+      "avg_lat_us": 515.0,
+      "avg_p50_us": 512.0,
+      "avg_p99_us": 716.6666666666666,
+      "avg_total": 17782036.666666668
     },
     "swerver": {
       "framework": "swerver",
@@ -93,44 +93,44 @@
       "endpoint": "plaintext",
       "runs": [
         {
-          "total_requests": 6205620,
-          "succeeded": 6205620,
+          "total_requests": 6929580,
+          "succeeded": 6929580,
           "failed": 0,
           "errored": 0,
-          "rps": 620562.0,
-          "avg_lat_us": 1610.0,
-          "p50_us": 1570.0,
-          "p95_us": 1770.0,
-          "p99_us": 1900.0
+          "rps": 692958.0,
+          "avg_lat_us": 1440.0,
+          "p50_us": 1400.0,
+          "p95_us": 1590.0,
+          "p99_us": 1670.0
         },
         {
-          "total_requests": 6175120,
-          "succeeded": 6175120,
+          "total_requests": 6937270,
+          "succeeded": 6937270,
           "failed": 0,
           "errored": 0,
-          "rps": 617512.0,
-          "avg_lat_us": 1620.0,
-          "p50_us": 1570.0,
-          "p95_us": 1830.0,
-          "p99_us": 2400.0
+          "rps": 693727.0,
+          "avg_lat_us": 1440.0,
+          "p50_us": 1410.0,
+          "p95_us": 1610.0,
+          "p99_us": 1740.0
         },
         {
-          "total_requests": 6018570,
-          "succeeded": 6018570,
+          "total_requests": 6926960,
+          "succeeded": 6926960,
           "failed": 0,
           "errored": 0,
-          "rps": 601857.0,
-          "avg_lat_us": 1660.0,
-          "p50_us": 1610.0,
-          "p95_us": 1880.0,
-          "p99_us": 2400.0
+          "rps": 692696.0,
+          "avg_lat_us": 1450.0,
+          "p50_us": 1410.0,
+          "p95_us": 1600.0,
+          "p99_us": 1740.0
         }
       ],
-      "avg_rps": 613310.3333333334,
-      "avg_lat_us": 1630.0,
-      "avg_p50_us": 1583.3333333333333,
-      "avg_p99_us": 2233.3333333333335,
-      "avg_total": 6133103.333333333
+      "avg_rps": 693127.0,
+      "avg_lat_us": 1443.3333333333333,
+      "avg_p50_us": 1406.6666666666667,
+      "avg_p99_us": 1716.6666666666667,
+      "avg_total": 6931270.0
     },
     "drogon": {
       "framework": "drogon",
@@ -151,44 +151,44 @@
       "endpoint": "json",
       "runs": [
         {
-          "total_requests": 16721700,
-          "succeeded": 16721700,
+          "total_requests": 16982160,
+          "succeeded": 16982160,
           "failed": 0,
           "errored": 0,
-          "rps": 1672170.0,
-          "avg_lat_us": 542.0,
+          "rps": 1698216.0,
+          "avg_lat_us": 541.0,
           "p50_us": 536.0,
-          "p95_us": 660.0,
-          "p99_us": 768.0
+          "p95_us": 686.0,
+          "p99_us": 767.0
         },
         {
-          "total_requests": 16333070,
-          "succeeded": 16333070,
+          "total_requests": 16789880,
+          "succeeded": 16789880,
           "failed": 0,
           "errored": 0,
-          "rps": 1633307.0,
-          "avg_lat_us": 558.0,
-          "p50_us": 548.0,
-          "p95_us": 703.0,
-          "p99_us": 845.0
+          "rps": 1678988.0,
+          "avg_lat_us": 551.0,
+          "p50_us": 547.0,
+          "p95_us": 653.0,
+          "p99_us": 749.0
         },
         {
-          "total_requests": 16622840,
-          "succeeded": 16622840,
+          "total_requests": 16573100,
+          "succeeded": 16573100,
           "failed": 0,
           "errored": 0,
-          "rps": 1662284.0,
-          "avg_lat_us": 560.0,
-          "p50_us": 561.0,
-          "p95_us": 760.0,
-          "p99_us": 935.0
+          "rps": 1657310.0,
+          "avg_lat_us": 561.0,
+          "p50_us": 555.0,
+          "p95_us": 712.0,
+          "p99_us": 827.0
         }
       ],
-      "avg_rps": 1655920.3333333333,
-      "avg_lat_us": 553.3333333333334,
-      "avg_p50_us": 548.3333333333334,
-      "avg_p99_us": 849.3333333333334,
-      "avg_total": 16559203.333333334
+      "avg_rps": 1678171.3333333333,
+      "avg_lat_us": 551.0,
+      "avg_p50_us": 546.0,
+      "avg_p99_us": 781.0,
+      "avg_total": 16781713.333333332
     },
     "swerver": {
       "framework": "swerver",
@@ -239,44 +239,44 @@
       "endpoint": "json",
       "runs": [
         {
-          "total_requests": 5651060,
-          "succeeded": 5651060,
+          "total_requests": 6435090,
+          "succeeded": 6435090,
           "failed": 0,
           "errored": 0,
-          "rps": 565106.0,
-          "avg_lat_us": 1770.0,
-          "p50_us": 1690.0,
-          "p95_us": 2040.0,
-          "p99_us": 2730.0
+          "rps": 643509.0,
+          "avg_lat_us": 1560.0,
+          "p50_us": 1500.0,
+          "p95_us": 1770.0,
+          "p99_us": 2530.0
         },
         {
-          "total_requests": 5656290,
-          "succeeded": 5656290,
+          "total_requests": 6436700,
+          "succeeded": 6436700,
           "failed": 0,
           "errored": 0,
-          "rps": 565629.0,
-          "avg_lat_us": 1770.0,
-          "p50_us": 1720.0,
-          "p95_us": 2009.9999999999998,
-          "p99_us": 2210.0
+          "rps": 643670.0,
+          "avg_lat_us": 1550.0,
+          "p50_us": 1520.0,
+          "p95_us": 1720.0,
+          "p99_us": 1840.0
         },
         {
-          "total_requests": 5746990,
-          "succeeded": 5746990,
+          "total_requests": 6352090,
+          "succeeded": 6352090,
           "failed": 0,
           "errored": 0,
-          "rps": 574699.0,
-          "avg_lat_us": 1740.0,
-          "p50_us": 1700.0,
-          "p95_us": 1920.0,
-          "p99_us": 2090.0
+          "rps": 635209.0,
+          "avg_lat_us": 1580.0,
+          "p50_us": 1520.0,
+          "p95_us": 1840.0,
+          "p99_us": 2410.0
         }
       ],
-      "avg_rps": 568478.0,
-      "avg_lat_us": 1760.0,
-      "avg_p50_us": 1703.3333333333333,
-      "avg_p99_us": 2343.3333333333335,
-      "avg_total": 5684780.0
+      "avg_rps": 640796.0,
+      "avg_lat_us": 1563.3333333333333,
+      "avg_p50_us": 1513.3333333333333,
+      "avg_p99_us": 2260.0,
+      "avg_total": 6407960.0
     },
     "drogon": {
       "framework": "drogon",
@@ -297,44 +297,44 @@
       "endpoint": "user_post",
       "runs": [
         {
-          "total_requests": 16245780,
-          "succeeded": 16245780,
+          "total_requests": 16721620,
+          "succeeded": 16721620,
           "failed": 0,
           "errored": 0,
-          "rps": 1624578.0,
-          "avg_lat_us": 560.0,
-          "p50_us": 548.0,
-          "p95_us": 697.0,
-          "p99_us": 881.0
+          "rps": 1672162.0,
+          "avg_lat_us": 550.0,
+          "p50_us": 544.0,
+          "p95_us": 678.0,
+          "p99_us": 765.0
         },
         {
-          "total_requests": 16405950,
-          "succeeded": 16405950,
+          "total_requests": 16189530,
+          "succeeded": 16189530,
           "failed": 0,
           "errored": 0,
-          "rps": 1640595.0,
-          "avg_lat_us": 566.0,
-          "p50_us": 551.0,
-          "p95_us": 749.0,
-          "p99_us": 936.0
+          "rps": 1618953.0,
+          "avg_lat_us": 575.0,
+          "p50_us": 569.0,
+          "p95_us": 682.0,
+          "p99_us": 788.0
         },
         {
-          "total_requests": 16433600,
-          "succeeded": 16433600,
+          "total_requests": 16405460,
+          "succeeded": 16405460,
           "failed": 0,
           "errored": 0,
-          "rps": 1643360.0,
-          "avg_lat_us": 562.0,
-          "p50_us": 556.0,
-          "p95_us": 679.0,
-          "p99_us": 774.0
+          "rps": 1640546.0,
+          "avg_lat_us": 570.0,
+          "p50_us": 566.0,
+          "p95_us": 664.0,
+          "p99_us": 735.0
         }
       ],
-      "avg_rps": 1636177.6666666667,
-      "avg_lat_us": 562.6666666666666,
-      "avg_p50_us": 551.6666666666666,
-      "avg_p99_us": 863.6666666666666,
-      "avg_total": 16361776.666666666
+      "avg_rps": 1643887.0,
+      "avg_lat_us": 565.0,
+      "avg_p50_us": 559.6666666666666,
+      "avg_p99_us": 762.6666666666666,
+      "avg_total": 16438870.0
     },
     "swerver": {
       "framework": "swerver",
@@ -385,44 +385,44 @@
       "endpoint": "user_post",
       "runs": [
         {
-          "total_requests": 5580510,
-          "succeeded": 5580510,
+          "total_requests": 6196160,
+          "succeeded": 6196160,
           "failed": 0,
           "errored": 0,
-          "rps": 558051.0,
-          "avg_lat_us": 1790.0,
-          "p50_us": 1750.0,
-          "p95_us": 1940.0,
-          "p99_us": 2170.0
+          "rps": 619616.0,
+          "avg_lat_us": 1610.0,
+          "p50_us": 1580.0,
+          "p95_us": 1780.0,
+          "p99_us": 2070.0
         },
         {
-          "total_requests": 5505620,
-          "succeeded": 5505620,
+          "total_requests": 6167550,
+          "succeeded": 6167550,
           "failed": 0,
           "errored": 0,
-          "rps": 550562.0,
-          "avg_lat_us": 1820.0,
-          "p50_us": 1770.0,
-          "p95_us": 2020.0,
-          "p99_us": 2150.0
+          "rps": 616755.0,
+          "avg_lat_us": 1630.0,
+          "p50_us": 1580.0,
+          "p95_us": 1780.0,
+          "p99_us": 1900.0
         },
         {
-          "total_requests": 5434260,
-          "succeeded": 5434260,
+          "total_requests": 6121070,
+          "succeeded": 6121070,
           "failed": 0,
           "errored": 0,
-          "rps": 543426.0,
-          "avg_lat_us": 1850.0,
-          "p50_us": 1770.0,
-          "p95_us": 2080.0,
-          "p99_us": 3030.0
+          "rps": 612107.0,
+          "avg_lat_us": 1630.0,
+          "p50_us": 1600.0,
+          "p95_us": 1810.0,
+          "p99_us": 1950.0
         }
       ],
-      "avg_rps": 550679.6666666666,
-      "avg_lat_us": 1820.0,
-      "avg_p50_us": 1763.3333333333333,
-      "avg_p99_us": 2450.0,
-      "avg_total": 5506796.666666667
+      "avg_rps": 616159.3333333334,
+      "avg_lat_us": 1623.3333333333333,
+      "avg_p50_us": 1586.6666666666667,
+      "avg_p99_us": 1973.3333333333333,
+      "avg_total": 6161593.333333333
     },
     "drogon": {
       "framework": "drogon",

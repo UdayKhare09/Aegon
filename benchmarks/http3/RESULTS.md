@@ -88,37 +88,7 @@ To eliminate CPU cache thrashing, context switching jitter, and client-server co
 
 ---
 
-## 4. Run-by-Run Detailed Triplicate Breakdown
-
-### Aegon (C++26)
-| Workload | Run # | Throughput (req/s) | Mean Latency | p50 Latency | p99 Latency | Total Requests |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Plaintext** | Run 1 | 330,122.30 | 3.03 ms | 2.67 ms | 5.45 ms | 3,301,223 |
-| | Run 2 | 341,262.40 | 2.95 ms | 2.71 ms | 5.12 ms | 3,412,624 |
-| | Run 3 | 337,937.50 | 2.97 ms | 2.61 ms | 4.88 ms | 3,379,375 |
-| **JSON** | Run 1 | 327,705.80 | 3.06 ms | 2.72 ms | 5.85 ms | 3,277,058 |
-| | Run 2 | 336,284.60 | 2.98 ms | 2.72 ms | 5.31 ms | 3,362,846 |
-| | Run 3 | 330,833.70 | 3.01 ms | 2.65 ms | 5.08 ms | 3,308,337 |
-| **User Post** | Run 1 | 328,177.30 | 3.06 ms | 2.82 ms | 5.23 ms | 3,281,773 |
-| | Run 2 | 334,699.10 | 2.99 ms | 2.68 ms | 5.21 ms | 3,346,991 |
-| | Run 3 | 317,171.50 | 3.25 ms | 2.83 ms | 7.73 ms | 3,171,715 |
-
-### Swerver (Zig)
-| Workload | Run # | Throughput (req/s) | Mean Latency | p50 Latency | p99 Latency | Total Requests |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Plaintext** | Run 1 | 108,680.70 | 9.20 ms | 7.40 ms | 27.37 ms | 1,086,807 |
-| | Run 2 | 109,883.70 | 9.09 ms | 7.25 ms | 31.62 ms | 1,098,837 |
-| | Run 3 | 110,147.40 | 9.06 ms | 7.28 ms | 22.40 ms | 1,101,474 |
-| **JSON** | Run 1 | 109,000.60 | 9.16 ms | 7.38 ms | 23.26 ms | 1,090,006 |
-| | Run 2 | 109,284.20 | 9.15 ms | 7.35 ms | 23.33 ms | 1,092,842 |
-| | Run 3 | 109,742.70 | 9.10 ms | 7.27 ms | 28.19 ms | 1,097,427 |
-| **User Post** | Run 1 | 108,039.80 | 9.25 ms | 7.42 ms | 23.11 ms | 1,080,398 |
-| | Run 2 | 109,022.00 | 9.16 ms | 7.32 ms | 28.10 ms | 1,090,220 |
-| | Run 3 | 107,352.00 | 9.29 ms | 7.44 ms | 26.21 ms | 1,073,520 |
-
----
-
-## 5. Architectural Deep Dive: Why Aegon Leads HTTP/3 Performance
+## 4. Architectural Deep Dive: Why Aegon Leads HTTP/3 Performance
 
 1. **Zero-Copy UDP Batching via Linux `sendmmsg`/`recvmmsg` and `io_uring`**:
    - HTTP/3 transports all data via UDP datagrams. Under 1,000 active streams, issuing single `sendto` / `recvfrom` syscalls per datagram introduces massive kernel context switch overhead.

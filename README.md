@@ -39,12 +39,12 @@
 
 Aegon is engineered for extreme throughput and deterministic sub-millisecond tail latencies. All benchmarks follow strict scientific methodology (physical CPU core pinning, 3s warm-up + 3 runs × 10s triplicate averages, un-cherry-picked):
 
-| Protocol Suite | Aegon (C++26) | Swerver (Zig) | Actix-web (Rust) | Drogon (C++) | Fiber (Go) |
+| Protocol Suite | Aegon (C++26) | Swerver (Zig) | Actix-web (Rust, `rustls`) | Fiber (Go) | Drogon (C++) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **HTTP/1.1 Plaintext** | **547,144 req/s** | 468,443 req/s | 400,242 req/s | 388,416 req/s | 352,504 req/s |
-| **HTTP/1.1 TLS (HTTPS)** | **407,247 req/s** | 391,373 req/s | 338,810 req/s | 323,371 req/s | 308,016 req/s |
-| **HTTP/2 (Multiplexing)** | **1,733,501 req/s** | 460,517 req/s | 619,958 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
-| **HTTP/3 (QUIC / UDP)** | **336,440 req/s** | 109,570 req/s | *UNSUPPORTED* | *UNSUPPORTED* | *UNSUPPORTED* |
+| **HTTP/1.1 Plaintext** | **547,145 req/s** | 468,613 req/s | 400,128 req/s | 352,123 req/s | 388,383 req/s |
+| **HTTP/1.1 TLS (HTTPS)** | **423,902 req/s** | 382,901 req/s | 349,875 req/s | 327,720 req/s | 319,511 req/s |
+| **HTTP/2 (Multiplexing)** | **1,778,204 req/s** | 460,518 req/s | 693,127 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
+| **HTTP/3 (QUIC / UDP)** | **336,441 req/s** | 109,571 req/s | *UNSUPPORTED* | *UNSUPPORTED* | *UNSUPPORTED* |
 
 > 📖 **Full Scientific Reports**: See detailed breakdowns, latency percentiles, and reproduction instructions in the [Benchmark Documentation](docs/guide/benchmarks.md) and [`benchmarks/`](benchmarks/) suite directories.
 

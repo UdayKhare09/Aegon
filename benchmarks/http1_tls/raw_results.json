@@ -5,35 +5,35 @@
       "endpoint": "plaintext",
       "runs": [
         {
-          "total_requests": 4110605,
+          "total_requests": 4207524,
           "duration_s": 10.0,
-          "rps": 410913.27,
-          "avg_lat_us": 259.25,
-          "p50_us": 220.0,
-          "p99_us": 1710.0
+          "rps": 420570.88,
+          "avg_lat_us": 246.73,
+          "p50_us": 223.0,
+          "p99_us": 1020.0
         },
         {
-          "total_requests": 4186634,
-          "duration_s": 10.0,
-          "rps": 418560.52,
-          "avg_lat_us": 252.84,
-          "p50_us": 220.0,
-          "p99_us": 1520.0
-        },
-        {
-          "total_requests": 4250469,
+          "total_requests": 4271339,
           "duration_s": 10.1,
-          "rps": 420828.85,
-          "avg_lat_us": 245.67,
-          "p50_us": 219.0,
-          "p99_us": 1100.0
+          "rps": 422917.37,
+          "avg_lat_us": 234.41,
+          "p50_us": 223.0,
+          "p99_us": 431.0
+        },
+        {
+          "total_requests": 4282940,
+          "duration_s": 10.0,
+          "rps": 428218.03,
+          "avg_lat_us": 232.09,
+          "p50_us": 220.0,
+          "p99_us": 364.0
         }
       ],
-      "avg_rps": 416767.5466666667,
-      "avg_lat_us": 252.58666666666667,
-      "avg_p50_us": 219.66666666666666,
-      "avg_p99_us": 1443.3333333333333,
-      "avg_total": 4182569.3333333335
+      "avg_rps": 423902.0933333333,
+      "avg_lat_us": 237.74333333333334,
+      "avg_p50_us": 222.0,
+      "avg_p99_us": 605.0,
+      "avg_total": 4253934.333333333
     },
     "swerver": {
       "framework": "swerver",
@@ -75,35 +75,35 @@
       "endpoint": "plaintext",
       "runs": [
         {
-          "total_requests": 2760092,
-          "duration_s": 10.1,
-          "rps": 273276.22,
-          "avg_lat_us": 365.73,
-          "p50_us": 352.0,
-          "p99_us": 509.0
-        },
-        {
-          "total_requests": 2757314,
+          "total_requests": 3487109,
           "duration_s": 10.0,
-          "rps": 275721.31,
-          "avg_lat_us": 360.19,
-          "p50_us": 352.0,
-          "p99_us": 480.0
+          "rps": 348632.91,
+          "avg_lat_us": 396.05,
+          "p50_us": 268.0,
+          "p99_us": 3170.0
         },
         {
-          "total_requests": 2757265,
-          "duration_s": 10.1,
-          "rps": 273003.89,
-          "avg_lat_us": 362.19,
-          "p50_us": 352.0,
-          "p99_us": 512.0
+          "total_requests": 3489095,
+          "duration_s": 10.01,
+          "rps": 348709.41,
+          "avg_lat_us": 407.56,
+          "p50_us": 268.0,
+          "p99_us": 2890.0
+        },
+        {
+          "total_requests": 3523712,
+          "duration_s": 10.0,
+          "rps": 352283.2,
+          "avg_lat_us": 352.11,
+          "p50_us": 268.0,
+          "p99_us": 2190.0
         }
       ],
-      "avg_rps": 274000.4733333333,
-      "avg_lat_us": 362.7033333333334,
-      "avg_p50_us": 352.0,
-      "avg_p99_us": 500.3333333333333,
-      "avg_total": 2758223.6666666665
+      "avg_rps": 349875.17333333334,
+      "avg_lat_us": 385.24,
+      "avg_p50_us": 268.0,
+      "avg_p99_us": 2750.0,
+      "avg_total": 3499972.0
     },
     "drogon": {
       "framework": "drogon",
@@ -182,35 +182,35 @@
       "endpoint": "json",
       "runs": [
         {
-          "total_requests": 4076870,
+          "total_requests": 4229793,
           "duration_s": 10.0,
-          "rps": 407620.27,
-          "avg_lat_us": 252.42,
-          "p50_us": 224.0,
-          "p99_us": 1150.0
-        },
-        {
-          "total_requests": 4150078,
-          "duration_s": 10.0,
-          "rps": 414908.64,
-          "avg_lat_us": 250.82,
-          "p50_us": 227.0,
-          "p99_us": 1290.0
-        },
-        {
-          "total_requests": 4193756,
-          "duration_s": 10.1,
-          "rps": 415224.15,
-          "avg_lat_us": 251.44,
+          "rps": 422861.91,
+          "avg_lat_us": 237.72,
           "p50_us": 223.0,
-          "p99_us": 1230.0
+          "p99_us": 379.0
+        },
+        {
+          "total_requests": 4186731,
+          "duration_s": 10.1,
+          "rps": 414522.73,
+          "avg_lat_us": 254.55,
+          "p50_us": 225.0,
+          "p99_us": 1400.0
+        },
+        {
+          "total_requests": 4167187,
+          "duration_s": 10.0,
+          "rps": 416696.78,
+          "avg_lat_us": 246.41,
+          "p50_us": 225.0,
+          "p99_us": 822.0
         }
       ],
-      "avg_rps": 412584.35333333333,
-      "avg_lat_us": 251.55999999999997,
-      "avg_p50_us": 224.66666666666666,
-      "avg_p99_us": 1223.3333333333333,
-      "avg_total": 4140234.6666666665
+      "avg_rps": 418027.13999999996,
+      "avg_lat_us": 246.2266666666667,
+      "avg_p50_us": 224.33333333333334,
+      "avg_p99_us": 867.0,
+      "avg_total": 4194570.333333333
     },
     "swerver": {
       "framework": "swerver",
@@ -252,35 +252,35 @@
       "endpoint": "json",
       "runs": [
         {
-          "total_requests": 2723605,
-          "duration_s": 10.1,
-          "rps": 269659.7,
-          "avg_lat_us": 368.23,
-          "p50_us": 361.0,
-          "p99_us": 483.0
+          "total_requests": 3351400,
+          "duration_s": 10.0,
+          "rps": 335101.87,
+          "avg_lat_us": 385.24,
+          "p50_us": 282.0,
+          "p99_us": 2820.0
         },
         {
-          "total_requests": 2652803,
+          "total_requests": 3351568,
           "duration_s": 10.0,
-          "rps": 265263.85,
-          "avg_lat_us": 379.46,
-          "p50_us": 361.0,
-          "p99_us": 565.0
+          "rps": 335137.7,
+          "avg_lat_us": 374.15,
+          "p50_us": 281.0,
+          "p99_us": 2750.0
         },
         {
-          "total_requests": 2694919,
+          "total_requests": 3387756,
           "duration_s": 10.0,
-          "rps": 269478.1,
-          "avg_lat_us": 369.01,
-          "p50_us": 360.0,
-          "p99_us": 494.0
+          "rps": 338611.2,
+          "avg_lat_us": 376.94,
+          "p50_us": 280.0,
+          "p99_us": 2500.0
         }
       ],
-      "avg_rps": 268133.8833333333,
-      "avg_lat_us": 372.23333333333335,
-      "avg_p50_us": 360.6666666666667,
-      "avg_p99_us": 514.0,
-      "avg_total": 2690442.3333333335
+      "avg_rps": 336283.59,
+      "avg_lat_us": 378.77666666666664,
+      "avg_p50_us": 281.0,
+      "avg_p99_us": 2690.0,
+      "avg_total": 3363574.6666666665
     },
     "drogon": {
       "framework": "drogon",
@@ -359,35 +359,35 @@
       "endpoint": "user_post",
       "runs": [
         {
-          "total_requests": 4060608,
+          "total_requests": 4213732,
           "duration_s": 10.1,
-          "rps": 402038.25,
-          "avg_lat_us": 259.99,
-          "p50_us": 228.0,
-          "p99_us": 1490.0
+          "rps": 417199.95,
+          "avg_lat_us": 235.99,
+          "p50_us": 225.0,
+          "p99_us": 358.0
         },
         {
-          "total_requests": 4037303,
-          "duration_s": 10.0,
-          "rps": 403634.28,
-          "avg_lat_us": 261.6,
-          "p50_us": 240.0,
-          "p99_us": 1560.0
+          "total_requests": 4158297,
+          "duration_s": 10.1,
+          "rps": 411735.57,
+          "avg_lat_us": 252.98,
+          "p50_us": 226.0,
+          "p99_us": 1330.0
         },
         {
-          "total_requests": 4053951,
-          "duration_s": 10.0,
-          "rps": 405382.82,
-          "avg_lat_us": 258.95,
-          "p50_us": 230.0,
-          "p99_us": 1430.0
+          "total_requests": 4160635,
+          "duration_s": 10.1,
+          "rps": 411962.62,
+          "avg_lat_us": 244.38,
+          "p50_us": 227.0,
+          "p99_us": 651.0
         }
       ],
-      "avg_rps": 403685.1166666667,
-      "avg_lat_us": 260.18,
-      "avg_p50_us": 232.66666666666666,
-      "avg_p99_us": 1493.3333333333333,
-      "avg_total": 4050620.6666666665
+      "avg_rps": 413632.7133333334,
+      "avg_lat_us": 244.45000000000002,
+      "avg_p50_us": 226.0,
+      "avg_p99_us": 779.6666666666666,
+      "avg_total": 4177554.6666666665
     },
     "swerver": {
       "framework": "swerver",
@@ -429,35 +429,35 @@
       "endpoint": "user_post",
       "runs": [
         {
-          "total_requests": 2599426,
-          "duration_s": 10.0,
-          "rps": 259879.53,
-          "avg_lat_us": 386.44,
-          "p50_us": 371.0,
-          "p99_us": 545.0
+          "total_requests": 3316819,
+          "duration_s": 10.01,
+          "rps": 331444.69,
+          "avg_lat_us": 408.64,
+          "p50_us": 287.0,
+          "p99_us": 2600.0
         },
         {
-          "total_requests": 2642462,
-          "duration_s": 10.0,
-          "rps": 264233.62,
-          "avg_lat_us": 376.31,
-          "p50_us": 370.0,
-          "p99_us": 478.0
-        },
-        {
-          "total_requests": 2643024,
+          "total_requests": 3309559,
           "duration_s": 10.1,
-          "rps": 261690.8,
-          "avg_lat_us": 378.5,
-          "p50_us": 371.0,
-          "p99_us": 501.0
+          "rps": 327684.92,
+          "avg_lat_us": 394.98,
+          "p50_us": 287.0,
+          "p99_us": 2820.0
+        },
+        {
+          "total_requests": 3324386,
+          "duration_s": 10.0,
+          "rps": 332310.29,
+          "avg_lat_us": 354.95,
+          "p50_us": 286.0,
+          "p99_us": 2330.0
         }
       ],
-      "avg_rps": 261934.65,
-      "avg_lat_us": 380.4166666666667,
-      "avg_p50_us": 370.6666666666667,
-      "avg_p99_us": 508.0,
-      "avg_total": 2628304.0
+      "avg_rps": 330479.9666666666,
+      "avg_lat_us": 386.19,
+      "avg_p50_us": 286.6666666666667,
+      "avg_p99_us": 2583.3333333333335,
+      "avg_total": 3316921.3333333335
     },
     "drogon": {
       "framework": "drogon",

@@ -27,28 +27,28 @@ Tool: `wrk` (4 threads, 100 persistent connections, pipeline depth 1)
 | Rank | Framework | Language & Architecture | 3-Run Avg Req/s | Mean Latency | p50 Latency | p99 Latency | Error Rate |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
 | 🥇 | **Aegon** | **C++26 (`io_uring` multishot)** | **547,144.84** | **214.09 µs** | **169.33 µs** | **468.67 µs** | **0.00%** |
-| 🥈 | **Swerver** | Zig (`io_uring_native`) | **468,443.08** | 250.77 µs | 186.67 µs | 647.67 µs | 0.00% |
-| 🥉 | **Actix-web** | Rust (`tokio` / `epoll`) | **400,242.06** | 260.67 µs | 180.33 µs | 741.33 µs | 0.00% |
-| 4 | **Drogon** | C++17 (Trantor `epoll`) | **388,416.48** | 267.08 µs | 196.67 µs | 703.67 µs | 0.00% |
-| 5 | **Fiber** | Go (`fasthttp` prefork) | **352,504.60** | 283.67 µs | 197.67 µs | 1,023.33 µs | 0.00% |
+| 🥈 | **Swerver** | Zig (`io_uring_native`) | **468,612.69** | 209.88 µs | 198.33 µs | 416.33 µs | 0.00% |
+| 🥉 | **Actix-web** | Rust (`tokio` / `epoll`) | **400,128.26** | 271.05 µs | 239.00 µs | 559.00 µs | 0.00% |
+| 4 | **Drogon** | C++17 (Trantor `epoll`) | **388,383.14** | 255.72 µs | 248.67 µs | 531.00 µs | 0.00% |
+| 5 | **Fiber** | Go (`fasthttp` prefork) | **352,123.01** | 286.28 µs | 284.67 µs | 621.00 µs | 0.00% |
 
 ### `/json` (Dynamic UUIDv4 + Timestamp Payload)
 | Rank | Framework | JSON Engine | 3-Run Avg Req/s | Mean Latency | p50 Latency | p99 Latency | Error Rate |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| 🥇 | **Aegon** | **Glaze (Compile-time reflection)** | **540,683.74** | **216.59 µs** | **172.00 µs** | **470.67 µs** | **0.00%** |
-| 🥈 | **Swerver** | `std.json` streaming | **463,770.83** | 253.25 µs | 190.67 µs | 648.33 µs | 0.00% |
-| 🥉 | **Actix-web** | `serde_json` + `mimalloc` | **396,552.12** | 262.99 µs | 184.00 µs | 747.00 µs | 0.00% |
-| 4 | **Drogon** | `jsoncpp` DOM | **378,574.62** | 273.98 µs | 205.33 µs | 722.33 µs | 0.00% |
-| 5 | **Fiber** | `encoding/json` | **346,676.10** | 288.42 µs | 203.00 µs | 1,046.67 µs | 0.00% |
+| 🥇 | **Aegon** | **Glaze (Compile-time reflection)** | **543,849.26** | **206.22 µs** | **172.00 µs** | **1,606.67 µs** | **0.00%** |
+| 🥈 | **Swerver** | `std.json` streaming | **465,714.91** | 213.45 µs | 204.00 µs | 444.33 µs | 0.00% |
+| 🥉 | **Actix-web** | `serde_json` + `mimalloc` | **393,235.00** | 265.14 µs | 248.00 µs | 1,133.33 µs | 0.00% |
+| 4 | **Fiber** | `fastjson` | **320,411.14** | 312.83 µs | 314.00 µs | 664.00 µs | 0.00% |
+| 5 | **Drogon** | `jsoncpp` DOM | **222,119.66** | 448.21 µs | 450.00 µs | 916.67 µs | 0.00% |
 
 ### Dynamic Route `/users/42/posts/101` (Path Parameter Extraction)
 | Rank | Framework | Router Architecture | 3-Run Avg Req/s | Mean Latency | p50 Latency | p99 Latency | Error Rate |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| 🥇 | **Aegon** | **Zero-alloc Radix + `from_chars`** | **536,260.67** | **218.42 µs** | **173.67 µs** | **476.33 µs** | **0.00%** |
-| 🥈 | **Swerver** | Swerver Router | **460,948.72** | 254.79 µs | 193.33 µs | 652.00 µs | 0.00% |
-| 🥉 | **Actix-web** | Actix Path extractor | **392,492.20** | 265.73 µs | 187.33 µs | 751.67 µs | 0.00% |
-| 4 | **Drogon** | Drogon Dynamic Router | **374,213.90** | 277.17 µs | 208.67 µs | 729.00 µs | 0.00% |
-| 5 | **Fiber** | `fasthttp` Tree Router | **341,894.40** | 292.48 µs | 207.67 µs | 1,060.00 µs | 0.00% |
+| 🥇 | **Aegon** | **Zero-alloc Radix + `from_chars`** | **544,465.49** | **200.22 µs** | **173.33 µs** | **1,340.67 µs** | **0.00%** |
+| 🥈 | **Swerver** | Swerver Router | **460,992.37** | 214.42 µs | 202.00 µs | 421.33 µs | 0.00% |
+| 🥉 | **Actix-web** | Actix Path extractor | **381,962.28** | 265.66 µs | 255.67 µs | 452.33 µs | 0.00% |
+| 4 | **Fiber** | `fasthttp` Tree Router | **334,278.93** | 298.32 µs | 298.67 µs | 612.67 µs | 0.00% |
+| 5 | **Drogon** | Drogon Dynamic Router | **296,297.79** | 335.46 µs | 326.67 µs | 674.33 µs | 0.00% |
 
 ---
 
@@ -56,11 +56,11 @@ Tool: `wrk` (4 threads, 100 persistent connections, pipeline depth 1)
 
 Tool: `wrk` with TLS 1.3 (`ECDSA prime256v1`, 4 threads, 100 persistent HTTPS connections)
 
-| Workload | Aegon (C++26) | Swerver (Zig) | Actix-web (Rust) | Drogon (C++) | Fiber (Go) |
+| Workload | Aegon (C++26) | Swerver (Zig) | Actix-web (Rust, `rustls`) | Fiber (Go) | Drogon (C++) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **`/plaintext`** | **407,247.38 req/s** | 391,373.18 req/s | 338,810.45 req/s | 323,371.12 req/s | 308,016.74 req/s |
-| **`/json`** | **403,912.60 req/s** | 388,410.50 req/s | 334,620.10 req/s | 319,842.30 req/s | 304,180.20 req/s |
-| **`/users/42/posts/101`** | **401,180.25 req/s** | 385,290.40 req/s | 331,450.80 req/s | 316,500.10 req/s | 301,230.50 req/s |
+| **`/plaintext`** | **423,902.09 req/s** | 382,901.10 req/s | 349,875.17 req/s | 327,720.40 req/s | 319,510.95 req/s |
+| **`/json`** | **418,027.14 req/s** | 386,190.38 req/s | 336,283.59 req/s | 296,697.13 req/s | 194,054.45 req/s |
+| **`/users/42/posts/101`** | **413,632.71 req/s** | 375,552.83 req/s | 330,479.97 req/s | 307,973.21 req/s | 252,762.95 req/s |
 
 ---
 
@@ -68,11 +68,11 @@ Tool: `wrk` with TLS 1.3 (`ECDSA prime256v1`, 4 threads, 100 persistent HTTPS co
 
 Tool: `h2load` (100 connections × 10 streams = **1,000 active concurrent multiplexed streams**, HPACK enabled)
 
-| Workload | Aegon (C++26) | Swerver (Zig) | Actix-web (Rust) | Drogon (C++) | Fiber (Go) |
+| Workload | Aegon (C++26) | Actix-web (Rust, `rustls`) | Swerver (Zig) | Drogon (C++) | Fiber (Go) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **`/plaintext`** | **1,733,501.00 req/s** | 460,517.57 req/s | 619,958.00 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
-| **`/json`** | **1,655,920.33 req/s** | 467,039.00 req/s | 568,478.00 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
-| **`/users/42/posts/101`** | **1,636,177.67 req/s** | 460,464.87 req/s | 550,679.67 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
+| **`/plaintext`** | **1,778,203.67 req/s** | 693,127.00 req/s | 460,517.57 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
+| **`/json`** | **1,678,171.33 req/s** | 640,796.00 req/s | 467,039.00 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
+| **`/users/42/posts/101`** | **1,643,887.00 req/s** | 616,159.33 req/s | 460,464.87 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
 
 *Note: Drogon (Trantor) and Fiber (`fasthttp`) do not implement RFC 7540 binary framing; ALPN falls back to HTTP/1.1.*
 

@@ -62,12 +62,26 @@ async fn main() -> std::io::Result<()> {
     let workers: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(4);
     let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(18081);
 
-    let mut builder = openssl::ssl::SslAcceptor::mozilla_intermediate(openssl::ssl::SslMethod::tls())
-        .expect("Failed to create SSL acceptor");
-    builder.set_private_key_file("benchmarks/http1_tls/certs/server.key", openssl::ssl::SslFiletype::PEM)
-        .expect("Failed to set private key");
-    builder.set_certificate_chain_file("benchmarks/http1_tls/certs/server.crt")
-        .expect("Failed to set certificate chain");
+    let cert_file = &mut std::io::BufReader::new(
+        std::fs::File::open("benchmarks/http1_tls/certs/server.crt")
+            .expect("Failed to open cert file")
+    );
+    let cert_chain = rustls_pemfile::certs(cert_file)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("Failed to parse cert chain");
+
+    let key_file = &mut std::io::BufReader::new(
+        std::fs::File::open("benchmarks/http1_tls/certs/server.key")
+            .expect("Failed to open key file")
+    );
+    let key = rustls_pemfile::private_key(key_file)
+        .expect("Failed to read private key")
+        .expect("No private key found in key file");
+
+    let tls_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(cert_chain, key)
+        .expect("Failed to create TLS config");
 
     println!("Actix-web TLS listening on https://0.0.0.0:{} with {} workers", port, workers);
 
@@ -78,7 +92,7 @@ async fn main() -> std::io::Result<()> {
             .service(user_post)
     })
     .workers(workers)
-    .bind_openssl(("0.0.0.0", port), builder)?
+    .bind_rustls_0_23(("0.0.0.0", port), tls_config)?
     .run()
     .await
 }
