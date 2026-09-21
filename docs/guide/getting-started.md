@@ -20,7 +20,7 @@ Because Aegon directly drives modern Linux kernel interfaces and modern C++ stan
 ### Installing Dependencies (Arch Linux)
 
 ```bash
-sudo pacman -Syu base-devel cmake ninja liburing openssl glaze postgresql-libs sqlite
+sudo pacman -Syu base-devel cmake ninja liburing openssl glaze postgresql-libs sqlite nghttp2 ngtcp2 nghttp3
 ```
 
 ### Installing Aegon
@@ -109,6 +109,7 @@ Aegon exports strictly modular targets:
 | `Aegon::http` | High-performance HTTP/1.1, HTTP/2, and HTTP/3 QUIC server, radix router, and middleware. |
 | `Aegon::orm` | Unified SQL ORM, query builder, transactions, schema migrations, SQLite3, and PostgreSQL drivers. |
 | `Aegon::redis` | Native async Redis client (RESP3, Sentinel, Cluster, per-core pools, distributed locks, streams). |
+| `Aegon::memory` | Async in-process MemStore — Redis alternative running on its own thread with LRU eviction and TTL sweep. |
 | `Aegon::config` | Layered YAML 1.2 and `.env` configuration builder with `${VAR:default}` expansion. |
 | `Aegon::gateway` | High-performance reverse proxy, dynamic routing, and cluster circuit breakers. |
 

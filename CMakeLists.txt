@@ -104,6 +104,22 @@ target_link_libraries(aegon_redis PUBLIC
     crypto
 )
 
+# Async in-process MemStore (alternative to Redis for single-node deployments)
+add_library(aegon_memory
+    src/data/memory/MemStore.cpp
+)
+
+target_include_directories(aegon_memory PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/aegon>
+)
+
+target_link_libraries(aegon_memory PUBLIC
+    aegon_core
+    uring
+)
+
 # Find database drivers for unified ORM
 find_package(PostgreSQL QUIET)
 
@@ -182,6 +198,7 @@ target_link_libraries(aegon_gateway PUBLIC
 set_target_properties(aegon_core PROPERTIES EXPORT_NAME core)
 set_target_properties(aegon_config PROPERTIES EXPORT_NAME config)
 set_target_properties(aegon_redis PROPERTIES EXPORT_NAME redis)
+set_target_properties(aegon_memory PROPERTIES EXPORT_NAME memory)
 set_target_properties(aegon_orm PROPERTIES EXPORT_NAME orm)
 set_target_properties(aegon_http PROPERTIES EXPORT_NAME http)
 set_target_properties(aegon_gateway PROPERTIES EXPORT_NAME gateway)
@@ -189,6 +206,7 @@ set_target_properties(aegon_gateway PROPERTIES EXPORT_NAME gateway)
 add_library(Aegon::core ALIAS aegon_core)
 add_library(Aegon::config ALIAS aegon_config)
 add_library(Aegon::redis ALIAS aegon_redis)
+add_library(Aegon::memory ALIAS aegon_memory)
 add_library(Aegon::orm ALIAS aegon_orm)
 add_library(Aegon::http ALIAS aegon_http)
 add_library(Aegon::gateway ALIAS aegon_gateway)
@@ -197,7 +215,7 @@ add_library(Aegon::gateway ALIAS aegon_gateway)
 # Installation & Package Configuration (cmake --install & find_package(Aegon))
 # ==============================================================================
 install(
-    TARGETS aegon_core aegon_config aegon_redis aegon_orm aegon_http aegon_gateway
+    TARGETS aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http aegon_gateway
     EXPORT AegonTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -375,6 +393,11 @@ add_executable(test_orm_cache
 )
 target_link_libraries(test_orm_cache PRIVATE aegon_orm aegon_http)
 
+add_executable(test_memstore
+    tests/test_memstore.cpp
+)
+target_link_libraries(test_memstore PRIVATE aegon_memory aegon_core)
+
 add_executable(test_live_redis_topologies
     tests/test_live_redis_topologies.cpp
 )
@@ -492,6 +515,7 @@ add_test(NAME sql_advanced_queries COMMAND test_sql_advanced_queries)
 add_test(NAME sql_drivers COMMAND test_sql_drivers)
 add_test(NAME server_sql_config COMMAND test_server_sql_config)
 add_test(NAME orm_cache COMMAND test_orm_cache)
+add_test(NAME memstore COMMAND test_memstore)
 add_test(NAME live_postgres COMMAND test_live_postgres)
 add_test(NAME live_redis_topologies COMMAND test_live_redis_topologies)
 add_test(NAME live_postgres_orm_cache COMMAND test_live_postgres_orm_cache)

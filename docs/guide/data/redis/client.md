@@ -169,7 +169,7 @@ RespValue result = co_await redis.eval_script(lua, {"lock:order:42"}, {"token_ab
 
 ## RESP2 & RESP3 Data Model (`RespValue`)
 
-Header file: `<aegon/data/redis/Resp3.hpp>`
+Header file: `<aegon/data/redis/Resp3.h>`
 
 When executing pipelines, transactions, Lua scripts, or raw commands via `redis.execute(...)`, responses are returned as `RespValue` instances. `RespValue` provides zero-allocation inspection and type conversions conforming to Redis RESP2 and RESP3 specifications:
 

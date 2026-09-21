@@ -56,16 +56,16 @@ Aegon uses **Deferred Transactional Cache Synchronization**:
                                  │
                  ┌───────────────┴───────────────┐
              Success                           Failure
-                 │                                 │
-                 ▼                                 ▼
-            [ COMMIT ]                        [ ROLLBACK ]
-                 │                                 │
-     Flush queued cache ops:              Discard queued ops!
-     • Delete Redis keys                  • Redis is NOT touched
-     • Bump Redis epochs                  • Cache remains pure
+                  │                                 │
+                  ▼                                 ▼
+             [ COMMIT ]                        [ ROLLBACK ]
+                  │                                 │
+      Flush queued cache ops:              Discard queued ops!
+      • Delete cache keys                  • Cache backend is NOT touched
+      • Bump cache epochs                  • Cache remains pure
 ```
 
-1. **During the Transaction**: Write operations (`insert`, `update_entity`, `delete_by_id`) record their cache invalidations into an in-memory `std::vector<DeferredCacheOp>`. No mutations are sent to Redis or the cache backend yet.
+1. **During the Transaction**: Write operations (`insert`, `update_entity`, `delete_by_id`) record their cache invalidations into an in-memory `std::vector<DeferredCacheOp>`. No mutations are sent to the cache backend yet.
 2. **On Successful `COMMIT`**: `db.flush_deferred_cache()` executes immediately after the SQL commit, applying all deferred invalidations and epoch increments atomically.
 3. **On `ROLLBACK`**: The vector of deferred operations is simply discarded. The cache backend is untouched and remains 100% consistent with the database.
 

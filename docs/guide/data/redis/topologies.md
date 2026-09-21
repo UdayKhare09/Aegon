@@ -183,7 +183,7 @@ int main() {
         std::string token = ctx.req().body();
 
         // Expire session in 3600 seconds
-        co_await redis->set("user:{" + user_id + "}:session", token, 3600);
+        co_await redis->set("user:{" + user_id + "}:session", token, std::chrono::seconds(3600));
 
         ctx.res().status(201).json({{"status", "created"}});
         co_return;

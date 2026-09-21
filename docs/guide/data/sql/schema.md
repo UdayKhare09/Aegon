@@ -145,5 +145,5 @@ static auto schema() {
 
 - **`cache_by_id(ttl)`**: Automatically caches `find_by_id` lookups.
 - **`by_unique(&Entity::field)`**: Maintains a pointer index from unique column to primary key.
-- **`invalidation_mode`**: Controls how cache invalidation behaves during writes (`StrictEpoch`, `Partitioned`, `TtlOnly`).
+- **`invalidation_mode`**: Controls how cache invalidation behaves during writes (`StrictEpoch`, `Partitioned`, `PredicateAware`, `TtlOnly`).
 - **`mutation_sync`**: `EvictOnWrite` (deletes cache key on update) or `UpdateOnWrite` (rewrites cached value).

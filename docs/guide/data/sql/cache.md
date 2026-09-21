@@ -14,18 +14,48 @@ Aegon decouples cache storage from cache semantics via the `CacheBackend` interf
 
 ```cpp
 #include <aegon/data/cache/RedisCacheBackend.h>
-#include <aegon/data/cache/InMemoryCacheBackend.h>
+#include <aegon/data/redis/PerCoreRedisClient.h>
 
-using namespace aegon::data::cache;
+using namespace aegon::data;
 
-// 1. Redis Cache Backend (Cluster / Sentinel / Standalone / PerCore)
-auto redis_cache = std::make_shared<RedisCacheBackend>(per_core_redis->provider(), "cache:");
+// Redis Cache Backend — use PerCoreRedisClient for multi-threaded servers.
+// PerCoreRedisClient pins a separate Redis connection pool to each worker
+// thread's io_uring ring, eliminating all cross-thread contention.
+auto per_core_redis = std::make_shared<redis::PerCoreRedisClient>(
+    redis::RedisNodeConfig{ .host = "127.0.0.1", .port = 6379 }
+);
 
-// 2. In-Memory Local Cache Backend (for single-node / testing)
-auto memory_cache = std::make_shared<InMemoryCacheBackend>();
+auto redis_cache = std::make_shared<cache::RedisCacheBackend>(
+    per_core_redis->provider(), "cache:"
+);
 
 // Attach cache backend to SQL Database Client
 db->set_cache(redis_cache);
+```
+
+> [!TIP]
+> Always prefer `PerCoreRedisClient` over a shared `RedisClient` when running `server.run(N)` with multiple threads. Each worker gets its own pinned connection pool — no mutexes, no cross-ring I/O.
+
+### In-Process MemStore (single-node / no Redis)
+
+For deployments that don't run Redis, Aegon ships `MemStore` — an async in-process KV store that runs on its own dedicated thread. HTTP worker coroutines co_await results via io_uring eventfd reads — zero event-loop blocking.
+
+```cpp
+#include <aegon/data/memory/MemStore.h>
+#include <aegon/data/memory/MemStoreCacheBackend.h>
+
+using namespace aegon::data::memory;
+
+// Create the MemStore — background thread starts automatically in the constructor.
+auto store = std::make_shared<MemStore>(MemStoreConfig{
+    .max_entries     = 500'000,
+    .sweep_interval  = std::chrono::milliseconds(500),
+});
+server.provide<MemStore>(store);
+
+// Wrap as a CacheBackend and attach to the SQL client
+auto mem_cache = std::make_shared<MemStoreCacheBackend>(store);
+db->set_cache(mem_cache);
 ```
 
 ---
@@ -183,7 +213,7 @@ Incoming Cached Query
 1. **Deterministic Fingerprinting**: Aegon normalizes the generated SQL query, serializes parameters, and appends the active version epoch.
 2. **Cache Hit**: Retrieves the comma-separated ID string (e.g. `"1,42,108"`), then issues a single pipelined `MGET` for `users:id:1`, `users:id:42`, and `users:id:108`.
 3. **Automatic Hole Healing**: If an individual entity was evicted while the query pointer remained, Aegon automatically detects the missing key, queries only the missing row from the database, and heals the entity cache.
-4. **Cache Miss**: Executes the query against PostgreSQL / SQLite, records the primary keys into the query pointer key with the configured TTL, and saves the entity JSON representations in Redis via pipelined `MSET`.
+4. **Cache Miss**: Executes the query against PostgreSQL / SQLite, records the primary keys into the query pointer key with the configured TTL, and saves the entity JSON representations via the cache backend.
 
 ---
 
@@ -220,7 +250,7 @@ public:
 };
 ```
 
-Both `RedisCacheBackend` and `InMemoryCacheBackend` implement this interface with full thread-safety and zero-copy string views.
+Both `RedisCacheBackend` and any custom `CacheBackend` implementation satisfy this interface with full thread-safety.
 
 ---
 

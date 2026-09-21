@@ -90,6 +90,12 @@ export default defineConfig({
           ]
         },
         {
+          text: 'Data — MemStore (In-Process Cache)',
+          items: [
+            { text: 'MemStore Guide', link: '/guide/data/memory/memstore' },
+          ]
+        },
+        {
           text: 'Advanced / Internals',
           collapsed: true,
           items: [

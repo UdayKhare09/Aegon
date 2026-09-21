@@ -5,7 +5,7 @@ pkgrel=1
 pkgdesc="High-Performance C++26 Asynchronous Web & Data Framework"
 arch=('x86_64')
 url="https://github.com/UdayKhare09/Aegon"
-license=('Apache-2.0')
+license=('MIT')
 depends=(
     'liburing'
     'glaze'
@@ -26,7 +26,7 @@ build() {
 }
 
 check() {
-    ctest --test-dir build --output-on-failure -R "version|simd_string|foundational_types|dto_validation|simd_router|radix_router|advanced_io|redis_protocol|sql_schema|sql_query_builder|sql_transaction|sql_drivers|orm_cache|orm_advanced|sql_tx_cache_parity|error_handling|middleware|cors|security_headers|cookie|jwt|auth_middleware|rbac_guard|jwks|http_client|service_registry|config|gateway"
+    ctest --test-dir build --output-on-failure -R "version|simd_string|foundational_types|dto_validation|simd_router|radix_router|advanced_io|redis_protocol|sql_schema|sql_query_builder|sql_transaction|sql_drivers|orm_cache|memstore|orm_advanced|sql_tx_cache_parity|error_handling|middleware|cors|security_headers|cookie|jwt|auth_middleware|rbac_guard|jwks|http_client|service_registry|config|gateway"
 }
 
 package() {
