@@ -140,6 +140,8 @@ target_link_libraries(aegon_orm INTERFACE
     pq
 )
 
+find_library(LIBDEFLATE_LIB deflate REQUIRED)
+
 # HTTP Server and Routing library
 add_library(aegon_http
     src/http/RadixTree.cpp
@@ -166,6 +168,7 @@ target_include_directories(aegon_http PUBLIC
 target_link_libraries(aegon_http PUBLIC
     aegon_core
     glaze::glaze
+    ${LIBDEFLATE_LIB}
     nghttp2
     ngtcp2_crypto_ossl
     ngtcp2
@@ -498,6 +501,11 @@ add_executable(test_version
 )
 target_include_directories(test_version PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(test_compress
+    tests/test_compress.cpp
+)
+target_link_libraries(test_compress PRIVATE aegon_http aegon_core ${LIBDEFLATE_LIB})
+
 # Test Registrations for CTest
 add_test(NAME version COMMAND test_version)
 add_test(NAME simd_string COMMAND test_simd_string)
@@ -526,6 +534,7 @@ add_test(NAME error_handling COMMAND test_error_handling)
 add_test(NAME middleware COMMAND test_middleware)
 add_test(NAME cors COMMAND test_cors)
 add_test(NAME security_headers COMMAND test_security_headers)
+add_test(NAME compress COMMAND test_compress)
 add_test(NAME cookie COMMAND test_cookie)
 add_test(NAME jwt COMMAND test_jwt)
 add_test(NAME auth_middleware COMMAND test_auth_middleware)

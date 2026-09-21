@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
         .@"enable-tls" = true,
         .@"enable-http2" = true,
         .@"enable-http3" = false,
+        .@"enable-compression" = true,
     });
 
     const exe_module = b.createModule(.{
@@ -18,6 +19,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    exe_module.linkSystemLibrary("z", .{});
     exe_module.addImport("swerver", swerver_dep.module("swerver"));
 
     const exe = b.addExecutable(.{

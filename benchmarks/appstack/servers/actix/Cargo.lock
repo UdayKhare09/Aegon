@@ -225,8 +225,10 @@ name = "bench_actix_appstack"
 version = "0.1.0"
 dependencies = [
  "actix-web",
+ "flate2",
  "mimalloc",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

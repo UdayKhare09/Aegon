@@ -84,7 +84,7 @@ public:
     }
 
     Response& json(std::string_view j) {
-        headers_.set("Content-Type", "application/json; charset=utf-8");
+        headers_.set("Content-Type", "application/json");
         body_ = std::string(j);
         return *this;
     }
@@ -92,7 +92,7 @@ public:
     template <typename T>
         requires (!std::is_convertible_v<T, std::string_view>)
     Response& json(const T& val) {
-        headers_.set("Content-Type", "application/json; charset=utf-8");
+        headers_.set("Content-Type", "application/json");
         body_.clear();
         (void)glz::write_json(val, body_);
         return *this;
