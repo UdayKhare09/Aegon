@@ -78,7 +78,7 @@ public:
     }
 
     Response& text(std::string_view t) {
-        headers_.set("Content-Type", "text/plain; charset=utf-8");
+        headers_.set("Content-Type", "text/plain");
         body_ = std::string(t);
         return *this;
     }

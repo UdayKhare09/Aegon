@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <iostream>
 #include <algorithm>
+#include <cerrno>
 
 namespace aegon::http {
 
@@ -34,6 +35,7 @@ Server::Server(Server&& other) noexcept
       sq_thread_idle_ms_(other.sq_thread_idle_ms_),
       sq_thread_cpu_(other.sq_thread_cpu_),
       ring_entries_(other.ring_entries_),
+      buffer_pool_entries_(other.buffer_pool_entries_),
       tls_enabled_(other.tls_enabled_),
       http3_enabled_(other.http3_enabled_),
       tls_ctx_(std::move(other.tls_ctx_)),
@@ -56,6 +58,7 @@ Server& Server::operator=(Server&& other) noexcept {
         sq_thread_idle_ms_ = other.sq_thread_idle_ms_;
         sq_thread_cpu_ = other.sq_thread_cpu_;
         ring_entries_ = other.ring_entries_;
+        buffer_pool_entries_ = other.buffer_pool_entries_;
         tls_enabled_ = other.tls_enabled_;
         http3_enabled_ = other.http3_enabled_;
         tls_ctx_ = std::move(other.tls_ctx_);
@@ -323,13 +326,17 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
     }
 
     std::string req_accum;
-    req_accum.reserve(4096);
+    req_accum.reserve(512);
     std::string resp_batch;
-    resp_batch.reserve(4096);
+    resp_batch.reserve(512);
     bool first_packet = true;
 
     while (running_) {
         auto recv_res = co_await loop.ring().recv_multishot(client_fd, loop.buffer_pool().bgid());
+        if (recv_res.bytes == -ENOBUFS) {
+            co_await loop.ring().timeout(100'000ULL);
+            continue;
+        }
         if (recv_res.bytes <= 0) {
             break;
         }
@@ -427,7 +434,11 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 res.append_http1(resp_batch);
             }
 
-            req_accum.erase(0, bytes_consumed);
+            if (bytes_consumed >= req_accum.size()) {
+                req_accum.clear();
+            } else {
+                req_accum.erase(0, bytes_consumed);
+            }
 
             if (!keep_alive) {
                 break;
@@ -496,6 +507,8 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd) {
         if (accept_res.fd < 0) {
             break;
         }
+        int nodelay = 1;
+        ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
         loop.spawn(handle_connection(loop, accept_res.fd));
     }
 }
@@ -521,7 +534,7 @@ void Server::run() {
     ring_cfg.sq_thread_idle_ms = sq_thread_idle_ms_;
     ring_cfg.sq_thread_cpu = sq_thread_cpu_;
 
-    core::EventLoop loop(ring_cfg, 512, 4096);
+    core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
     loop.spawn(accept_loop(loop, listen_fd));
 
     // Spawn long-running background workers on the server event loop
@@ -570,8 +583,17 @@ void Server::run(size_t threads) {
                 ring_cfg.sq_thread_idle_ms = sq_thread_idle_ms_;
                 ring_cfg.sq_thread_cpu = sq_thread_cpu_ >= 0 ? sq_thread_cpu_ : static_cast<int>(i);
 
-                core::EventLoop loop(ring_cfg, 512, 4096);
-                // loop.pin_to_core(i);
+                core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
+                cpu_set_t current_mask;
+                if (pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &current_mask) == 0) {
+                    std::vector<int> allowed;
+                    for (int c = 0; c < CPU_SETSIZE; ++c) {
+                        if (CPU_ISSET(c, &current_mask)) allowed.push_back(c);
+                    }
+                    if (i < allowed.size()) {
+                        loop.pin_to_core(allowed[i]);
+                    }
+                }
                 loop.spawn(accept_loop(loop, listen_fd));
 
                 // Spawn background workers on core 0

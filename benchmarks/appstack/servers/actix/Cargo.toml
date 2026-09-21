@@ -1,0 +1,15 @@
+[package]
+name = "bench_actix_appstack"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = { version = "4" }
+serde = { version = "1", features = ["derive"] }
+mimalloc = { version = "0.1", default-features = false }
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+panic = "abort"

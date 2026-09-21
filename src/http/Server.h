@@ -210,6 +210,13 @@ public:
         return *this;
     }
 
+    Server& buffer_pool_entries(uint16_t entries) noexcept {
+        buffer_pool_entries_ = entries;
+        return *this;
+    }
+
+    [[nodiscard]] uint16_t buffer_pool_entries() const noexcept { return buffer_pool_entries_; }
+
     // Enable/disable HTTP/3 over QUIC
     Server& enable_http3(bool enable = true) noexcept {
         http3_enabled_ = enable;
@@ -254,6 +261,7 @@ private:
     uint32_t sq_thread_idle_ms_{2000};
     int sq_thread_cpu_{-1};
     uint32_t ring_entries_{4096};
+    uint16_t buffer_pool_entries_{8192};
 
     bool tls_enabled_{false};
     bool http3_enabled_{true}; // Default to enabled when TLS is used

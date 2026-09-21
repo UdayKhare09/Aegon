@@ -1,0 +1,310 @@
+{
+  "GET /baseline11 (512 conns)": {
+    "aegon": {
+      "framework": "aegon",
+      "conns": 512,
+      "avg_rps": 508435.14666666667,
+      "runs": [
+        {
+          "rps": 514891.98,
+          "avg_lat": "0.95ms",
+          "max_lat": "11.08ms",
+          "total_requests": 5168514
+        },
+        {
+          "rps": 486206.17,
+          "avg_lat": "1.01ms",
+          "max_lat": "8.45ms",
+          "total_requests": 4877984
+        },
+        {
+          "rps": 524207.29,
+          "avg_lat": "0.93ms",
+          "max_lat": "7.73ms",
+          "total_requests": 5255750
+        }
+      ]
+    },
+    "actix": {
+      "framework": "actix",
+      "conns": 512,
+      "avg_rps": 387632.79000000004,
+      "runs": [
+        {
+          "rps": 387547.67,
+          "avg_lat": "1.30ms",
+          "max_lat": "7.31ms",
+          "total_requests": 3892056
+        },
+        {
+          "rps": 386015.14,
+          "avg_lat": "1.30ms",
+          "max_lat": "7.63ms",
+          "total_requests": 3873340
+        },
+        {
+          "rps": 389335.56,
+          "avg_lat": "1.30ms",
+          "max_lat": "4.98ms",
+          "total_requests": 3902709
+        }
+      ]
+    },
+    "swerver": {
+      "framework": "swerver",
+      "conns": 512,
+      "avg_rps": 451428.68,
+      "runs": [
+        {
+          "rps": 454544.77,
+          "avg_lat": "1.10ms",
+          "max_lat": "13.93ms",
+          "total_requests": 4562169
+        },
+        {
+          "rps": 451672.45,
+          "avg_lat": "1.11ms",
+          "max_lat": "8.38ms",
+          "total_requests": 4535062
+        },
+        {
+          "rps": 448068.82,
+          "avg_lat": "1.12ms",
+          "max_lat": "8.43ms",
+          "total_requests": 4499862
+        }
+      ]
+    }
+  },
+  "GET /baseline11 (4096 conns)": {
+    "aegon": {
+      "framework": "aegon",
+      "conns": 4096,
+      "avg_rps": 406585.06,
+      "runs": [
+        {
+          "rps": 392529.59,
+          "avg_lat": "10.14ms",
+          "max_lat": "21.94ms",
+          "total_requests": 3953712
+        },
+        {
+          "rps": 414806.13,
+          "avg_lat": "9.58ms",
+          "max_lat": "15.71ms",
+          "total_requests": 4178542
+        },
+        {
+          "rps": 412419.46,
+          "avg_lat": "9.61ms",
+          "max_lat": "15.75ms",
+          "total_requests": 4153920
+        }
+      ]
+    },
+    "actix": {
+      "framework": "actix",
+      "conns": 4096,
+      "avg_rps": 309782.5966666667,
+      "runs": [
+        {
+          "rps": 314942.78,
+          "avg_lat": "12.87ms",
+          "max_lat": "19.11ms",
+          "total_requests": 3178401
+        },
+        {
+          "rps": 306762.05,
+          "avg_lat": "13.22ms",
+          "max_lat": "22.91ms",
+          "total_requests": 3093252
+        },
+        {
+          "rps": 307642.96,
+          "avg_lat": "13.16ms",
+          "max_lat": "19.32ms",
+          "total_requests": 3106346
+        }
+      ]
+    },
+    "swerver": {
+      "framework": "swerver",
+      "conns": 4096,
+      "avg_rps": 359364.6366666667,
+      "runs": [
+        {
+          "rps": 364822.4,
+          "avg_lat": "11.27ms",
+          "max_lat": "83.01ms",
+          "total_requests": 3675821
+        },
+        {
+          "rps": 355565.14,
+          "avg_lat": "11.51ms",
+          "max_lat": "78.59ms",
+          "total_requests": 3587734
+        },
+        {
+          "rps": 357706.37,
+          "avg_lat": "11.45ms",
+          "max_lat": "78.17ms",
+          "total_requests": 3608735
+        }
+      ]
+    }
+  },
+  "POST /baseline11 (512 conns)": {
+    "aegon": {
+      "framework": "aegon",
+      "conns": 512,
+      "avg_rps": 511694.0566666667,
+      "runs": [
+        {
+          "rps": 515157.58,
+          "avg_lat": "0.96ms",
+          "max_lat": "17.80ms",
+          "total_requests": 5166570
+        },
+        {
+          "rps": 481845.28,
+          "avg_lat": "1.03ms",
+          "max_lat": "7.68ms",
+          "total_requests": 4834744
+        },
+        {
+          "rps": 538079.31,
+          "avg_lat": "0.91ms",
+          "max_lat": "4.80ms",
+          "total_requests": 5406361
+        }
+      ]
+    },
+    "actix": {
+      "framework": "actix",
+      "conns": 512,
+      "avg_rps": 368609.26333333337,
+      "runs": [
+        {
+          "rps": 368504.24,
+          "avg_lat": "1.37ms",
+          "max_lat": "12.34ms",
+          "total_requests": 3695823
+        },
+        {
+          "rps": 368536.89,
+          "avg_lat": "1.37ms",
+          "max_lat": "6.38ms",
+          "total_requests": 3693986
+        },
+        {
+          "rps": 368786.66,
+          "avg_lat": "1.37ms",
+          "max_lat": "5.63ms",
+          "total_requests": 3696016
+        }
+      ]
+    },
+    "swerver": {
+      "framework": "swerver",
+      "conns": 512,
+      "avg_rps": 436246.56666666665,
+      "runs": [
+        {
+          "rps": 436972.74,
+          "avg_lat": "1.15ms",
+          "max_lat": "15.22ms",
+          "total_requests": 4381631
+        },
+        {
+          "rps": 434119.03,
+          "avg_lat": "1.16ms",
+          "max_lat": "14.10ms",
+          "total_requests": 4359145
+        },
+        {
+          "rps": 437647.93,
+          "avg_lat": "1.15ms",
+          "max_lat": "5.21ms",
+          "total_requests": 4395068
+        }
+      ]
+    }
+  },
+  "POST /baseline11 (4096 conns)": {
+    "aegon": {
+      "framework": "aegon",
+      "conns": 4096,
+      "avg_rps": 403482.36000000004,
+      "runs": [
+        {
+          "rps": 403155.74,
+          "avg_lat": "9.90ms",
+          "max_lat": "46.19ms",
+          "total_requests": 4062298
+        },
+        {
+          "rps": 403514.58,
+          "avg_lat": "9.88ms",
+          "max_lat": "17.20ms",
+          "total_requests": 4072119
+        },
+        {
+          "rps": 403776.76,
+          "avg_lat": "9.88ms",
+          "max_lat": "16.80ms",
+          "total_requests": 4067853
+        }
+      ]
+    },
+    "actix": {
+      "framework": "actix",
+      "conns": 4096,
+      "avg_rps": 297860.60333333333,
+      "runs": [
+        {
+          "rps": 303461.04,
+          "avg_lat": "13.35ms",
+          "max_lat": "17.10ms",
+          "total_requests": 3061514
+        },
+        {
+          "rps": 303606.19,
+          "avg_lat": "13.34ms",
+          "max_lat": "23.92ms",
+          "total_requests": 3063984
+        },
+        {
+          "rps": 286514.58,
+          "avg_lat": "14.16ms",
+          "max_lat": "26.82ms",
+          "total_requests": 2886484
+        }
+      ]
+    },
+    "swerver": {
+      "framework": "swerver",
+      "conns": 4096,
+      "avg_rps": 340888.47000000003,
+      "runs": [
+        {
+          "rps": 349980.01,
+          "avg_lat": "11.83ms",
+          "max_lat": "90.98ms",
+          "total_requests": 3523169
+        },
+        {
+          "rps": 332707.64,
+          "avg_lat": "12.60ms",
+          "max_lat": "95.54ms",
+          "total_requests": 3352982
+        },
+        {
+          "rps": 339977.76,
+          "avg_lat": "12.06ms",
+          "max_lat": "82.06ms",
+          "total_requests": 3425516
+        }
+      ]
+    }
+  }
+}

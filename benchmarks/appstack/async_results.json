@@ -1,0 +1,120 @@
+{
+  "GET /delay/10 (512 conns)": {
+    "aegon": {
+      "framework": "aegon",
+      "conns": 512,
+      "avg_rps": 50362.25,
+      "runs": [
+        {
+          "rps": 49867.79,
+          "avg_lat": "10.22ms",
+          "max_lat": "27.42ms",
+          "total_requests": 500499
+        },
+        {
+          "rps": 50518.03,
+          "avg_lat": "10.08ms",
+          "max_lat": "14.03ms",
+          "total_requests": 507260
+        },
+        {
+          "rps": 50700.93,
+          "avg_lat": "10.05ms",
+          "max_lat": "12.47ms",
+          "total_requests": 509117
+        }
+      ]
+    },
+    "actix": {
+      "framework": "actix",
+      "conns": 512,
+      "avg_rps": 42721.549999999996,
+      "runs": [
+        {
+          "rps": 42468.57,
+          "avg_lat": "12.00ms",
+          "max_lat": "20.63ms",
+          "total_requests": 426299
+        },
+        {
+          "rps": 42770.63,
+          "avg_lat": "11.92ms",
+          "max_lat": "14.83ms",
+          "total_requests": 429204
+        },
+        {
+          "rps": 42925.45,
+          "avg_lat": "11.88ms",
+          "max_lat": "16.41ms",
+          "total_requests": 430804
+        }
+      ]
+    },
+    "swerver": {
+      "framework": "swerver",
+      "conns": 512,
+      "avg_rps": 0.0,
+      "note": "Unsupported upstream in HttpArena",
+      "runs": []
+    }
+  },
+  "GET /delay/10 (4096 conns)": {
+    "aegon": {
+      "framework": "aegon",
+      "conns": 4096,
+      "avg_rps": 233768.61,
+      "runs": [
+        {
+          "rps": 220257.5,
+          "avg_lat": "17.44ms",
+          "max_lat": "45.79ms",
+          "total_requests": 2223105
+        },
+        {
+          "rps": 238673.47,
+          "avg_lat": "16.30ms",
+          "max_lat": "46.59ms",
+          "total_requests": 2403302
+        },
+        {
+          "rps": 242374.86,
+          "avg_lat": "16.06ms",
+          "max_lat": "45.15ms",
+          "total_requests": 2448036
+        }
+      ]
+    },
+    "actix": {
+      "framework": "actix",
+      "conns": 4096,
+      "avg_rps": 238616.81666666665,
+      "runs": [
+        {
+          "rps": 244118.13,
+          "avg_lat": "16.63ms",
+          "max_lat": "23.64ms",
+          "total_requests": 2459112
+        },
+        {
+          "rps": 239138.33,
+          "avg_lat": "16.96ms",
+          "max_lat": "28.37ms",
+          "total_requests": 2410170
+        },
+        {
+          "rps": 232593.99,
+          "avg_lat": "17.42ms",
+          "max_lat": "30.47ms",
+          "total_requests": 2346421
+        }
+      ]
+    },
+    "swerver": {
+      "framework": "swerver",
+      "conns": 4096,
+      "avg_rps": 0.0,
+      "note": "Unsupported upstream in HttpArena",
+      "runs": []
+    }
+  }
+}

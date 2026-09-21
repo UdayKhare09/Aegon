@@ -13,3 +13,4 @@ docs/.vitepress/cache
 **__pycache__
 **/bin
 **/settle-failures.jsonl
+**/zig-out
