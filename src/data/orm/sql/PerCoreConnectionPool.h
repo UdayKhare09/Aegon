@@ -53,19 +53,31 @@ public:
     void reset();
 };
 
+#include <unordered_map>
+
 class PerCoreConnectionPool {
     std::function<std::unique_ptr<Connection>()> factory_;
-    std::vector<std::unique_ptr<Connection>> available_;
     size_t max_idle_{16};
+
+    struct ThreadLocalPool {
+        std::vector<std::unique_ptr<Connection>> available;
+    };
+
+    static inline thread_local std::unordered_map<const PerCoreConnectionPool*, ThreadLocalPool> t_pools;
 
 public:
     explicit PerCoreConnectionPool(std::function<std::unique_ptr<Connection>()> factory, size_t max_idle = 16)
         : factory_(std::move(factory)), max_idle_(max_idle) {}
 
+    ~PerCoreConnectionPool() {
+        t_pools.erase(this);
+    }
+
     [[nodiscard]] ConnectionGuard acquire() {
-        while (!available_.empty()) {
-            auto conn = std::move(available_.back());
-            available_.pop_back();
+        auto& pool = t_pools[this];
+        while (!pool.available.empty()) {
+            auto conn = std::move(pool.available.back());
+            pool.available.pop_back();
             if (conn && conn->is_valid()) {
                 return ConnectionGuard(this, std::move(conn));
             }
@@ -80,13 +92,20 @@ public:
     }
 
     void release(std::unique_ptr<Connection> conn) {
-        if (conn && conn->is_valid() && available_.size() < max_idle_) {
-            available_.push_back(std::move(conn));
+        if (conn && conn->is_valid()) {
+            auto& pool = t_pools[this];
+            if (pool.available.size() < max_idle_) {
+                pool.available.push_back(std::move(conn));
+            }
         }
     }
 
     [[nodiscard]] size_t idle_count() const noexcept {
-        return available_.size();
+        auto it = t_pools.find(this);
+        if (it != t_pools.end()) {
+            return it->second.available.size();
+        }
+        return 0;
     }
 };
 

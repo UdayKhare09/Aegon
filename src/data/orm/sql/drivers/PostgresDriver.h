@@ -11,10 +11,56 @@
 #include <utility>
 #include <cstdlib>
 
+#include "core/EventLoop.h"
+#include <poll.h>
+
 namespace aegon::data::orm::sql::drivers {
 
 class PostgresConnection : public Connection {
     PGconn* conn_{nullptr};
+
+    core::Task<PGresult*> send_and_wait_result(std::string_view sql, const std::vector<const char*>& param_ptrs) {
+        std::string sql_str(sql);
+        int sent = PQsendQueryParams(conn_, sql_str.c_str(), static_cast<int>(param_ptrs.size()),
+                                     nullptr, param_ptrs.data(), nullptr, nullptr, 0);
+        if (!sent) {
+            throw std::runtime_error("PostgresConnection send error: " + std::string(PQerrorMessage(conn_)));
+        }
+
+        auto* loop = core::EventLoop::current();
+        int fd = PQsocket(conn_);
+
+        if (loop) {
+            while (true) {
+                int flush_res = PQflush(conn_);
+                if (flush_res <= 0) break;
+                (void)co_await loop->ring().poll(fd, POLLOUT);
+            }
+
+            while (PQisBusy(conn_)) {
+                (void)co_await loop->ring().poll(fd, POLLIN);
+                if (PQconsumeInput(conn_) == 0) {
+                    break;
+                }
+            }
+        } else {
+            while (PQflush(conn_) > 0) {
+                struct pollfd pfd{fd, POLLOUT, 0};
+                ::poll(&pfd, 1, 100);
+            }
+            while (PQisBusy(conn_)) {
+                struct pollfd pfd{fd, POLLIN, 0};
+                ::poll(&pfd, 1, 100);
+                if (PQconsumeInput(conn_) == 0) break;
+            }
+        }
+
+        PGresult* res = PQgetResult(conn_);
+        while (PGresult* extra = PQgetResult(conn_)) {
+            PQclear(extra);
+        }
+        co_return res;
+    }
 
 public:
     explicit PostgresConnection(const std::string& conninfo) {
@@ -25,6 +71,7 @@ public:
             conn_ = nullptr;
             throw std::runtime_error("PostgresConnection: " + err);
         }
+        PQsetnonblocking(conn_, 1);
     }
 
     ~PostgresConnection() override {
@@ -59,15 +106,16 @@ public:
             }
         }
 
-        std::string sql_str(sql);
-        PGresult* res = PQexecParams(conn_, sql_str.c_str(), static_cast<int>(param_ptrs.size()),
-                                     nullptr, param_ptrs.data(), nullptr, nullptr, 0);
+        PGresult* res = co_await send_and_wait_result(sql, param_ptrs);
+        if (!res) {
+            throw std::runtime_error("PostgresConnection execute error: null result returned");
+        }
 
         ExecStatusType status = PQresultStatus(res);
         if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
             std::string err = PQerrorMessage(conn_);
             PQclear(res);
-            throw std::runtime_error("PostgresConnection execute error: " + err + " in SQL: " + sql_str);
+            throw std::runtime_error("PostgresConnection execute error: " + err + " in SQL: " + std::string(sql));
         }
 
         size_t affected = 0;
@@ -93,15 +141,16 @@ public:
             }
         }
 
-        std::string sql_str(sql);
-        PGresult* res = PQexecParams(conn_, sql_str.c_str(), static_cast<int>(param_ptrs.size()),
-                                     nullptr, param_ptrs.data(), nullptr, nullptr, 0);
+        PGresult* res = co_await send_and_wait_result(sql, param_ptrs);
+        if (!res) {
+            throw std::runtime_error("PostgresConnection query error: null result returned");
+        }
 
         ExecStatusType status = PQresultStatus(res);
         if (status != PGRES_TUPLES_OK) {
             std::string err = PQerrorMessage(conn_);
             PQclear(res);
-            throw std::runtime_error("PostgresConnection query error: " + err + " in SQL: " + sql_str);
+            throw std::runtime_error("PostgresConnection query error: " + err + " in SQL: " + std::string(sql));
         }
 
         int rows_count = PQntuples(res);

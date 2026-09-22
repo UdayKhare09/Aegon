@@ -78,20 +78,26 @@ With `IORING_SETUP_SQPOLL`, the Linux kernel spawns a dedicated kernel thread th
 
 You can register shared dependencies at server initialization so they become accessible to all route handlers and lifecycle hooks:
 
-```cpp
-// Register SQL database client
-auto db = std::make_shared<SqlDatabaseClient>(SqlConfig::postgres("host=localhost dbname=prod"));
+// 1. Register SqlDatabaseClient backed by a per-core connection pool
+auto pg_pool = drivers::create_postgres_pool("host=127.0.0.1 dbname=prod user=postgres password=secret", 4);
+auto db = std::make_shared<SqlDatabaseClient>(*pg_pool);
 server.provide<SqlDatabaseClient>(db);
 
-// Register PerCoreRedisClient for zero-contention thread-affinity Redis
+// 2. Register PerCoreRedisClient for zero-contention thread-affinity Redis
 auto redis = std::make_shared<PerCoreRedisClient>(RedisNodeConfig{.host = "127.0.0.1", .port = 6379});
 server.provide<PerCoreRedisClient>(redis);
+
+// 3. Register PerCoreHttpClient for zero-contention thread-affinity HTTP requests
+auto http_client = std::make_shared<PerCoreHttpClient>(ClientConfig{.timeout = std::chrono::milliseconds(5000)});
+server.provide<PerCoreHttpClient>(http_client);
 ```
 
 To retrieve a service from the server instance:
 
 ```cpp
+std::shared_ptr<SqlDatabaseClient> db = server.service<SqlDatabaseClient>();
 std::shared_ptr<PerCoreRedisClient> redis = server.service<PerCoreRedisClient>();
+std::shared_ptr<PerCoreHttpClient> http_client = server.service<PerCoreHttpClient>();
 ```
 
 ---

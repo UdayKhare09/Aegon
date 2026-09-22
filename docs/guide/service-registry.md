@@ -22,6 +22,7 @@ Aegon provides a built-in, ultra-high-performance dependency injection container
        server.provide<SqlDatabaseClient>(master_db)
        server.provide<SqlDatabaseClient>("replica", read_db)   <-- Keyed Service
        server.provide<PerCoreRedisClient>(redis)
+       server.provide<PerCoreHttpClient>(http_client)
                        │
                        ▼  server.run()
              [ Frozen Registry ]

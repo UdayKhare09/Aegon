@@ -356,6 +356,11 @@ add_executable(test_sql_drivers
 )
 target_link_libraries(test_sql_drivers PRIVATE aegon_orm aegon_http)
 
+add_executable(test_percore_clients
+    tests/test_percore_clients.cpp
+)
+target_link_libraries(test_percore_clients PRIVATE aegon_orm aegon_http)
+
 add_executable(test_live_postgres
     tests/test_live_postgres.cpp
 )
@@ -521,6 +526,7 @@ add_test(NAME sql_transaction COMMAND test_sql_transaction)
 add_test(NAME sql_relations COMMAND test_sql_relations)
 add_test(NAME sql_advanced_queries COMMAND test_sql_advanced_queries)
 add_test(NAME sql_drivers COMMAND test_sql_drivers)
+add_test(NAME percore_clients COMMAND test_percore_clients)
 add_test(NAME server_sql_config COMMAND test_server_sql_config)
 add_test(NAME orm_cache COMMAND test_orm_cache)
 add_test(NAME memstore COMMAND test_memstore)

@@ -455,3 +455,68 @@ HttpClient dev_client(ClientConfig{
     }
 });
 ```
+
+---
+
+## Multi-Threaded Servers & `PerCoreHttpClient`
+
+When running Aegon in a multi-threaded server (`server.run(N)`), sharing a single global `HttpClient` across worker threads introduces cross-thread lock contention inside the socket connection pool and violates `io_uring` thread-affinity.
+
+Aegon provides **`PerCoreHttpClient`** (`#include "http/client/PerCoreHttpClient.h"`):
+
+```
+                                PerCoreHttpClient
+                                        │
+                 ┌──────────────────────┼──────────────────────┐
+                 ▼                      ▼                      ▼
+           Worker Core 0          Worker Core 1          Worker Core 2
+                 │                      │                      │
+                 ▼                      ▼                      ▼
+         Private HttpClient     Private HttpClient     Private HttpClient
+                 │                      │                      │
+                 ▼                      ▼                      ▼
+         Core 0 Sockets         Core 1 Sockets         Core 2 Sockets
+                 │                      │                      │
+                 ▼                      ▼                      ▼
+          Core 0 io_uring        Core 1 io_uring        Core 2 io_uring
+```
+
+### Key Advantages:
+1. **Zero Cross-Ring I/O**: Sockets are bound to the calling thread's `io_uring` ring, preventing cross-core ring submission or wait penalties.
+2. **Lock-Free Connection Pool**: Each CPU core maintains its own isolated keep-alive connection pool. No mutex contention on socket checkout or release.
+3. **L1/L2 Cache Locality**: Memory buffers, TLS sessions, and HPACK dynamic tables stay pinned to the worker core's local CPU caches.
+4. **Service Registry Integration**: Easily registered in `server.provide<PerCoreHttpClient>()` and accessed directly via `ctx.service<PerCoreHttpClient>()`.
+
+### Registration & Handler Usage:
+
+```cpp
+#include "http/Server.h"
+#include "http/client/PerCoreHttpClient.h"
+
+int main() {
+    Server server;
+
+    // 1. Register PerCoreHttpClient in the Service Registry
+    auto http_client = std::make_shared<PerCoreHttpClient>(ClientConfig{
+        .timeout = std::chrono::milliseconds(5000),
+        .user_agent = "Aegon-Microservice/1.0"
+    });
+    server.provide<PerCoreHttpClient>(http_client);
+
+    // 2. Access in route handlers with zero lock overhead
+    server.router().get("/proxy-user/:id", [](Context& ctx) -> core::Task<void> {
+        auto id = ctx.req().param("id").value_or("0");
+        auto& client = ctx.service<PerCoreHttpClient>();
+
+        auto res = co_await client.get("https://api.internal/users/" + std::string(id))
+            .bearer_auth("internal-secret-token")
+            .send();
+
+        ctx.res().status(res.status()).json(res.body());
+    });
+
+    server.listen(8080);
+    server.run(4); // 4 worker threads, each with its own isolated HttpClient
+}
+```
+

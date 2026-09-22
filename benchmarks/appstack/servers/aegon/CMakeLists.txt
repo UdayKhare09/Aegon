@@ -13,6 +13,7 @@ set(CMAKE_PREFIX_PATH "/tmp/aegon_install" ${CMAKE_PREFIX_PATH})
 find_package(Aegon REQUIRED)
 
 add_executable(bench_aegon main.cpp)
+target_include_directories(bench_aegon PRIVATE /tmp/aegon_install/include)
 target_link_libraries(bench_aegon PRIVATE
     Aegon::http
     Aegon::core

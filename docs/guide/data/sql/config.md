@@ -67,10 +67,10 @@ Each worker core leases from its own pre-allocated slice of database connections
 
 ```cpp
 // 1. Create the primary per-core connection pool
-PerCoreConnectionPool primary_pool(pg_config);
+auto primary_pool = drivers::create_postgres_pool(pg_config.to_conninfo(), pg_config.pool_per_core);
 
 // 2. Initialize the SqlDatabaseClient
-auto db = std::make_shared<SqlDatabaseClient>(primary_pool);
+auto db = std::make_shared<SqlDatabaseClient>(*primary_pool);
 
 // 3. Register in the Service Registry
 server.provide<SqlDatabaseClient>(db);
@@ -84,15 +84,15 @@ For high-read applications, Aegon supports splitting read traffic across seconda
 
 ```cpp
 // Primary write pool
-PerCoreConnectionPool primary_pool(primary_config);
+auto primary_pool = drivers::create_postgres_pool(primary_config.to_conninfo(), primary_config.pool_per_core);
 
 // Secondary read-replica pools
-PerCoreConnectionPool replica_1_pool(replica_1_config);
-PerCoreConnectionPool replica_2_pool(replica_2_config);
+auto replica_1_pool = drivers::create_postgres_pool(replica_1_config.to_conninfo(), replica_1_config.pool_per_core);
+auto replica_2_pool = drivers::create_postgres_pool(replica_2_config.to_conninfo(), replica_2_config.pool_per_core);
 
 std::vector<std::reference_wrapper<PerCoreConnectionPool>> replicas = {
-    replica_1_pool, 
-    replica_2_pool
+    *replica_1_pool, 
+    *replica_2_pool
 };
 
 // Client automatically routes:

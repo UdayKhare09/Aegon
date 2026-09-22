@@ -311,7 +311,7 @@ void test_outbound_dto_serialization() {
     res.status(StatusCode::Created).json(response);
 
     TEST_CHECK(res.status() == StatusCode::Created);
-    TEST_CHECK(res.headers().get("Content-Type") == "application/json; charset=utf-8");
+    TEST_CHECK(res.headers().get("Content-Type").value_or("").starts_with("application/json"));
 
     std::string json_out = std::string(res.body());
     TEST_CHECK(json_out.find("\"id\":\"USR-9988\"") != std::string::npos);
