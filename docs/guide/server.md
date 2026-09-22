@@ -78,6 +78,7 @@ With `IORING_SETUP_SQPOLL`, the Linux kernel spawns a dedicated kernel thread th
 
 You can register shared dependencies at server initialization so they become accessible to all route handlers and lifecycle hooks:
 
+```cpp
 // 1. Register SqlDatabaseClient backed by a per-core connection pool
 auto pg_pool = drivers::create_postgres_pool("host=127.0.0.1 dbname=prod user=postgres password=secret", 4);
 auto db = std::make_shared<SqlDatabaseClient>(*pg_pool);
