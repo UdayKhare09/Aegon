@@ -11,6 +11,11 @@
 
 namespace aegon::data::orm::sql {
 
+struct PreparedStatementDef {
+    std::string name;
+    std::string sql;
+};
+
 class Connection {
 public:
     virtual ~Connection() = default;
@@ -28,6 +33,8 @@ public:
 
     [[nodiscard]] virtual DatabaseDialect dialect() const noexcept = 0;
     [[nodiscard]] virtual bool is_valid() const noexcept = 0;
+    [[nodiscard]] virtual size_t in_flight_count() const noexcept { return 0; }
+    [[nodiscard]] virtual bool is_pipelined() const noexcept { return false; }
 };
 
 } // namespace aegon::data::orm::sql

@@ -58,11 +58,14 @@ def run_wrk(port, endpoint, conns=512, duration="10s", warmup="3s"):
     # Warmup
     warmup_cmd = ["taskset", "-c", "2,3,4,5", "wrk", "-t", "4", "-c", str(min(conns, 256)), "-d", warmup, url]
     subprocess.run(warmup_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(1)
+    time.sleep(2)
 
     # Measurement
     bench_cmd = ["taskset", "-c", "2,3,4,5", "wrk", "-t", "4", "-c", str(conns), "-d", duration, url]
     res = subprocess.run(bench_cmd, capture_output=True, text=True)
+
+    if res.returncode != 0 or "Requests/sec" not in res.stdout:
+        print(f"  [WRK WARNING] returncode={res.returncode}, stderr={res.stderr.strip()[:200]}")
 
     return parse_wrk_output(res.stdout)
 
@@ -99,6 +102,12 @@ def main():
 
     endpoint = "/async-db?min=10&max=50&limit=50"
     results = {}
+    if os.path.exists("benchmarks/appstack/db_results.json"):
+        try:
+            with open("benchmarks/appstack/db_results.json", "r") as f:
+                results = json.load(f)
+        except Exception:
+            pass
 
     for fw in test_frameworks:
         meta = FRAMEWORKS[fw]
@@ -132,7 +141,7 @@ def main():
                 runs.append(metrics)
                 err_str = f" | Errors: {metrics['errors']}" if metrics['errors'] > 0 else ""
                 print(f"  Run {r+1}: {metrics['valid_rps']:,.2f} req/s{err_str} | Avg Lat: {metrics['avg_lat']} | Max Lat: {metrics['max_lat']}")
-                time.sleep(1)
+                time.sleep(2)
 
             avg_valid_rps = sum(x["valid_rps"] for x in runs) / len(runs)
             total_errors = sum(x["errors"] for x in runs)

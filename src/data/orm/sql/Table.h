@@ -101,8 +101,31 @@ private:
         );
     }
 
+    mutable std::array<std::string, 4> cached_select_prefix_;
+
 public:
     explicit TableDef(std::string name) : table_name_(std::move(name)) {}
+
+    [[nodiscard]] const std::string& select_all_prefix(DatabaseDialect d) const {
+        size_t idx = static_cast<size_t>(d);
+        if (idx < cached_select_prefix_.size() && !cached_select_prefix_[idx].empty()) {
+            return cached_select_prefix_[idx];
+        }
+        std::string s = "SELECT ";
+        for (size_t i = 0; i < columns_.size(); ++i) {
+            s.append(DialectTraits::quote_identifier(d, columns_[i].column_name));
+            if (i + 1 < columns_.size()) s.append(", ");
+        }
+        s.append(" FROM ");
+        s.append(DialectTraits::quote_identifier(d, table_name_));
+        if (idx < cached_select_prefix_.size()) {
+            cached_select_prefix_[idx] = s;
+            return cached_select_prefix_[idx];
+        }
+        static std::string fallback;
+        fallback = std::move(s);
+        return fallback;
+    }
 
     [[nodiscard]] const std::string& table_name() const noexcept { return table_name_; }
     [[nodiscard]] const std::string& primary_key_name() const noexcept { return primary_key_name_; }
@@ -169,6 +192,7 @@ public:
     }
 
     void init_relations(Entity& entity) const {
+        if (relations_.empty()) return;
         std::string pk_val = get_primary_key(entity);
         for (const auto& rel : relations_) {
             if (rel.install_lazy_loader) {

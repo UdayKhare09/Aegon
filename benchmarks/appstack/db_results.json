@@ -1,62 +1,62 @@
 {
   "aegon": {
     "512": {
-      "avg_rps": 26125.45,
+      "avg_rps": 25594.80,
       "total_errors": 0,
       "runs": [
         {
-          "rps": 24862.02,
-          "valid_rps": 24862.02,
+          "rps": 27009.99,
+          "valid_rps": 27009.99,
           "errors": 0,
-          "avg_lat": "19.27ms",
-          "max_lat": "88.71ms",
-          "total_requests": 249062
+          "avg_lat": "19.03ms",
+          "max_lat": "89.30ms",
+          "total_requests": 270729
         },
         {
-          "rps": 27575.09,
-          "valid_rps": 27575.09,
+          "rps": 24640.01,
+          "valid_rps": 24640.01,
           "errors": 0,
-          "avg_lat": "8.50ms",
-          "max_lat": "56.79ms",
-          "total_requests": 276300
+          "avg_lat": "20.73ms",
+          "max_lat": "83.47ms",
+          "total_requests": 246953
         },
         {
-          "rps": 25939.24,
-          "valid_rps": 25939.24,
+          "rps": 25134.41,
+          "valid_rps": 25134.41,
           "errors": 0,
-          "avg_lat": "12.44ms",
-          "max_lat": "42.58ms",
-          "total_requests": 260117
+          "avg_lat": "5.59ms",
+          "max_lat": "28.74ms",
+          "total_requests": 251881
         }
       ]
     },
     "1024": {
-      "avg_rps": 25826.23,
+      "avg_rps": 24330.40,
       "total_errors": 0,
       "runs": [
         {
-          "rps": 25563.23,
-          "valid_rps": 25563.23,
+          "rps": 25118.01,
+          "valid_rps": 25118.01,
           "errors": 0,
-          "avg_lat": "40.02ms",
-          "max_lat": "108.25ms",
-          "total_requests": 256563
+          "avg_lat": "40.63ms",
+          "max_lat": "114.73ms",
+          "total_requests": 252070
         },
         {
-          "rps": 26013.12,
-          "valid_rps": 26013.12,
+          "rps": 24246.47,
+          "valid_rps": 24246.47,
           "errors": 0,
-          "avg_lat": "37.33ms",
-          "max_lat": "107.97ms",
-          "total_requests": 261073
+          "avg_lat": "16.43ms",
+          "max_lat": "84.98ms",
+          "total_requests": 243447
         },
         {
-          "rps": 25902.33,
-          "valid_rps": 25902.33,
+          "rps": 23626.71,
+          "valid_rps": 23626.71,
           "errors": 0,
-          "avg_lat": "35.39ms",
-          "max_lat": "88.85ms",
-          "total_requests": 260101
+          "avg_lat": "17.00ms",
+          "max_lat": "83.65ms",
+          "total_requests": 237249
         }
       ]
     }

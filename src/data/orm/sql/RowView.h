@@ -101,11 +101,28 @@ inline T parse_field_value(std::string_view s) {
 // In-memory MockRowView for testing and driver adaptation
 class MockRowView : public RowView {
     std::vector<std::optional<std::string>> values_;
+    std::shared_ptr<void> owner_{nullptr};
+    void* raw_handle_{nullptr};
+    int row_idx_{-1};
+    int col_count_{0};
+    std::string_view (*raw_getter_)(void* handle, int row, int col){nullptr};
+    bool (*is_null_fn_)(void* handle, int row, int col){nullptr};
 
 public:
     MockRowView() = default;
     explicit MockRowView(std::vector<std::optional<std::string>> values)
         : values_(std::move(values)) {}
+
+    // Zero-copy constructor: delegates directly to driver buffer via function pointers
+    MockRowView(std::shared_ptr<void> owner, void* raw_handle, int row_idx, int col_count,
+                std::string_view (*getter)(void*, int, int),
+                bool (*is_null)(void*, int, int))
+        : owner_(std::move(owner)),
+          raw_handle_(raw_handle),
+          row_idx_(row_idx),
+          col_count_(col_count),
+          raw_getter_(getter),
+          is_null_fn_(is_null) {}
 
     void add_value(std::string val) {
         values_.push_back(std::move(val));
@@ -115,16 +132,23 @@ public:
         values_.push_back(std::nullopt);
     }
 
+    [[nodiscard]] std::shared_ptr<void> owner() const noexcept {
+        return owner_;
+    }
+
     [[nodiscard]] size_t column_count() const noexcept override {
+        if (raw_getter_) return static_cast<size_t>(col_count_);
         return values_.size();
     }
 
     [[nodiscard]] bool is_null(size_t col_idx) const override {
+        if (is_null_fn_) return is_null_fn_(raw_handle_, row_idx_, static_cast<int>(col_idx));
         if (col_idx >= values_.size()) return true;
         return !values_[col_idx].has_value();
     }
 
     [[nodiscard]] std::string_view get_raw(size_t col_idx) const override {
+        if (raw_getter_) return raw_getter_(raw_handle_, row_idx_, static_cast<int>(col_idx));
         if (col_idx >= values_.size() || !values_[col_idx].has_value()) {
             return "";
         }

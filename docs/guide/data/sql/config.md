@@ -63,16 +63,30 @@ Aegon uses **`PerCoreConnectionPool`**:
 
 Each worker core leases from its own pre-allocated slice of database connections, completely eliminating cross-thread mutex acquisition on queries.
 
-### Setting up the Client
+### Setting up the Client & Pre-Registered Prepared Statements
+
+You can pre-register SQL prepared statements when initializing the pool. When executing queries whose SQL matches a registered definition, the PostgreSQL driver automatically uses `PQsendQueryPrepared` or `PQexecPrepared` without any runtime prepare roundtrips:
 
 ```cpp
-// 1. Create the primary per-core connection pool
-auto primary_pool = drivers::create_postgres_pool(pg_config.to_conninfo(), pg_config.pool_per_core);
+// 1. (Optional) Define prepared statements
+std::vector<PreparedStatementDef> prepared_stmts = {
+    {
+        .name = "find_products_by_price",
+        .sql = "SELECT id, name, price FROM items WHERE price BETWEEN $1 AND $2 LIMIT $3"
+    }
+};
 
-// 2. Initialize the SqlDatabaseClient
+// 2. Create the primary per-core connection pool
+auto primary_pool = drivers::create_postgres_pool(
+    pg_config.to_conninfo(), 
+    pg_config.pool_per_core,
+    prepared_stmts
+);
+
+// 3. Initialize the SqlDatabaseClient
 auto db = std::make_shared<SqlDatabaseClient>(*primary_pool);
 
-// 3. Register in the Service Registry
+// 4. Register in the Service Registry
 server.provide<SqlDatabaseClient>(db);
 ```
 

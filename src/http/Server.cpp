@@ -501,15 +501,19 @@ core::Task<bool> Server::stream_file_zero_copy(core::EventLoop& loop, int client
 }
 
 core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd) {
-    auto stream = loop.ring().accept_multishot(listen_fd);
     while (running_) {
-        auto accept_res = co_await stream.next();
-        if (accept_res.fd < 0) {
-            break;
+        auto stream = loop.ring().accept_multishot(listen_fd);
+        while (running_) {
+            auto accept_res = co_await stream.next();
+            if (accept_res.fd < 0) {
+                // Multishot accept stream disarmed (e.g. transient ECONNABORTED).
+                // Break inner loop to re-arm multishot accept stream.
+                break;
+            }
+            int nodelay = 1;
+            ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+            loop.spawn(handle_connection(loop, accept_res.fd));
         }
-        int nodelay = 1;
-        ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-        loop.spawn(handle_connection(loop, accept_res.fd));
     }
 }
 

@@ -44,6 +44,10 @@ auto query = db.from<User>()
 // Fetch all matching rows
 std::vector<User> users = co_await db.fetch_all(query);
 
+// Zero-Allocation Bulk Hydration (Reusing vector to avoid heap churn in hot paths)
+thread_local std::vector<User> reused_users;
+co_await db.fetch_into(query, reused_users);
+
 // Or fetch only the first matching record (appends LIMIT 1 automatically)
 std::optional<User> first_admin = co_await db.fetch_one(
     db.from<User>().where(&User::role, Op::Eq, "admin")

@@ -451,22 +451,17 @@ public:
         std::string& sql = result.sql;
         sql.reserve(256);
 
-        sql.append("SELECT ");
         if (projected_columns_.empty()) {
-            const auto& cols = schema_.columns();
-            for (size_t i = 0; i < cols.size(); ++i) {
-                sql.append(DialectTraits::quote_identifier(dialect, cols[i].column_name));
-                if (i + 1 < cols.size()) sql.append(", ");
-            }
+            sql.append(schema_.select_all_prefix(dialect));
         } else {
+            sql.append("SELECT ");
             for (size_t i = 0; i < projected_columns_.size(); ++i) {
                 sql.append(DialectTraits::quote_identifier(dialect, projected_columns_[i]));
                 if (i + 1 < projected_columns_.size()) sql.append(", ");
             }
+            sql.append(" FROM ");
+            sql.append(DialectTraits::quote_identifier(dialect, schema_.table_name()));
         }
-
-        sql.append(" FROM ");
-        sql.append(DialectTraits::quote_identifier(dialect, schema_.table_name()));
 
         size_t param_idx = 1;
 
@@ -617,6 +612,19 @@ public:
             }
         }
         return results;
+    }
+
+    template <typename RowContainer>
+    void map_rows_into(const RowContainer& rows, std::vector<Entity>& out) const {
+        out.clear();
+        out.reserve(rows.size());
+        for (const auto& row : rows) {
+            if constexpr (std::is_pointer_v<std::decay_t<decltype(row)>>) {
+                out.push_back(schema_.map_row(*row));
+            } else {
+                out.push_back(schema_.map_row(row));
+            }
+        }
     }
 };
 

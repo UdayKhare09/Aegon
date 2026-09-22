@@ -406,6 +406,13 @@ public:
     }
 
     template <typename Entity>
+    core::Task<void> fetch_into(const SelectBuilder<Entity>& builder, std::vector<Entity>& out) {
+        auto guard = read_pool().acquire();
+        Transaction tx(*guard);
+        co_await tx.fetch_into(builder, out);
+    }
+
+    template <typename Entity>
     core::Task<std::optional<Entity>> fetch_one(const SelectBuilder<Entity>& builder) {
         SelectBuilder<Entity> copy = builder;
         copy.limit(1);

@@ -345,15 +345,33 @@ public:
         co_return count > 0;
     }
 
+    inline static thread_local std::shared_ptr<void> tls_last_query_owner;
+
     template <typename Entity>
     core::Task<std::vector<Entity>> fetch_all(const SelectBuilder<Entity>& builder) {
         auto query = builder.to_sql(dialect_);
         auto rows = co_await conn_.query(query.sql, query.params);
+        if (!rows.empty()) {
+            tls_last_query_owner = rows[0].owner();
+        }
         auto results = builder.map_rows(rows);
         if (builder.has_includes() && !results.empty()) {
             co_await builder.eager_load_includes(results, conn_, dialect_);
         }
         co_return results;
+    }
+
+    template <typename Entity>
+    core::Task<void> fetch_into(const SelectBuilder<Entity>& builder, std::vector<Entity>& out) {
+        auto query = builder.to_sql(dialect_);
+        auto rows = co_await conn_.query(query.sql, query.params);
+        if (!rows.empty()) {
+            tls_last_query_owner = rows[0].owner();
+        }
+        builder.map_rows_into(rows, out);
+        if (builder.has_includes() && !out.empty()) {
+            co_await builder.eager_load_includes(out, conn_, dialect_);
+        }
     }
 
     template <typename Entity>
