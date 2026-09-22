@@ -113,11 +113,17 @@ public:
         bool is_chunked = false;
         bool has_host = false;
 
+        bool headers_complete = false;
+
         while (cursor < buffer.size()) {
             // Check for end of headers (\r\n)
             if (buffer.size() >= cursor + 2 && buffer[cursor] == '\r' && buffer[cursor + 1] == '\n') {
                 cursor += 2;
+                headers_complete = true;
                 break;
+            }
+            if (buffer[cursor] == '\r' && cursor + 1 == buffer.size()) {
+                return ParseStatus::NeedMoreData;
             }
 
             size_t header_end = aegon::core::simd::SimdString::find_crlf(buffer, cursor);
@@ -185,6 +191,10 @@ public:
             }
 
             cursor = header_end + 2;
+        }
+
+        if (!headers_complete) {
+            return ParseStatus::NeedMoreData;
         }
 
         // RFC 9112 §3.2: HTTP/1.1 requires Host header
