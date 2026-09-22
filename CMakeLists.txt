@@ -23,18 +23,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(
         -O3
         -march=native
-        -mavx512f
-        -mavx512dq
-        -mavx512bw
-        -mavx512vl
-        -mavx512vbmi
-        -mavx512vbmi2
-        -mvaes
-        -mrdrnd
-        -mrdseed
-        -mmovbe
-        -mbmi2
-        -msse4.2
         -Wall
         -Wextra
         -Wpedantic
