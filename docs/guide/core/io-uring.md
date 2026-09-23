@@ -40,6 +40,7 @@ Every operation on `IoUring` returns an awaiter struct that can be directly `co_
 | `ring.recv(fd, buf, len, flags)` | `RecvAwaiter` | Standard async socket receive into user buffer. |
 | `ring.connect(fd, addr, addr_len)` | `ConnectAwaiter` | Asynchronous non-blocking socket connect. |
 | `ring.send(fd, data)` | `SendAwaiter` | Async socket transmission (`std::string_view` or `span`). |
+| `ring.send_all(fd, data)` | `Task<int>` | Resilient transmission loop guaranteeing all bytes are sent. |
 | `ring.send_zc(fd, data)` | `SendZcAwaiter` | Zero-copy transmission (`IORING_OP_SEND_ZC`). |
 | `ring.send_zc_fixed(fd, ...)` | `SendZcAwaiter` | Zero-copy transmission using pre-registered fixed buffers. |
 | `ring.recvmsg(fd, msghdr*)` | `RecvmsgAwaiter` | Asynchronous datagram reception (UDP / HTTP/3). |

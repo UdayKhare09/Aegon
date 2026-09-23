@@ -372,5 +372,27 @@ int IoUring::submit_and_wait(uint32_t min_complete) {
     return ret;
 }
 
+Task<int> IoUring::send_all(int fd, const void* buf, size_t len) {
+    if (len == 0) co_return 0;
+    size_t total_sent = 0;
+    const uint8_t* ptr = static_cast<const uint8_t*>(buf);
+    while (total_sent < len) {
+        int n = co_await send(fd, std::span<const uint8_t>(ptr + total_sent, len - total_sent));
+        if (n <= 0) {
+            co_return (total_sent > 0) ? static_cast<int>(total_sent) : n;
+        }
+        total_sent += static_cast<size_t>(n);
+    }
+    co_return static_cast<int>(total_sent);
+}
+
+Task<int> IoUring::send_all(int fd, std::string_view data) {
+    co_return co_await send_all(fd, data.data(), data.size());
+}
+
+Task<int> IoUring::send_all(int fd, std::span<const uint8_t> data) {
+    co_return co_await send_all(fd, data.data(), data.size());
+}
+
 } // namespace aegon::core
 

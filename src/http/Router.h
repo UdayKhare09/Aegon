@@ -274,6 +274,10 @@ public:
         return *this;
     }
 
+    Router& ws_echo(std::string_view pattern) {
+        return ws(pattern);
+    }
+
     [[nodiscard]] const WebSocketRouteEntry* find_ws(std::string_view path) const noexcept {
         if (ws_routes_.empty()) return nullptr;
         std::string_view norm_path = path;

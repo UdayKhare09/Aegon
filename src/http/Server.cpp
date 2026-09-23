@@ -370,7 +370,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
             if (status == v1::ParseStatus::NeedMoreData) {
                 if (req.expect_continue()) {
                     req.set_expect_continue(false);
-                    (void)(co_await loop.ring().send(client_fd, "HTTP/1.1 100 Continue\r\n\r\n"));
+                    (void)(co_await loop.ring().send_all(client_fd, "HTTP/1.1 100 Continue\r\n\r\n"));
                 }
                 break;
             }
@@ -380,7 +380,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 bad_res.status(StatusCode::BadRequest).text("Bad Request");
                 std::string out;
                 bad_res.serialize_http1(out);
-                (void)(co_await loop.ring().send(client_fd, out));
+                (void)(co_await loop.ring().send_all(client_fd, out));
                 keep_alive = false;
                 break;
             }
@@ -390,7 +390,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 ni_res.status(StatusCode::NotImplemented).text("Not Implemented");
                 std::string out;
                 ni_res.serialize_http1(out);
-                (void)(co_await loop.ring().send(client_fd, out));
+                (void)(co_await loop.ring().send_all(client_fd, out));
                 keep_alive = false;
                 break;
             }
@@ -398,14 +398,14 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
             // RFC 9113 §3.2 HTTP/1.1 to HTTP/2 Cleartext Upgrade
             if (req.is_upgrade_h2c()) {
                 if (!resp_batch.empty()) {
-                    (void)(co_await loop.ring().send(client_fd, resp_batch));
+                    (void)(co_await loop.ring().send_all(client_fd, resp_batch));
                     resp_batch.clear();
                 }
                 std::string upgrade_res =
                     "HTTP/1.1 101 Switching Protocols\r\n"
                     "Connection: Upgrade\r\n"
                     "Upgrade: h2c\r\n\r\n";
-                (void)(co_await loop.ring().send(client_fd, upgrade_res));
+                (void)(co_await loop.ring().send_all(client_fd, upgrade_res));
                 req_accum.erase(0, bytes_consumed);
                 std::string h2_settings = std::string(req.headers().get("HTTP2-Settings").value_or(""));
                 co_await handle_http2_upgrade(loop, client_fd, std::move(req), std::move(h2_settings), std::move(req_accum));
@@ -427,19 +427,19 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                     bad_res.status(StatusCode::BadRequest).text("Missing Sec-WebSocket-Key");
                     std::string out;
                     bad_res.serialize_http1(out);
-                    (void)(co_await loop.ring().send(client_fd, out));
+                    (void)(co_await loop.ring().send_all(client_fd, out));
                     keep_alive = false;
                     break;
                 }
 
                 if (!resp_batch.empty()) {
-                    (void)(co_await loop.ring().send(client_fd, resp_batch));
+                    (void)(co_await loop.ring().send_all(client_fd, resp_batch));
                     resp_batch.clear();
                 }
 
                 std::string accept_val = websocket::compute_accept_key(key);
                 std::string upgrade_res = websocket::build_handshake_response(accept_val);
-                (void)(co_await loop.ring().send(client_fd, upgrade_res));
+                (void)(co_await loop.ring().send_all(client_fd, upgrade_res));
 
                 std::string trailing;
                 if (bytes_consumed < req_accum.size()) {
@@ -470,12 +470,12 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
 
             if (res.has_file()) {
                 if (!resp_batch.empty()) {
-                    (void)(co_await loop.ring().send(client_fd, resp_batch));
+                    (void)(co_await loop.ring().send_all(client_fd, resp_batch));
                     resp_batch.clear();
                 }
                 std::string header_out;
                 res.serialize_http1_headers(header_out);
-                (void)(co_await loop.ring().send(client_fd, header_out));
+                (void)(co_await loop.ring().send_all(client_fd, header_out));
                 co_await stream_file_zero_copy(loop, client_fd, res.file_path(), res.file_size());
             } else {
                 res.append_http1(resp_batch);
@@ -493,7 +493,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
         }
 
         if (!resp_batch.empty()) {
-            (void)(co_await loop.ring().send(client_fd, resp_batch));
+            (void)(co_await loop.ring().send_all(client_fd, resp_batch));
             resp_batch.clear();
         }
 

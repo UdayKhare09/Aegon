@@ -24,7 +24,7 @@ core::Task<int> WebSocketConnection::write_frame(std::span<const uint8_t> header
         if (!payload.empty()) {
             std::memcpy(buf + header.size(), payload.data(), payload.size());
         }
-        co_return co_await loop_.ring().send(client_fd_, std::string_view(buf, header.size() + payload.size()));
+        co_return co_await loop_.ring().send_all(client_fd_, std::string_view(buf, header.size() + payload.size()));
     } else {
         std::string frame;
         frame.reserve(header.size() + payload.size());
@@ -32,13 +32,13 @@ core::Task<int> WebSocketConnection::write_frame(std::span<const uint8_t> header
             frame.append(reinterpret_cast<const char*>(header.data()), header.size());
         }
         frame.append(payload);
-        co_return co_await loop_.ring().send(client_fd_, frame);
+        co_return co_await loop_.ring().send_all(client_fd_, frame);
     }
 }
 
 core::Task<int> WebSocketConnection::write_raw(std::string_view bytes) {
     if (!is_open_ || client_fd_ < 0 || bytes.empty()) co_return -1;
-    co_return co_await loop_.ring().send(client_fd_, bytes);
+    co_return co_await loop_.ring().send_all(client_fd_, bytes);
 }
 
 core::Task<void> WebSocketConnection::close_transport() {

@@ -105,7 +105,7 @@ core::Task<bool> TlsClientStream::flush_outbound() {
     while (BIO_pending(out_bio_) > 0) {
         int n = BIO_read(out_bio_, out_buf, sizeof(out_buf));
         if (n > 0) {
-            int sent = co_await loop_->ring().send(
+            int sent = co_await loop_->ring().send_all(
                 socket_fd_,
                 std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(out_buf), static_cast<size_t>(n)));
             if (sent <= 0) {

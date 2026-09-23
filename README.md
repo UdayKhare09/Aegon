@@ -26,10 +26,11 @@
 - **Linux-Native `io_uring` Engine**: Complete kernel bypass with zero-syscall request loops via `IORING_OP_RECV_MULTISHOT`, `IORING_OP_ACCEPT_DIRECT`, and kernel-managed buffer rings (`io_uring_buf_ring`).
 - **C++26 Symmetric-Transfer Coroutines**: Pure `aegon::core::Task<T>` async programming with zero heap frame allocations on hot paths.
 - **Hardware-Aware Stepped SIMD**: 4-tier vector fallback engine (`AVX-512BW/VL` → `AVX2/BMI2` → `SSE4.2` → `Scalar`) accelerating case-insensitive header matching, URL decoding, and token discovery.
-- **Pure Native HTTP/1.1, HTTP/2, and HTTP/3**:
+- **Pure Native Protocols (HTTP/1.1, HTTP/2, HTTP/3 & WebSocket)**:
   - Full **HTTP/1.1** pipelining with batched contiguous response streaming.
   - Full **HTTP/2** multiplexing (`h2c` and `h2-TLS`) with user-space batched frame aggregation and zero-alloc stack header packing.
   - Full **HTTP/3 over QUIC** (RFC 9000 / RFC 9114) via `ngtcp2` + `nghttp3` across all TLS listener ports with dual-stack `SO_REUSEPORT` UDP sockets and progressive `Alt-Svc` header emission.
+  - Full **RFC 6455 WebSocket** engine with 5-tier SIMD/SWAR hardware unmasking (`AVX2` → `SSE2` / `ARM NEON` → `SWAR 64-bit` → `32-bit` → `bitwise tail`), zero-copy frame parsing, and backpressure-resilient streaming.
 - **Built-In High-Speed Static File Serving**: First-class `router.static_files(...)` supporting precompressed (`.br`, `.gz`) sidecars and nanosecond-precision disk-following in-memory caching (`mtime` revalidation).
 - **Static Compile-Time ORM**: Type-safe SQL query builder, migrations, optimistic concurrency control (OCC), and transactional look-aside caching.
 - **Native Async Redis**: High-throughput Redis client built directly onto the `io_uring` ring buffer supporting standalone, Sentinel, and Redis Cluster.

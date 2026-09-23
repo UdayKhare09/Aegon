@@ -4,6 +4,7 @@
 #include <coroutine>
 #include <cstdint>
 #include <span>
+#include "Task.h"
 #include <stdexcept>
 #include <system_error>
 #include <sys/socket.h>
@@ -293,6 +294,10 @@ public:
     [[nodiscard]] SendAwaiter send(int fd, std::string_view data) noexcept {
         return SendAwaiter{*this, fd, data.data(), data.size()};
     }
+
+    [[nodiscard]] Task<int> send_all(int fd, const void* buf, size_t len);
+    [[nodiscard]] Task<int> send_all(int fd, std::string_view data);
+    [[nodiscard]] Task<int> send_all(int fd, std::span<const uint8_t> data);
 
     [[nodiscard]] SendZcAwaiter send_zc(int fd, std::span<const uint8_t> data, int zc_flags = 0) noexcept {
         return SendZcAwaiter{*this, fd, data.data(), data.size(), zc_flags, -1};

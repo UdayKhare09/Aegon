@@ -76,6 +76,11 @@ public:
         return *this;
     }
 
+    Server& ws_echo(std::string_view pattern) {
+        router_.ws_echo(pattern);
+        return *this;
+    }
+
     template <typename ClusterT, typename OptionsT>
     Server& proxy(std::string_view pattern,
                   ClusterT cluster,
