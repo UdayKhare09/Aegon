@@ -78,16 +78,27 @@ void test_frame_header_parsing_and_serializing() {
     unmask_payload_inplace(payload, 5, header.mask_key);
     assert(std::string_view(reinterpret_cast<const char*>(payload), 5) == "Hello");
 
-    // Test AVX2 SIMD unmasking on > 32 bytes
-    std::string test_data(128, 'A');
-    uint32_t mask_key = 0x12345678;
-    std::string masked = test_data;
-    unmask_payload_inplace(reinterpret_cast<uint8_t*>(masked.data()), masked.size(), mask_key);
-    assert(masked != test_data);
-    unmask_payload_inplace(reinterpret_cast<uint8_t*>(masked.data()), masked.size(), mask_key);
-    assert(masked == test_data);
+    // Test across all size boundaries (Tiers 1-5: 0 to 135 bytes) against golden reference
+    uint32_t mask_key = 0x9a8b7c6d;
+    const uint8_t* k_bytes = reinterpret_cast<const uint8_t*>(&mask_key);
+    for (size_t size = 0; size <= 135; ++size) {
+        std::string original(size, '\0');
+        for (size_t j = 0; j < size; ++j) original[j] = static_cast<char>((j * 31 + 7) & 0xFF);
+        std::string test_buf = original;
+        unmask_payload_inplace(reinterpret_cast<uint8_t*>(test_buf.data()), test_buf.size(), mask_key);
 
-    std::cout << "  -> Passed\n";
+        // Verify against golden scalar reference
+        for (size_t j = 0; j < size; ++j) {
+            uint8_t expected = static_cast<uint8_t>(original[j]) ^ k_bytes[j % 4];
+            assert(static_cast<uint8_t>(test_buf[j]) == expected);
+        }
+
+        // Unmasking again with same key must restore original
+        unmask_payload_inplace(reinterpret_cast<uint8_t*>(test_buf.data()), test_buf.size(), mask_key);
+        assert(test_buf == original);
+    }
+
+    std::cout << "  -> Passed (Tiers 1-5 validated across all lengths 0-135 bytes)\n";
 }
 
 // 3. Test In-Memory Mock Transport to verify WebSocketSession abstraction

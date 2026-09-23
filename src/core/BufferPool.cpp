@@ -14,10 +14,10 @@ BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries, s
     }
 
     int ret = 0;
-    while (entries_ >= 256) {
+    while (entries_ >= 1) {
         buf_ring_ = io_uring_setup_buf_ring(ring_, entries_, bgid_, 0, &ret);
         if (buf_ring_) break;
-        if (ret == -ENOMEM || ret == -EPERM) {
+        if ((ret == -ENOMEM || ret == -EPERM) && entries_ > 1) {
             entries_ /= 2;
         } else {
             break;

@@ -7,8 +7,10 @@
 #include <array>
 #include <cstring>
 #include <endian.h>
-#if defined(__AVX2__)
+#if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
 #endif
 
 namespace aegon::http::websocket {
@@ -127,7 +129,13 @@ inline FrameParseResult parse_frame_header(std::string_view buf, FrameHeader& ou
 }
 
 /**
- * @brief In-place AVX2/SIMD unmasking of client WebSocket payloads.
+ * @brief High-performance tiered in-place unmasking of client WebSocket payloads.
+ *
+ * Tier 1: AVX2 256-bit vectorization (32 bytes / iteration)
+ * Tier 2: SSE2 / ARM NEON 128-bit vectorization (16 bytes / iteration)
+ * Tier 3: SWAR 64-bit word XOR (8 bytes / iteration)
+ * Tier 4: 32-bit word XOR (4 bytes)
+ * Tier 5: Scalar bitwise tail (1-3 bytes)
  */
 inline void unmask_payload_inplace(uint8_t* data, size_t len, uint32_t mask_key) noexcept {
     if (len == 0 || mask_key == 0) return;
@@ -137,7 +145,6 @@ inline void unmask_payload_inplace(uint8_t* data, size_t len, uint32_t mask_key)
 
 #if defined(__AVX2__)
     if (len >= 32) {
-        // Broadcast the 4-byte mask key across all 32 bytes of the __m256i register
         __m256i mask256 = _mm256_set1_epi32(static_cast<int>(mask_key));
         size_t simd_limit = len & ~size_t(31);
         for (; i < simd_limit; i += 32) {
@@ -148,9 +155,52 @@ inline void unmask_payload_inplace(uint8_t* data, size_t len, uint32_t mask_key)
     }
 #endif
 
-    // Process remaining bytes
+#if defined(__SSE2__) || (defined(_M_X64) && !defined(_M_ARM64))
+    if (len - i >= 16) {
+        __m128i mask128 = _mm_set1_epi32(static_cast<int>(mask_key));
+        size_t sse_limit = i + ((len - i) & ~size_t(15));
+        for (; i < sse_limit; i += 16) {
+            __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+            chunk = _mm_xor_si128(chunk, mask128);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(data + i), chunk);
+        }
+    }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+    if (len - i >= 16) {
+        uint8x16_t mask_vec = vreinterpretq_u8_u32(vdupq_n_u32(mask_key));
+        size_t neon_limit = i + ((len - i) & ~size_t(15));
+        for (; i < neon_limit; i += 16) {
+            uint8x16_t chunk = vld1q_u8(data + i);
+            chunk = veorq_u8(chunk, mask_vec);
+            vst1q_u8(data + i, chunk);
+        }
+    }
+#endif
+
+    // Tier 3: SWAR 64-bit word XOR (8 bytes at a time)
+    if (len - i >= 8) {
+        uint64_t mask64 = (static_cast<uint64_t>(mask_key) << 32) | static_cast<uint64_t>(mask_key);
+        size_t word_limit = i + ((len - i) & ~size_t(7));
+        for (; i < word_limit; i += 8) {
+            uint64_t chunk;
+            std::memcpy(&chunk, data + i, 8);
+            chunk ^= mask64;
+            std::memcpy(data + i, &chunk, 8);
+        }
+    }
+
+    // Tier 4: 32-bit word XOR (4 bytes)
+    if (len - i >= 4) {
+        uint32_t chunk;
+        std::memcpy(&chunk, data + i, 4);
+        chunk ^= mask_key;
+        std::memcpy(data + i, &chunk, 4);
+        i += 4;
+    }
+
+    // Tier 5: Scalar bitwise tail (1-3 bytes)
     for (; i < len; ++i) {
-        data[i] ^= k[i % 4];
+        data[i] ^= k[i & 3];
     }
 }
 
