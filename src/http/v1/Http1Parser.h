@@ -106,6 +106,8 @@ public:
         req.clear_params();
         req.set_expect_continue(false);
         req.set_upgrade_h2c(false);
+        req.set_websocket_upgrade(false);
+        req.set_sec_websocket_key({});
 
         size_t content_length = 0;
         bool has_content_length = false;
@@ -187,7 +189,11 @@ public:
             } else if (iequals(name, "Upgrade")) {
                 if (iequals(value, "h2c")) {
                     req.set_upgrade_h2c(true);
+                } else if (iequals(value, "websocket") || value.find("websocket") != std::string_view::npos || value.find("WebSocket") != std::string_view::npos) {
+                    req.set_websocket_upgrade(true);
                 }
+            } else if (iequals(name, "Sec-WebSocket-Key")) {
+                req.set_sec_websocket_key(value);
             }
 
             cursor = header_end + 2;

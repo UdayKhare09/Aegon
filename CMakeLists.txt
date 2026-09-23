@@ -145,6 +145,8 @@ add_library(aegon_http
     src/http/client/HttpClient.cpp
     src/http/client/Http2ClientSession.cpp
     src/http/client/Http3ClientSession.cpp
+    src/http/websocket/WebSocketSession.cpp
+    src/http/websocket/WebSocketConnection.cpp
 )
 
 target_include_directories(aegon_http PUBLIC
@@ -499,8 +501,14 @@ add_executable(test_compress
 )
 target_link_libraries(test_compress PRIVATE aegon_http aegon_core ${LIBDEFLATE_LIB})
 
+add_executable(test_websocket
+    tests/test_websocket.cpp
+)
+target_link_libraries(test_websocket PRIVATE aegon_http aegon_core)
+
 # Test Registrations for CTest
 add_test(NAME version COMMAND test_version)
+add_test(NAME websocket COMMAND test_websocket)
 add_test(NAME simd_string COMMAND test_simd_string)
 add_test(NAME foundational_types COMMAND test_foundational_types)
 add_test(NAME dto_validation COMMAND test_dto_validation)

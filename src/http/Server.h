@@ -66,6 +66,16 @@ public:
         return *this;
     }
 
+    Server& ws(std::string_view pattern, websocket::WebSocketHandler handler = nullptr) {
+        router_.ws(pattern, std::move(handler));
+        return *this;
+    }
+
+    Server& ws(std::string_view pattern, websocket::WebSocketEchoHandler echo_handler) {
+        router_.ws(pattern, std::move(echo_handler));
+        return *this;
+    }
+
     template <typename ClusterT, typename OptionsT>
     Server& proxy(std::string_view pattern,
                   ClusterT cluster,

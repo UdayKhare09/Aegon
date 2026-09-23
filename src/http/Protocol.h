@@ -101,6 +101,7 @@ enum class StatusCode : uint16_t {
     UriTooLong = 414,
     UnsupportedMediaType = 415,
     UnprocessableEntity = 422,
+    UpgradeRequired = 426,
     TooManyRequests = 429,
 
     // 5xx Server Error
@@ -143,6 +144,7 @@ constexpr std::string_view status_phrase(StatusCode code) noexcept {
         case StatusCode::UriTooLong: return "URI Too Long";
         case StatusCode::UnsupportedMediaType: return "Unsupported Media Type";
         case StatusCode::UnprocessableEntity: return "Unprocessable Entity";
+        case StatusCode::UpgradeRequired: return "Upgrade Required";
         case StatusCode::TooManyRequests: return "Too Many Requests";
         case StatusCode::InternalServerError: return "Internal Server Error";
         case StatusCode::NotImplemented: return "Not Implemented";

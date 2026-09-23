@@ -5,6 +5,7 @@
 #include "http/RadixTree.h"
 #include "http/RouteGroup.h"
 #include "http/Middleware.h"
+#include "http/websocket/WebSocket.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -240,6 +241,58 @@ public:
      */
     Router& static_files(std::string_view prefix, std::string_view directory, StaticFilesOptions options = {});
 
+    struct WebSocketRouteEntry {
+        websocket::WebSocketHandler handler{nullptr};
+        websocket::WebSocketEchoHandler echo_handler{nullptr};
+    };
+
+    /**
+     * @brief Registers an RFC 6455 WebSocket route.
+     * Also registers an HTTP GET fallback returning 426 Upgrade Required for non-upgrade requests.
+     */
+    Router& ws(std::string_view pattern, websocket::WebSocketHandler handler = nullptr) {
+        std::string norm = normalize_route_path(pattern);
+        ws_routes_[norm] = WebSocketRouteEntry{.handler = std::move(handler), .echo_handler = nullptr};
+        get(pattern, [](Context& ctx) {
+            ctx.res().status(StatusCode::UpgradeRequired)
+                     .header("Upgrade", "websocket")
+                     .header("Connection", "Upgrade")
+                     .text("426 Upgrade Required: WebSocket connection expected\n");
+        });
+        return *this;
+    }
+
+    Router& ws(std::string_view pattern, websocket::WebSocketEchoHandler echo_handler) {
+        std::string norm = normalize_route_path(pattern);
+        ws_routes_[norm] = WebSocketRouteEntry{.handler = nullptr, .echo_handler = std::move(echo_handler)};
+        get(pattern, [](Context& ctx) {
+            ctx.res().status(StatusCode::UpgradeRequired)
+                     .header("Upgrade", "websocket")
+                     .header("Connection", "Upgrade")
+                     .text("426 Upgrade Required: WebSocket connection expected\n");
+        });
+        return *this;
+    }
+
+    [[nodiscard]] const WebSocketRouteEntry* find_ws(std::string_view path) const noexcept {
+        if (ws_routes_.empty()) return nullptr;
+        std::string_view norm_path = path;
+        if (norm_path.empty()) {
+            norm_path = "/";
+        } else if (norm_path.size() > 1 && norm_path.ends_with('/')) {
+            norm_path.remove_suffix(1);
+        }
+        auto it = ws_routes_.find(norm_path);
+        if (it != ws_routes_.end()) {
+            return &it->second;
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] bool has_ws(std::string_view path) const noexcept {
+        return find_ws(path) != nullptr;
+    }
+
     using MatchResult = RadixTree::MatchResult;
 
     [[nodiscard]] MatchResult match(Request& req) const {
@@ -432,6 +485,7 @@ public:
 
 private:
     std::unordered_map<std::string, StaticRouteEntry, StringHash, StringEq> static_routes_;
+    std::unordered_map<std::string, WebSocketRouteEntry, StringHash, StringEq> ws_routes_;
     RadixTree tree_;
     std::vector<MiddlewareFn> global_middleware_;
     ErrorHandler error_handler_{nullptr};

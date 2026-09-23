@@ -5,6 +5,8 @@
 #include "http/tls/TlsContext.h"
 #include "http/tls/TlsStream.h"
 #include "http/v3/Http3Server.h"
+#include "http/websocket/WebSocketHandshake.h"
+#include "http/websocket/WebSocketConnection.h"
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
@@ -407,6 +409,46 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 req_accum.erase(0, bytes_consumed);
                 std::string h2_settings = std::string(req.headers().get("HTTP2-Settings").value_or(""));
                 co_await handle_http2_upgrade(loop, client_fd, std::move(req), std::move(h2_settings), std::move(req_accum));
+                co_return;
+            }
+
+            // RFC 6455 WebSocket Upgrade
+            const auto* ws_entry = router_.find_ws(req.path());
+            if (ws_entry && req.is_websocket_upgrade()) {
+                std::string_view key = req.sec_websocket_key();
+                if (key.empty()) {
+                    if (auto k = req.headers().get("Sec-WebSocket-Key")) {
+                        key = *k;
+                    }
+                }
+
+                if (key.empty()) {
+                    Response bad_res;
+                    bad_res.status(StatusCode::BadRequest).text("Missing Sec-WebSocket-Key");
+                    std::string out;
+                    bad_res.serialize_http1(out);
+                    (void)(co_await loop.ring().send(client_fd, out));
+                    keep_alive = false;
+                    break;
+                }
+
+                if (!resp_batch.empty()) {
+                    (void)(co_await loop.ring().send(client_fd, resp_batch));
+                    resp_batch.clear();
+                }
+
+                std::string accept_val = websocket::compute_accept_key(key);
+                std::string upgrade_res = websocket::build_handshake_response(accept_val);
+                (void)(co_await loop.ring().send(client_fd, upgrade_res));
+
+                std::string trailing;
+                if (bytes_consumed < req_accum.size()) {
+                    trailing = req_accum.substr(bytes_consumed);
+                }
+
+                websocket::WebSocketConnection ws_conn(loop, client_fd, std::string(req.path()),
+                                                      ws_entry->handler, ws_entry->echo_handler);
+                co_await ws_conn.run(std::move(trailing));
                 co_return;
             }
 

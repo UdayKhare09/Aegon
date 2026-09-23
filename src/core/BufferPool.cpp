@@ -14,7 +14,15 @@ BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries, s
     }
 
     int ret = 0;
-    buf_ring_ = io_uring_setup_buf_ring(ring_, entries_, bgid_, 0, &ret);
+    while (entries_ >= 256) {
+        buf_ring_ = io_uring_setup_buf_ring(ring_, entries_, bgid_, 0, &ret);
+        if (buf_ring_) break;
+        if (ret == -ENOMEM || ret == -EPERM) {
+            entries_ /= 2;
+        } else {
+            break;
+        }
+    }
     if (!buf_ring_) {
         throw std::system_error(-ret, std::generic_category(), "io_uring_setup_buf_ring failed");
     }

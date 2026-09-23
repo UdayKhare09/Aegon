@@ -36,6 +36,20 @@ void IoUring::init(const IoUringConfig& config) {
         }
     }
 
+    // Graceful fallback if RLIMIT_MEMLOCK is restricted on host
+    uint32_t current_entries = config.entries;
+    while (ret == -ENOMEM && current_entries > 128) {
+        current_entries /= 2;
+        std::memset(&params, 0, sizeof(params));
+        params.flags = config.flags;
+        ret = io_uring_queue_init_params(current_entries, &ring_, &params);
+        if (ret == 0) {
+            initialized_ = true;
+            sqpoll_enabled_ = false;
+            return;
+        }
+    }
+
     throw std::system_error(-ret, std::generic_category(), "io_uring_queue_init_params failed");
 }
 

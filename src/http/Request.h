@@ -320,6 +320,12 @@ public:
     [[nodiscard]] bool is_upgrade_h2c() const noexcept { return is_upgrade_h2c_; }
     void set_upgrade_h2c(bool u) noexcept { is_upgrade_h2c_ = u; }
 
+    [[nodiscard]] bool is_websocket_upgrade() const noexcept { return is_websocket_upgrade_; }
+    void set_websocket_upgrade(bool u) noexcept { is_websocket_upgrade_ = u; }
+
+    [[nodiscard]] std::string_view sec_websocket_key() const noexcept { return sec_websocket_key_; }
+    void set_sec_websocket_key(std::string_view k) noexcept { sec_websocket_key_ = k; }
+
     void set_decoded_body(std::string body) {
         decoded_body_storage_ = std::move(body);
         body_ = decoded_body_storage_;
@@ -386,6 +392,8 @@ private:
     HeaderMap headers_{};
     bool expect_continue_{false};
     bool is_upgrade_h2c_{false};
+    bool is_websocket_upgrade_{false};
+    std::string_view sec_websocket_key_{};
 
     std::array<RouteParam, MAX_ROUTE_PARAMS> params_{};
     size_t param_count_{0};
