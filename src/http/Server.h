@@ -255,8 +255,8 @@ private:
     core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
     core::Task<void> handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data);
     core::Task<void> handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings, std::string initial_data);
-    core::Task<void> handle_tls_connection(core::EventLoop& loop, int client_fd);
-    core::Task<void> accept_loop(core::EventLoop& loop, int listen_fd, bool is_tls);
+    core::Task<void> handle_tls_connection(core::EventLoop& loop, int client_fd, uint16_t port);
+    core::Task<void> accept_loop(core::EventLoop& loop, int listen_fd, uint16_t port, bool is_tls);
     core::Task<bool> stream_file_zero_copy(core::EventLoop& loop, int client_fd, const std::string& file_path, size_t file_size);
     int create_listen_socket(uint16_t port, const std::string& host);
 
@@ -280,7 +280,7 @@ private:
     bool tls_enabled_{false};
     bool http3_enabled_{true}; // Default to enabled when TLS is used
     std::unique_ptr<tls::TlsContext> tls_ctx_;
-    std::unique_ptr<v3::Http3Server> h3_server_;
+    std::vector<std::unique_ptr<v3::Http3Server>> h3_servers_;
 };
 
 } // namespace aegon::http

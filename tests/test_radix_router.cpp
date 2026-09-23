@@ -348,6 +348,120 @@ void test_async_and_sync_handlers() {
     std::cout << "  -> PASS: Both sync and async handlers work seamlessly.\n";
 }
 
+void test_static_files() {
+    std::cout << "[Test 7] Testing static file serving, precompression & RAM cache mtime revalidation...\n";
+
+    std::string tmp_dir = "/tmp/aegon_static_test_" + std::to_string(::getpid());
+    ::mkdir(tmp_dir.c_str(), 0755);
+
+    std::string css_file = tmp_dir + "/style.css";
+    std::string br_file = tmp_dir + "/style.css.br";
+    std::string gz_file = tmp_dir + "/style.css.gz";
+
+    {
+        std::ofstream f(css_file);
+        f << "body { color: red; }";
+    }
+    {
+        std::ofstream f(br_file);
+        f << "BR_COMPRESSED_DATA";
+    }
+    {
+        std::ofstream f(gz_file);
+        f << "GZ_COMPRESSED_DATA";
+    }
+
+    Router router;
+    router.static_files("/static", tmp_dir);
+
+    // 1. Uncompressed GET
+    {
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/static/style.css");
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.status() == StatusCode::Ok);
+        TEST_CHECK(resp.body() == "body { color: red; }");
+        TEST_CHECK(resp.headers().get("Content-Type") == "text/css; charset=utf-8" || resp.headers().get("Content-Type") == "text/css");
+    }
+
+    // 2. Precompressed Brotli
+    {
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/static/style.css");
+        req.headers().set("Accept-Encoding", "gzip, deflate, br");
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.status() == StatusCode::Ok);
+        TEST_CHECK(resp.body() == "BR_COMPRESSED_DATA");
+        TEST_CHECK(resp.headers().get("Content-Encoding") == "br");
+    }
+
+    // 3. Precompressed Gzip
+    {
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/static/style.css");
+        req.headers().set("Accept-Encoding", "gzip, deflate");
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.status() == StatusCode::Ok);
+        TEST_CHECK(resp.body() == "GZ_COMPRESSED_DATA");
+        TEST_CHECK(resp.headers().get("Content-Encoding") == "gzip");
+    }
+
+    // 4. Memory cache invalidation on disk modification (mtime tracking)
+    {
+        // Modify file on disk with a tiny sleep to ensure mtime changes
+        ::usleep(10000); // 10ms
+        {
+            std::ofstream f(css_file, std::ios::trunc);
+            f << "body { color: blue; }";
+        }
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/static/style.css");
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.body() == "body { color: blue; }");
+    }
+
+    // 5. Path traversal security guard
+    {
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/static/../etc/passwd");
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.status() == StatusCode::NotFound);
+    }
+
+    // Cleanup
+    ::unlink(css_file.c_str());
+    ::unlink(br_file.c_str());
+    ::unlink(gz_file.c_str());
+    ::rmdir(tmp_dir.c_str());
+
+    std::cout << "  -> PASS: Static files serving, sidecar precompression & mtime cache revalidation verified.\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "   AEGON RADIX TREE ROUTER & ROUTE GROUP TEST SUITE    \n";
@@ -359,6 +473,7 @@ int main() {
     test_route_groups();
     test_method_not_allowed();
     test_async_and_sync_handlers();
+    test_static_files();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL RADIX ROUTER TESTS PASSED SUCCESSFULLY! <<<\n";

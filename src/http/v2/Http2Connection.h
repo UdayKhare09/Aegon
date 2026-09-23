@@ -62,6 +62,8 @@ public:
      */
     core::Task<bool> flush_outbound();
 
+    void set_alt_svc(std::string alt_svc) noexcept { alt_svc_ = std::move(alt_svc); }
+
     [[nodiscard]] bool wants_read() const noexcept;
     [[nodiscard]] bool wants_write() const noexcept;
     [[nodiscard]] bool is_closed() const noexcept;
@@ -88,6 +90,7 @@ private:
     std::vector<int32_t> pending_dispatch_;
     OutputSender sender_{nullptr};
     std::string outbound_buf_;
+    std::string alt_svc_;
     bool closed_{false};
 };
 

@@ -120,6 +120,8 @@ public:
         if (ext == ".txt") return "text/plain; charset=utf-8";
         if (ext == ".pdf") return "application/pdf";
         if (ext == ".wasm") return "application/wasm";
+        if (ext == ".webp") return "image/webp";
+        if (ext == ".woff2") return "font/woff2";
         if (ext == ".xml") return "application/xml; charset=utf-8";
         return "application/octet-stream";
     }

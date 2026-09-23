@@ -13,12 +13,23 @@
 
 namespace aegon::http {
 
+struct StaticFilesOptions {
+    bool precompressed{true};
+    bool cache_in_memory{true};
+    std::string index_file{"index.html"};
+};
+
 class Router;
 
 class RouteGroup {
 public:
     RouteGroup(Router& router, std::string prefix, std::vector<MiddlewareFn> inherited = {})
         : router_(router), prefix_(std::move(prefix)), middleware_(std::move(inherited)) {}
+
+    /**
+     * @brief Serves static files rooted at `directory` under this group's prefix.
+     */
+    RouteGroup& static_files(std::string_view path, std::string_view directory, StaticFilesOptions options = {});
 
     /**
      * @brief Appends middleware to this route group's execution chain.

@@ -220,6 +220,11 @@ void Http2Connection::submit_response(Http2Stream* stream) {
                 reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
     }
 
+    if (!alt_svc_.empty() && !stream->res.headers().contains("alt-svc")) {
+        push_nv(reinterpret_cast<const uint8_t*>("alt-svc"), 7,
+                reinterpret_cast<const uint8_t*>(alt_svc_.data()), alt_svc_.size());
+    }
+
     nghttp2_data_provider prd;
     prd.source.ptr = stream;
     prd.read_callback = data_source_read_cb;

@@ -40,7 +40,7 @@ Server::Server(Server&& other) noexcept
       tls_enabled_(other.tls_enabled_),
       http3_enabled_(other.http3_enabled_),
       tls_ctx_(std::move(other.tls_ctx_)),
-      h3_server_(std::move(other.h3_server_))
+      h3_servers_(std::move(other.h3_servers_))
 {
 }
 
@@ -64,7 +64,7 @@ Server& Server::operator=(Server&& other) noexcept {
         tls_enabled_ = other.tls_enabled_;
         http3_enabled_ = other.http3_enabled_;
         tls_ctx_ = std::move(other.tls_ctx_);
-        h3_server_ = std::move(other.h3_server_);
+        h3_servers_ = std::move(other.h3_servers_);
     }
     return *this;
 }
@@ -199,7 +199,7 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_
     (void)(co_await loop.ring().close(client_fd));
 }
 
-core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client_fd) {
+core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client_fd, uint16_t port) {
     tls::TlsStream tls_stream(loop, client_fd, tls_ctx_->native_handle());
     bool ok = co_await tls_stream.handshake();
     if (!ok) {
@@ -216,6 +216,9 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
         };
 
         v2::Http2Connection h2(loop, client_fd, router_, services_.get(), std::move(sender));
+        if (http3_enabled_) {
+            h2.set_alt_svc("h3=\":" + std::to_string(port) + "\"; ma=86400");
+        }
         ok = co_await h2.init();
         if (!ok) {
             (void)(co_await loop.ring().close(client_fd));
@@ -237,6 +240,11 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
         std::string resp_batch;
         resp_batch.reserve(4096);
         char read_buf[8192];
+
+        // Progressive protocol ladder on HTTP/1.1 TLS
+        const std::string alt_svc_hdr = http3_enabled_
+            ? ("h3=\":" + std::to_string(port) + "\"; ma=86400, h2=\":" + std::to_string(port) + "\"; ma=86400")
+            : ("h2=\":" + std::to_string(port) + "\"; ma=86400");
 
         while (running_) {
             int n = co_await tls_stream.read_plaintext(read_buf, sizeof(read_buf));
@@ -295,8 +303,8 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
                     res.header("Connection", "close");
                 }
 
-                if (http3_enabled_) {
-                    res.set_header_owned("alt-svc", "h3=\":" + std::to_string(port_) + "\"; ma=86400");
+                if (!alt_svc_hdr.empty()) {
+                    res.set_header_owned("alt-svc", alt_svc_hdr);
                 }
 
                 res.append_http1(resp_batch);
@@ -497,7 +505,7 @@ core::Task<bool> Server::stream_file_zero_copy(core::EventLoop& loop, int client
     co_return ok;
 }
 
-core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, bool is_tls) {
+core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, uint16_t port, bool is_tls) {
     while (running_) {
         auto stream = loop.ring().accept_multishot(listen_fd);
         while (running_) {
@@ -510,7 +518,7 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, bool 
             int nodelay = 1;
             ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
             if (is_tls && tls_ctx_) {
-                loop.spawn(handle_tls_connection(loop, accept_res.fd));
+                loop.spawn(handle_tls_connection(loop, accept_res.fd, port));
             } else {
                 loop.spawn(handle_connection(loop, accept_res.fd));
             }
@@ -538,10 +546,15 @@ void Server::run() {
         active_listeners[0].tls = true;
     }
 
-    std::vector<std::pair<int, bool>> thread_listeners;
+    struct ActiveListener {
+        int fd;
+        uint16_t port;
+        bool is_tls;
+    };
+    std::vector<ActiveListener> thread_listeners;
     for (const auto& l : active_listeners) {
         int fd = create_listen_socket(l.port, l.host);
-        thread_listeners.emplace_back(fd, l.tls);
+        thread_listeners.push_back({fd, l.port, l.tls});
     }
 
     core::IoUringConfig ring_cfg;
@@ -551,8 +564,8 @@ void Server::run() {
     ring_cfg.sq_thread_cpu = sq_thread_cpu_;
 
     core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
-    for (auto [listen_fd, is_tls] : thread_listeners) {
-        loop.spawn(accept_loop(loop, listen_fd, is_tls));
+    for (const auto& al : thread_listeners) {
+        loop.spawn(accept_loop(loop, al.fd, al.port, al.is_tls));
     }
 
     // Spawn long-running background workers on the server event loop
@@ -561,24 +574,26 @@ void Server::run() {
     }
 
     if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
-        uint16_t h3_port = port_;
         for (const auto& l : active_listeners) {
-            if (l.tls) { h3_port = l.port; break; }
-        }
-        h3_server_ = std::make_unique<v3::Http3Server>(loop, h3_port, router_, tls_ctx_->native_handle(), services_.get());
-        if (h3_server_->start()) {
-            loop.spawn(h3_server_->run_receive_loop());
-            loop.spawn(h3_server_->run_timer_loop());
+            if (l.tls) {
+                auto h3 = std::make_unique<v3::Http3Server>(loop, l.port, router_, tls_ctx_->native_handle(), services_.get());
+                if (h3->start()) {
+                    loop.spawn(h3->run_receive_loop());
+                    loop.spawn(h3->run_timer_loop());
+                    h3_servers_.push_back(std::move(h3));
+                }
+            }
         }
     }
 
     loop.run();
 
-    if (h3_server_) {
-        h3_server_->stop();
+    for (auto& h3 : h3_servers_) {
+        if (h3) h3->stop();
     }
-    for (auto [listen_fd, _] : thread_listeners) {
-        close(listen_fd);
+    h3_servers_.clear();
+    for (const auto& al : thread_listeners) {
+        close(al.fd);
     }
 }
 
@@ -607,10 +622,15 @@ void Server::run(size_t threads) {
     for (size_t i = 0; i < threads; ++i) {
         workers_.emplace_back([this, i, active_listeners]() {
             try {
-                std::vector<std::pair<int, bool>> thread_listeners;
+                struct ActiveListener {
+                    int fd;
+                    uint16_t port;
+                    bool is_tls;
+                };
+                std::vector<ActiveListener> thread_listeners;
                 for (const auto& l : active_listeners) {
                     int fd = create_listen_socket(l.port, l.host);
-                    thread_listeners.emplace_back(fd, l.tls);
+                    thread_listeners.push_back({fd, l.port, l.tls});
                 }
 
                 core::IoUringConfig ring_cfg;
@@ -630,8 +650,8 @@ void Server::run(size_t threads) {
                         loop.pin_to_core(allowed[i]);
                     }
                 }
-                for (auto [listen_fd, is_tls] : thread_listeners) {
-                    loop.spawn(accept_loop(loop, listen_fd, is_tls));
+                for (const auto& al : thread_listeners) {
+                    loop.spawn(accept_loop(loop, al.fd, al.port, al.is_tls));
                 }
 
                 // Spawn background workers on core 0
@@ -641,26 +661,27 @@ void Server::run(size_t threads) {
                     }
                 }
 
-                std::unique_ptr<v3::Http3Server> h3_worker;
+                std::vector<std::unique_ptr<v3::Http3Server>> h3_workers;
                 if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
-                    uint16_t h3_port = port_;
                     for (const auto& l : active_listeners) {
-                        if (l.tls) { h3_port = l.port; break; }
-                    }
-                    h3_worker = std::make_unique<v3::Http3Server>(loop, h3_port, router_, tls_ctx_->native_handle(), services_.get());
-                    if (h3_worker->start()) {
-                        loop.spawn(h3_worker->run_receive_loop());
-                        loop.spawn(h3_worker->run_timer_loop());
+                        if (l.tls) {
+                            auto h3 = std::make_unique<v3::Http3Server>(loop, l.port, router_, tls_ctx_->native_handle(), services_.get());
+                            if (h3->start()) {
+                                loop.spawn(h3->run_receive_loop());
+                                loop.spawn(h3->run_timer_loop());
+                                h3_workers.push_back(std::move(h3));
+                            }
+                        }
                     }
                 }
 
                 loop.run();
 
-                if (h3_worker) {
-                    h3_worker->stop();
+                for (auto& h3 : h3_workers) {
+                    if (h3) h3->stop();
                 }
-                for (auto [listen_fd, _] : thread_listeners) {
-                    close(listen_fd);
+                for (const auto& al : thread_listeners) {
+                    close(al.fd);
                 }
             } catch (const std::exception& e) {
                 std::cerr << "Worker thread " << i << " error: " << e.what() << "\n";
@@ -685,9 +706,10 @@ void Server::stop() {
         stop_loop.run();
     }
 
-    if (h3_server_) {
-        h3_server_->stop();
+    for (auto& h3 : h3_servers_) {
+        if (h3) h3->stop();
     }
+    h3_servers_.clear();
 }
 
 } // namespace aegon::http
