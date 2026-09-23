@@ -43,15 +43,28 @@ server.enable_tls("/etc/ssl/certs/server.crt", "/etc/ssl/private/server.key");
 
 `enable_tls` verifies file existence and cryptographic format at startup, throwing descriptive configuration errors if keys or certificates are missing or unreadable.
 
-### HTTP/3 over QUIC
+### HTTP/3 over QUIC & Progressive Alt-Svc Ladder
 
-When TLS is enabled, HTTP/3 (over UDP) is enabled by default. You can toggle HTTP/3 explicitly:
+When TLS is enabled, HTTP/3 (over UDP) is automatically initialized on **every TLS listener port** (e.g. `8081`, `8443`) using `SO_REUSEPORT` across all worker threads. You can toggle HTTP/3 explicitly:
 
 ```cpp
 server.enable_http3(true); // Default is true when TLS is active
 ```
 
----
+Aegon automatically advertises protocol upgrades to connecting clients via RFC-compliant progressive `Alt-Svc` response headers:
+
+- **HTTP/1.1 TLS Connections**:
+  ```http
+  Alt-Svc: h3=":<port>"; ma=86400, h2=":<port>"; ma=86400
+  ```
+  *(or `h2=":<port>"; ma=86400` if HTTP/3 is disabled).*
+- **HTTP/2 TLS Connections**:
+  ```http
+  Alt-Svc: h3=":<port>"; ma=86400
+  ```
+- **Plaintext and HTTP/3 Connections**: No `Alt-Svc` header is emitted.
+
+All listener ports are tracked and passed into connection accept loops directly, eliminating `getsockname()` syscall overhead entirely.
 
 ## Startup Misconfiguration Diagnostics
 

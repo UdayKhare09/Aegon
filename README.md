@@ -29,7 +29,8 @@
 - **Pure Native HTTP/1.1, HTTP/2, and HTTP/3**:
   - Full **HTTP/1.1** pipelining with batched contiguous response streaming.
   - Full **HTTP/2** multiplexing (`h2c` and `h2-TLS`) with user-space batched frame aggregation and zero-alloc stack header packing.
-  - Full **HTTP/3 over QUIC** (RFC 9000 / RFC 9114) via `ngtcp2` + `nghttp3` on dual-stack `SO_REUSEPORT` UDP sockets.
+  - Full **HTTP/3 over QUIC** (RFC 9000 / RFC 9114) via `ngtcp2` + `nghttp3` across all TLS listener ports with dual-stack `SO_REUSEPORT` UDP sockets and progressive `Alt-Svc` header emission.
+- **Built-In High-Speed Static File Serving**: First-class `router.static_files(...)` supporting precompressed (`.br`, `.gz`) sidecars and nanosecond-precision disk-following in-memory caching (`mtime` revalidation).
 - **Static Compile-Time ORM**: Type-safe SQL query builder, migrations, optimistic concurrency control (OCC), and transactional look-aside caching.
 - **Native Async Redis**: High-throughput Redis client built directly onto the `io_uring` ring buffer supporting standalone, Sentinel, and Redis Cluster.
 

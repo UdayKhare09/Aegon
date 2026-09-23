@@ -116,6 +116,60 @@ router.get("/orgs/:org/repos/:repo/issues/:number", [](Context& ctx) -> Task<voi
 });
 ```
 
+### Wildcard Parameters
+
+For catch-all paths and file hierarchies, routes support wildcard parameters prefixed with an asterisk (`*name`). The wildcard captures the entire remainder of the path:
+
+```cpp
+router.get("/assets/*filepath", [](Context& ctx) {
+    auto filepath = ctx.req().param("filepath").value_or("");
+    ctx.res().text("Serving asset: " + std::string(filepath));
+});
+```
+
+---
+
+## Static File Serving (`static_files`)
+
+Aegon includes a built-in, production-grade static file server with disk-following in-memory caching and sidecar precompression negotiation.
+
+### Basic Usage
+
+Mount a local filesystem directory under a URL prefix on the `Router` or any `RouteGroup`:
+
+```cpp
+// Mount /data/static directory under /static
+server.router().static_files("/static", "/data/static");
+
+// On a RouteGroup: serves /api/v1/docs/* from /var/www/docs
+auto api = server.router().group("/api/v1");
+api.static_files("/docs", "/var/www/docs");
+```
+
+### `StaticFilesOptions`
+
+You can customize static file handling by passing a `StaticFilesOptions` struct:
+
+```cpp
+server.router().static_files("/assets", "/var/www/assets", StaticFilesOptions{
+    .precompressed = true,          // Negotiate .br and .gz sidecars (default: true)
+    .cache_in_memory = true,        // RAM cache with mtime revalidation (default: true)
+    .index_file = "index.html"      // Directory index fallback (default: "index.html")
+});
+```
+
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `precompressed` | `bool` | `true` | When `true`, checks `Accept-Encoding` header and prioritizes precompressed `.br` (Brotli) and `.gz` (Gzip) sidecars if present on disk. |
+| `cache_in_memory` | `bool` | `true` | Caches file content in RAM with nanosecond `st_mtime` validation. Modifying or replacing a file on disk immediately invalidates the cache and serves fresh content on the very next request. |
+| `index_file` | `std::string` | `"index.html"` | Default file served when a client requests the base directory prefix or a folder. |
+
+### Security & Path Traversal Protection
+
+Aegon strictly protects against directory traversal attacks:
+- Any requested path containing `..`, `\`, or null bytes is immediately rejected with `404 Not Found`.
+- Leading slashes and empty segments are normalized before resolving target disk paths.
+
 ---
 
 ## Route Groups & API Versioning
@@ -157,6 +211,7 @@ v2.get("/users", [](Context& ctx) -> Task<void> {
 - `group.put(path, handler)`
 - `group.del(path, handler)`
 - `group.patch(path, handler)`
+- `group.static_files(path, directory, options)`
 - `group.group(sub_prefix)`
 - `group.prefix()` — Returns the cumulative path prefix string view.
 

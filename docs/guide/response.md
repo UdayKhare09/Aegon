@@ -196,10 +196,15 @@ If no MIME type is explicitly provided, `res.file()` automatically infers the co
 | `.js`, `.mjs` | `application/javascript; charset=utf-8` |
 | `.json` | `application/json; charset=utf-8` |
 | `.png`, `.jpg`, `.gif`, `.svg`, `.ico` | `image/png`, `image/jpeg`, `image/gif`, `image/svg+xml`, `image/x-icon` |
+| `.webp` | `image/webp` |
+| `.woff2` | `font/woff2` |
 | `.pdf`, `.wasm`, `.xml`, `.txt` | `application/pdf`, `application/wasm`, `application/xml`, `text/plain` |
 | *(unknown)* | `application/octet-stream` |
 
 If the target file does not exist on disk, `file()` automatically sets the status code to `StatusCode::NotFound`.
+
+> [!TIP]
+> To serve an entire static assets directory with automatic `.br` / `.gz` precompressed sidecar negotiation and disk-following RAM caching, use [`router.static_files(prefix, directory)`](./routing.md#static-file-serving-static_files).
 
 ---
 
