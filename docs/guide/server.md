@@ -15,10 +15,17 @@ Server server;
 
 // Configure bind address and port
 server.listen(8080, "0.0.0.0");
+
+// Multi-Port Listening (Plaintext & TLS on the same worker event loops)
+server.enable_tls("/etc/ssl/certs/server.crt", "/etc/ssl/private/server.key");
+server.listen(8080);      // Port 8080: Plaintext HTTP/1.1
+server.listen_tls(8081);  // Port 8081: TLS HTTP/1.1
+server.listen_tls(8443);  // Port 8443: TLS HTTP/2 & HTTP/3
 ```
 
 > [!NOTE]
-> `server.listen(port)` performs immediate validation and will throw `std::runtime_error` if `port == 0` or outside valid port ranges (`1 - 65535`).
+> `server.listen(port)` and `server.listen_tls(port)` perform immediate validation and will throw `std::runtime_error` if `port == 0` or outside valid port ranges (`1 - 65535`).
+> When multiple ports are configured, all listeners share the same worker threads, buffer pools, and `io_uring` event loops with zero cross-port overhead. Plaintext ports completely bypass TLS/QUIC handshakes.
 
 ### TLS / HTTPS Configuration (`TlsContext`)
 

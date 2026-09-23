@@ -187,14 +187,26 @@ public:
     // Enable TLS (HTTPS) with ALPN (h2 and http/1.1)
     Server& enable_tls(const std::string& cert_file = "", const std::string& key_file = "");
 
-    // Configure listen address and port
-    Server& listen(uint16_t port, std::string_view host = "0.0.0.0") {
+    struct ListenerConfig {
+        uint16_t port{8080};
+        std::string host{"0.0.0.0"};
+        bool tls{false};
+    };
+
+    // Configure listen address and port (plaintext by default, or with explicit TLS setting)
+    Server& listen(uint16_t port, std::string_view host = "0.0.0.0", bool tls = false) {
         if (port == 0) {
             throw std::runtime_error("Server configuration error: port must be greater than 0 (1-65535)");
         }
         port_ = port;
         host_ = std::string(host);
+        listeners_.push_back(ListenerConfig{port, std::string(host), tls});
         return *this;
+    }
+
+    // Configure a dedicated TLS listen address and port
+    Server& listen_tls(uint16_t port, std::string_view host = "0.0.0.0") {
+        return listen(port, host, true);
     }
 
     // Configure SQPOLL (dedicated kernel submission thread)
@@ -234,6 +246,7 @@ public:
 
     [[nodiscard]] uint16_t port() const noexcept { return port_; }
     [[nodiscard]] std::string_view host() const noexcept { return host_; }
+    [[nodiscard]] const std::vector<ListenerConfig>& listeners() const noexcept { return listeners_; }
     [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
     [[nodiscard]] bool is_http3_enabled() const noexcept { return http3_enabled_; }
     [[nodiscard]] bool is_sqpoll_enabled() const noexcept { return sqpoll_enabled_; }
@@ -243,13 +256,14 @@ private:
     core::Task<void> handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data);
     core::Task<void> handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings, std::string initial_data);
     core::Task<void> handle_tls_connection(core::EventLoop& loop, int client_fd);
-    core::Task<void> accept_loop(core::EventLoop& loop, int listen_fd);
+    core::Task<void> accept_loop(core::EventLoop& loop, int listen_fd, bool is_tls);
     core::Task<bool> stream_file_zero_copy(core::EventLoop& loop, int client_fd, const std::string& file_path, size_t file_size);
-    int create_listen_socket();
+    int create_listen_socket(uint16_t port, const std::string& host);
 
     Router router_;
     std::string host_{"0.0.0.0"};
     uint16_t port_{8080};
+    std::vector<ListenerConfig> listeners_;
     std::shared_ptr<ServiceRegistry> services_{std::make_shared<ServiceRegistry>()};
     std::vector<LifecycleHook> startup_hooks_;
     std::vector<LifecycleHook> shutdown_hooks_;

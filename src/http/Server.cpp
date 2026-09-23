@@ -25,6 +25,7 @@ Server::Server(Server&& other) noexcept
     : router_(std::move(other.router_)),
       host_(std::move(other.host_)),
       port_(other.port_),
+      listeners_(std::move(other.listeners_)),
       services_(std::move(other.services_)),
       startup_hooks_(std::move(other.startup_hooks_)),
       shutdown_hooks_(std::move(other.shutdown_hooks_)),
@@ -48,6 +49,7 @@ Server& Server::operator=(Server&& other) noexcept {
         router_ = std::move(other.router_);
         host_ = std::move(other.host_);
         port_ = other.port_;
+        listeners_ = std::move(other.listeners_);
         services_ = std::move(other.services_);
         startup_hooks_ = std::move(other.startup_hooks_);
         shutdown_hooks_ = std::move(other.shutdown_hooks_);
@@ -88,8 +90,8 @@ Server& Server::enable_tls(const std::string& cert_file, const std::string& key_
     return *this;
 }
 
-int Server::create_listen_socket() {
-    if (port_ == 0) {
+int Server::create_listen_socket(uint16_t port, const std::string& host) {
+    if (port == 0) {
         throw std::runtime_error("Server configuration error: port must be greater than 0 (1-65535)");
     }
 
@@ -105,14 +107,14 @@ int Server::create_listen_socket() {
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(port_);
-    if (inet_pton(AF_INET, host_.c_str(), &addr.sin_addr) <= 0) {
+    addr.sin_port = htons(port);
+    if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) <= 0) {
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
     }
 
     if (bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
         close(fd);
-        throw std::runtime_error("Failed to bind socket to port " + std::to_string(port_));
+        throw std::runtime_error("Failed to bind socket to port " + std::to_string(port));
     }
 
     if (::listen(fd, 4096) < 0) {
@@ -320,11 +322,6 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
 }
 
 core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd) {
-    if (tls_enabled_ && tls_ctx_) {
-        co_await handle_tls_connection(loop, client_fd);
-        co_return;
-    }
-
     std::string req_accum;
     req_accum.reserve(512);
     std::string resp_batch;
@@ -500,7 +497,7 @@ core::Task<bool> Server::stream_file_zero_copy(core::EventLoop& loop, int client
     co_return ok;
 }
 
-core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd) {
+core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, bool is_tls) {
     while (running_) {
         auto stream = loop.ring().accept_multishot(listen_fd);
         while (running_) {
@@ -512,7 +509,11 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd) {
             }
             int nodelay = 1;
             ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-            loop.spawn(handle_connection(loop, accept_res.fd));
+            if (is_tls && tls_ctx_) {
+                loop.spawn(handle_tls_connection(loop, accept_res.fd));
+            } else {
+                loop.spawn(handle_connection(loop, accept_res.fd));
+            }
         }
     }
 }
@@ -530,7 +531,18 @@ void Server::run() {
         init_loop.run();
     }
 
-    int listen_fd = create_listen_socket();
+    std::vector<ListenerConfig> active_listeners = listeners_;
+    if (active_listeners.empty()) {
+        active_listeners.push_back(ListenerConfig{port_, host_, tls_enabled_});
+    } else if (active_listeners.size() == 1 && tls_enabled_ && !active_listeners[0].tls) {
+        active_listeners[0].tls = true;
+    }
+
+    std::vector<std::pair<int, bool>> thread_listeners;
+    for (const auto& l : active_listeners) {
+        int fd = create_listen_socket(l.port, l.host);
+        thread_listeners.emplace_back(fd, l.tls);
+    }
 
     core::IoUringConfig ring_cfg;
     ring_cfg.entries = ring_entries_;
@@ -539,7 +551,9 @@ void Server::run() {
     ring_cfg.sq_thread_cpu = sq_thread_cpu_;
 
     core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
-    loop.spawn(accept_loop(loop, listen_fd));
+    for (auto [listen_fd, is_tls] : thread_listeners) {
+        loop.spawn(accept_loop(loop, listen_fd, is_tls));
+    }
 
     // Spawn long-running background workers on the server event loop
     for (const auto& worker : background_workers_) {
@@ -547,7 +561,11 @@ void Server::run() {
     }
 
     if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
-        h3_server_ = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), services_.get());
+        uint16_t h3_port = port_;
+        for (const auto& l : active_listeners) {
+            if (l.tls) { h3_port = l.port; break; }
+        }
+        h3_server_ = std::make_unique<v3::Http3Server>(loop, h3_port, router_, tls_ctx_->native_handle(), services_.get());
         if (h3_server_->start()) {
             loop.spawn(h3_server_->run_receive_loop());
             loop.spawn(h3_server_->run_timer_loop());
@@ -559,7 +577,9 @@ void Server::run() {
     if (h3_server_) {
         h3_server_->stop();
     }
-    close(listen_fd);
+    for (auto [listen_fd, _] : thread_listeners) {
+        close(listen_fd);
+    }
 }
 
 void Server::run(size_t threads) {
@@ -575,12 +595,24 @@ void Server::run(size_t threads) {
         init_loop.run();
     }
 
+    std::vector<ListenerConfig> active_listeners = listeners_;
+    if (active_listeners.empty()) {
+        active_listeners.push_back(ListenerConfig{port_, host_, tls_enabled_});
+    } else if (active_listeners.size() == 1 && tls_enabled_ && !active_listeners[0].tls) {
+        active_listeners[0].tls = true;
+    }
+
     workers_.clear();
 
     for (size_t i = 0; i < threads; ++i) {
-        workers_.emplace_back([this, i]() {
+        workers_.emplace_back([this, i, active_listeners]() {
             try {
-                int listen_fd = create_listen_socket();
+                std::vector<std::pair<int, bool>> thread_listeners;
+                for (const auto& l : active_listeners) {
+                    int fd = create_listen_socket(l.port, l.host);
+                    thread_listeners.emplace_back(fd, l.tls);
+                }
+
                 core::IoUringConfig ring_cfg;
                 ring_cfg.entries = ring_entries_;
                 ring_cfg.enable_sqpoll = sqpoll_enabled_;
@@ -598,7 +630,9 @@ void Server::run(size_t threads) {
                         loop.pin_to_core(allowed[i]);
                     }
                 }
-                loop.spawn(accept_loop(loop, listen_fd));
+                for (auto [listen_fd, is_tls] : thread_listeners) {
+                    loop.spawn(accept_loop(loop, listen_fd, is_tls));
+                }
 
                 // Spawn background workers on core 0
                 if (i == 0) {
@@ -609,7 +643,11 @@ void Server::run(size_t threads) {
 
                 std::unique_ptr<v3::Http3Server> h3_worker;
                 if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
-                    h3_worker = std::make_unique<v3::Http3Server>(loop, port_, router_, tls_ctx_->native_handle(), services_.get());
+                    uint16_t h3_port = port_;
+                    for (const auto& l : active_listeners) {
+                        if (l.tls) { h3_port = l.port; break; }
+                    }
+                    h3_worker = std::make_unique<v3::Http3Server>(loop, h3_port, router_, tls_ctx_->native_handle(), services_.get());
                     if (h3_worker->start()) {
                         loop.spawn(h3_worker->run_receive_loop());
                         loop.spawn(h3_worker->run_timer_loop());
@@ -621,7 +659,9 @@ void Server::run(size_t threads) {
                 if (h3_worker) {
                     h3_worker->stop();
                 }
-                close(listen_fd);
+                for (auto [listen_fd, _] : thread_listeners) {
+                    close(listen_fd);
+                }
             } catch (const std::exception& e) {
                 std::cerr << "Worker thread " << i << " error: " << e.what() << "\n";
             }
