@@ -86,7 +86,35 @@ public:
     }
 
     [[nodiscard]] bool empty() const noexcept {
-        return size_ == 0;
+        return size() == 0;
+    }
+
+    bool remove(std::string_view name) noexcept {
+        bool removed = false;
+        for (size_t i = 0; i < size_; ) {
+            if (iequals(inline_headers_[i].name, name)) {
+                for (size_t j = i; j + 1 < size_; ++j) {
+                    inline_headers_[j] = inline_headers_[j + 1];
+                }
+                --size_;
+                removed = true;
+            } else {
+                ++i;
+            }
+        }
+        for (auto it = heap_headers_.begin(); it != heap_headers_.end(); ) {
+            if (iequals(it->name, name)) {
+                it = heap_headers_.erase(it);
+                removed = true;
+            } else {
+                ++it;
+            }
+        }
+        return removed;
+    }
+
+    bool erase(std::string_view name) noexcept {
+        return remove(name);
     }
 
     void clear() noexcept {

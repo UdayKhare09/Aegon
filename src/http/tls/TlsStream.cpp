@@ -89,6 +89,11 @@ core::Task<int> TlsStream::read_plaintext(void* buf, size_t max_len) {
             auto slice = loop_.buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
             BIO_write(in_bio_, slice.data(), static_cast<int>(slice.size()));
             loop_.buffer_pool().return_buffer(recv_res.bid);
+        } else if (err == SSL_ERROR_WANT_WRITE) {
+            bool flushed = co_await flush_outbound();
+            if (!flushed) {
+                co_return -1;
+            }
         } else {
             co_return -1;
         }

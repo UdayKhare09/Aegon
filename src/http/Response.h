@@ -6,6 +6,7 @@
 #include <glaze/glaze.hpp>
 #include <string>
 #include <string_view>
+#include <deque>
 #include <charconv>
 #include <type_traits>
 #include <sys/stat.h>
@@ -41,9 +42,9 @@ public:
 
     Response& set_header_owned(std::string name, std::string value) {
         owned_strings_.push_back(std::move(name));
+        std::string_view n = owned_strings_.back();
         owned_strings_.push_back(std::move(value));
         std::string_view v = owned_strings_.back();
-        std::string_view n = *(owned_strings_.end() - 2);
         headers_.set(n, v);
         return *this;
     }
@@ -221,11 +222,14 @@ public:
             out.append("\r\n");
         }
 
+        uint16_t sc = static_cast<uint16_t>(status_);
+        bool no_content_body = (sc >= 100 && sc < 200) || sc == 204 || sc == 304;
+
         if (is_chunked_) {
             if (!headers_.contains("Transfer-Encoding")) {
                 out.append("Transfer-Encoding: chunked\r\n");
             }
-        } else if (!headers_.contains("Content-Length")) {
+        } else if (!no_content_body && !headers_.contains("Content-Length")) {
             out.append("Content-Length: ");
             size_t len = is_file_ ? file_size_ : body_.size();
             if (len < 10) {
@@ -291,7 +295,7 @@ private:
     bool is_file_{false};
     std::string file_path_{};
     size_t file_size_{0};
-    std::vector<std::string> owned_strings_{};
+    std::deque<std::string> owned_strings_{};
 };
 
 } // namespace aegon::http

@@ -24,7 +24,7 @@ std::string_view normalize_path(std::string_view p) noexcept {
 RadixTree::RadixTree() : root_(std::make_unique<RadixNode>("/")) {}
 
 void RadixTree::insert(Method method, std::string_view pattern, Handler handler) {
-    if (pattern.empty()) pattern = "/";
+    pattern = normalize_path(pattern);
 
     RadixNode* current = root_.get();
     std::string_view remaining = pattern;
@@ -243,6 +243,9 @@ bool RadixTree::match_node(const RadixNode* node, std::string_view path,
         if (node->has_any_handler) {
             matched_node = node;
             return true;
+        }
+        if (!node->param_name.empty()) {
+            params.pop_back();
         }
         return false;
     }

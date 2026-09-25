@@ -21,7 +21,11 @@ struct RouteParam {
 
 class Request {
 public:
-    static constexpr size_t MAX_ROUTE_PARAMS = 8;
+    static constexpr size_t MAX_ROUTE_PARAMS = 16;
+
+    [[nodiscard]] static inline std::string url_decode(std::string_view in) {
+        return url_decode_string(in);
+    }
 
     Request() = default;
 
@@ -263,20 +267,20 @@ public:
         glz::generic doc;
         doc.data = glz::generic::object_t{};
         for (size_t i = 0; i < param_count_; ++i) {
-            std::string_view k = params_[i].key;
-            std::string_view v = params_[i].value;
+            std::string k = url_decode_string(params_[i].key);
+            std::string v = url_decode_string(params_[i].value);
             if (v == "true") {
                 doc[k] = true;
             } else if (v == "false") {
                 doc[k] = false;
             } else if (is_numeric_literal(v)) {
-                if (v.find('.') != std::string_view::npos) {
-                    doc[k] = std::strtod(std::string(v).c_str(), nullptr);
+                if (v.find('.') != std::string::npos) {
+                    doc[k] = std::strtod(v.c_str(), nullptr);
                 } else {
-                    doc[k] = static_cast<int64_t>(std::strtoll(std::string(v).c_str(), nullptr, 10));
+                    doc[k] = static_cast<int64_t>(std::strtoll(v.c_str(), nullptr, 10));
                 }
             } else {
-                doc[k] = std::string(v);
+                doc[k] = v;
             }
         }
         std::string json_doc;

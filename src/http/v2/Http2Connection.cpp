@@ -210,13 +210,35 @@ void Http2Connection::submit_response(Http2Stream* stream) {
     push_nv(reinterpret_cast<const uint8_t*>(":status"), 7,
             reinterpret_cast<const uint8_t*>(status_buf), status_len);
 
-    if (!stream->res.headers().contains("content-length")) {
+    uint16_t sc = static_cast<uint16_t>(stream->res.status());
+    bool no_content_body = (sc >= 100 && sc < 200) || sc == 204 || sc == 304;
+
+    if (!no_content_body && !stream->res.headers().contains("content-length")) {
         push_nv(reinterpret_cast<const uint8_t*>("content-length"), 14,
                 reinterpret_cast<const uint8_t*>(cl_buf), cl_len);
     }
 
+    // Keep lowercased header names alive for nghttp2_nv pointers
+    std::vector<std::string> lower_names;
+    lower_names.reserve(stream->res.headers().size());
+
     for (const auto& h : stream->res.headers()) {
-        push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+        // RFC 9113 §8.2.2: Connection-specific headers must not be sent in HTTP/2
+        if (core::simd::SimdString::iequals(h.name, "connection") ||
+            core::simd::SimdString::iequals(h.name, "keep-alive") ||
+            core::simd::SimdString::iequals(h.name, "transfer-encoding") ||
+            core::simd::SimdString::iequals(h.name, "upgrade")) {
+            continue;
+        }
+        // RFC 9113 §8.2.1: Header field names must be lowercase
+        std::string lower_name;
+        lower_name.reserve(h.name.size());
+        for (char c : h.name) {
+            lower_name.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        lower_names.push_back(std::move(lower_name));
+        const auto& ln = lower_names.back();
+        push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
                 reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
     }
 
@@ -294,15 +316,7 @@ core::Task<bool> Http2Connection::upgrade_request(Request req, std::string_view 
     auto* stream = get_or_create_stream(1);
     stream->req = std::move(req);
 
-    auto match_res = router_.match(stream->req);
-    if (match_res.route_found && match_res.handler) {
-        Context ctx(stream->req, stream->res, services_);
-        co_await (*match_res.handler)(ctx);
-    } else if (match_res.method_not_allowed) {
-        stream->res.status(StatusCode::MethodNotAllowed).text("Method Not Allowed");
-    } else {
-        stream->res.status(StatusCode::NotFound).text("Not Found");
-    }
+    co_await router_.dispatch(stream->req, stream->res, services_);
 
     submit_response(stream);
     co_return co_await flush_outbound();

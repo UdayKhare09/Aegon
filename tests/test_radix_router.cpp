@@ -462,6 +462,90 @@ void test_static_files() {
     std::cout << "  -> PASS: Static files serving, sidecar precompression & mtime cache revalidation verified.\n";
 }
 
+void test_http_subsystem_fixes() {
+    std::cout << "[Test 8] Testing HTTP subsystem bug fixes & RFC compliance...\n";
+
+    // 1. HeaderMap remove and empty()
+    {
+        HeaderMap headers;
+        TEST_CHECK(headers.empty());
+        headers.set("Content-Type", "application/json");
+        headers.set("X-Custom-1", "val1");
+        headers.set("X-Custom-2", "val2");
+        TEST_CHECK(!headers.empty());
+        TEST_CHECK(headers.size() == 3);
+
+        bool removed = headers.remove("x-custom-1");
+        TEST_CHECK(removed);
+        TEST_CHECK(!headers.contains("X-Custom-1"));
+        TEST_CHECK(headers.size() == 2);
+
+        headers.remove("Content-Type");
+        headers.remove("X-Custom-2");
+        TEST_CHECK(headers.empty());
+        TEST_CHECK(headers.size() == 0);
+    }
+
+    // 2. Trailing slash symmetrical normalization in RadixTree
+    {
+        Router router;
+        bool called = false;
+        router.get("/users/:id/", [&](Context& ctx) {
+            called = true;
+            TEST_CHECK(ctx.req().param("id") == "42");
+            ctx.res().text("ok");
+        });
+
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/users/42"); // Request without trailing slash should match route registered with trailing slash
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(called);
+    }
+
+    // 3. Response pointer stability across reallocation (SSO strings in deque)
+    {
+        Response res;
+        for (int i = 0; i < 64; ++i) {
+            res.set_header_owned("X-Custom-" + std::to_string(i), "v" + std::to_string(i));
+        }
+        for (int i = 0; i < 64; ++i) {
+            auto val = res.headers().get("X-Custom-" + std::to_string(i));
+            TEST_CHECK(val.has_value());
+            TEST_CHECK(*val == ("v" + std::to_string(i)));
+        }
+    }
+
+    // 4. RFC 9110: 204 No Content does not emit Content-Length
+    {
+        Response res;
+        res.status(StatusCode::NoContent);
+        std::string raw;
+        res.serialize_http1(raw);
+        TEST_CHECK(raw.find("204 No Content") != std::string::npos);
+        TEST_CHECK(raw.find("Content-Length") == std::string::npos);
+    }
+
+    // 5. Context::problem() preserves Content-Type: application/problem+json
+    {
+        Request req;
+        req.set_path("/test-problem");
+        Response res;
+        Context ctx(req, res);
+        ctx.problem(StatusCode::BadRequest, "Invalid Parameter", "id must be positive");
+        TEST_CHECK(res.status() == StatusCode::BadRequest);
+        auto ct = res.headers().get("Content-Type");
+        TEST_CHECK(ct.has_value());
+        TEST_CHECK(*ct == "application/problem+json");
+    }
+
+    std::cout << "  -> PASS: All HTTP subsystem fixes & RFC compliance checks verified.\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "   AEGON RADIX TREE ROUTER & ROUTE GROUP TEST SUITE    \n";
@@ -474,6 +558,7 @@ int main() {
     test_method_not_allowed();
     test_async_and_sync_handlers();
     test_static_files();
+    test_http_subsystem_fixes();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL RADIX ROUTER TESTS PASSED SUCCESSFULLY! <<<\n";

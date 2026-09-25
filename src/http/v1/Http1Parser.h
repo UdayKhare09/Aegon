@@ -81,6 +81,17 @@ public:
             }
         }
 
+        // If absolute-form (e.g. "http://example.com/path"), extract path per RFC 9112 §3.2.2
+        if (full_path.starts_with("http://")) {
+            full_path.remove_prefix(7);
+            size_t slash = aegon::core::simd::SimdString::find_char(full_path, '/');
+            full_path = (slash != std::string_view::npos) ? full_path.substr(slash) : "/";
+        } else if (full_path.starts_with("https://")) {
+            full_path.remove_prefix(8);
+            size_t slash = aegon::core::simd::SimdString::find_char(full_path, '/');
+            full_path = (slash != std::string_view::npos) ? full_path.substr(slash) : "/";
+        }
+
         size_t qmark = aegon::core::simd::SimdString::find_char(full_path, '?');
         if (qmark != std::string_view::npos) {
             req.set_path(full_path.substr(0, qmark));
@@ -189,8 +200,13 @@ public:
             } else if (iequals(name, "Upgrade")) {
                 if (iequals(value, "h2c")) {
                     req.set_upgrade_h2c(true);
-                } else if (iequals(value, "websocket") || value.find("websocket") != std::string_view::npos || value.find("WebSocket") != std::string_view::npos) {
-                    req.set_websocket_upgrade(true);
+                } else {
+                    std::string lower_val;
+                    lower_val.reserve(value.size());
+                    for (char ch : value) lower_val.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+                    if (lower_val.find("websocket") != std::string::npos) {
+                        req.set_websocket_upgrade(true);
+                    }
                 }
             } else if (iequals(name, "Sec-WebSocket-Key")) {
                 req.set_sec_websocket_key(value);

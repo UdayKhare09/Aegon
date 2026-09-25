@@ -174,8 +174,9 @@ public:
             .detail = std::string(detail),
             .instance = std::string(req_.path())
         };
-        res_.header("content-type", "application/problem+json");
-        return res_.status(status).json(pd.to_json());
+        res_.status(status).body(pd.to_json());
+        res_.header("Content-Type", "application/problem+json");
+        return res_;
     }
 
     /**

@@ -65,7 +65,7 @@ private:
     std::unique_ptr<RadixNode> root_;
 
     struct StackRouteParams {
-        static constexpr size_t MAX = 8;
+        static constexpr size_t MAX = 16;
         std::pair<std::string_view, std::string_view> entries[MAX];
         size_t count = 0;
 
