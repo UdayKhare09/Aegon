@@ -85,6 +85,8 @@ BufferPool::BufferPool(BufferPool&& other) noexcept
     other.ring_ = nullptr;
     other.buf_ring_ = nullptr;
     other.memory_ = nullptr;
+    other.entries_ = 0;
+    other.buffer_size_ = 0;
     other.buffers_registered_ = false;
 }
 
@@ -110,6 +112,8 @@ BufferPool& BufferPool::operator=(BufferPool&& other) noexcept {
         other.ring_ = nullptr;
         other.buf_ring_ = nullptr;
         other.memory_ = nullptr;
+        other.entries_ = 0;
+        other.buffer_size_ = 0;
         other.buffers_registered_ = false;
     }
     return *this;

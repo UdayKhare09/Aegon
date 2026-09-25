@@ -44,18 +44,15 @@ void test_buffer_pool_registration() {
     std::cout << "  -> PASS: Buffer registration and recycling verified.\n";
 }
 
-void test_sqpoll_mode() {
-    std::cout << "[TEST 2] Testing IORING_SETUP_SQPOLL with graceful fallback...\n";
+void test_modern_ring_initialization() {
+    std::cout << "[TEST 2] Testing Modern Linux 6.0+ Single-Issuer & Cooperative Taskrun Engine...\n";
     IoUringConfig cfg;
     cfg.entries = 128;
-    cfg.enable_sqpoll = true;
-    cfg.sq_thread_idle_ms = 1000;
 
     IoUring ring(cfg);
-    std::cout << "  -> SQPOLL active: " << (ring.is_sqpoll_enabled() ? "YES (kernel thread)" : "FALLBACK (interrupt mode)") << "\n";
     assert(ring.raw_ring() != nullptr);
 
-    // Test a basic async timeout under the SQPOLL ring
+    // Test a basic async timeout under the modern ring
     bool timer_completed = false;
     auto run_timer = [&]() -> Task<void> {
         co_await ring.timeout(10'000'000); // 10ms
@@ -69,7 +66,7 @@ void test_sqpoll_mode() {
     ring.process_completions();
 
     assert(timer_completed);
-    std::cout << "  -> PASS: Async operations executed cleanly under SQPOLL configuration.\n";
+    std::cout << "  -> PASS: Async operations executed cleanly under Single-Issuer Cooperative Engine.\n";
 }
 
 void test_send_zc() {
@@ -289,17 +286,69 @@ void test_zero_copy_file_serving() {
     std::cout << "  -> PASS: 128KB file spliced directly from disk cache to network socket with 100% byte fidelity!\n";
 }
 
+void test_multishot_recv_stream() {
+    std::cout << "[TEST 6] Testing True IORING_RECV_MULTISHOT with Provided Buffers...\n";
+
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) abort();
+
+    IoUring ring(256);
+    BufferPool pool(ring.raw_ring(), 1, 64, 4096);
+
+    auto stream = ring.recv_stream(sv[0], pool.bgid());
+
+    std::vector<std::string> received_chunks;
+    constexpr int TOTAL_MESSAGES = 10;
+    bool recv_running = true;
+
+    auto recv_worker = [&]() -> Task<void> {
+        while (recv_running && received_chunks.size() < TOTAL_MESSAGES) {
+            auto res = co_await stream.next();
+            if (res.bytes <= 0) break;
+            auto buf = pool.get_buffer(res.bid, res.bytes);
+            received_chunks.emplace_back(reinterpret_cast<const char*>(buf.data()), buf.size());
+            pool.return_buffer(res.bid);
+        }
+    };
+
+    auto task = recv_worker();
+    task.resume();
+
+    // Send 10 messages from client socket
+    for (int i = 0; i < TOTAL_MESSAGES; ++i) {
+        std::string msg = "CHUNK_" + std::to_string(i);
+        (void)send(sv[1], msg.data(), msg.size(), 0);
+        while (received_chunks.size() <= static_cast<size_t>(i)) {
+            ring.submit_and_wait(1);
+            ring.process_completions();
+        }
+    }
+
+    assert(received_chunks.size() == TOTAL_MESSAGES);
+    for (int i = 0; i < TOTAL_MESSAGES; ++i) {
+        assert(received_chunks[i] == ("CHUNK_" + std::to_string(i)));
+    }
+
+    recv_running = false;
+    stream.cancel();
+    close(sv[0]);
+    close(sv[1]);
+
+    std::cout << "  -> PASS: Received " << TOTAL_MESSAGES << " consecutive packets via true multishot recv stream without re-submitting SQEs!\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "   AEGON ADVANCED IO & ZERO-COPY ENGINE TEST SUITE     \n";
-    std::cout << "   (MULTISHOT ACCEPT, REGISTER BUFFERS, SQPOLL, SPLICE)\n";
+    std::cout << "   (MULTISHOT ACCEPT, REGISTER BUFFERS, SPLICE, RECV)  \n";
     std::cout << "=======================================================\n\n";
 
     test_buffer_pool_registration();
-    test_sqpoll_mode();
+    test_modern_ring_initialization();
     test_send_zc();
     test_multishot_accept_stream();
     test_zero_copy_file_serving();
+    test_multishot_recv_stream();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL ADVANCED IO & ZERO-COPY TESTS PASSED! <<<   \n";

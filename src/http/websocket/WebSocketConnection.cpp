@@ -58,8 +58,9 @@ core::Task<void> WebSocketConnection::run(std::string initial_data) {
         }
     }
 
+    auto stream = loop_.ring().recv_stream(client_fd_, loop_.buffer_pool().bgid());
     while (is_open_ && !session_.is_closed()) {
-        auto recv_res = co_await loop_.ring().recv_multishot(client_fd_, loop_.buffer_pool().bgid());
+        auto recv_res = co_await stream.next();
         if (recv_res.bytes == -ENOBUFS) {
             co_await loop_.ring().timeout(100'000ULL);
             continue;

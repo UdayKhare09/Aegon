@@ -77,7 +77,7 @@ public:
      * @return 0-based index of '\r' or std::string_view::npos.
      */
     static inline size_t find_crlf(std::string_view sv, size_t pos = 0) noexcept {
-        if (pos + 1 >= sv.size()) return std::string_view::npos;
+        if (pos >= sv.size() || (sv.size() - pos) < 2) return std::string_view::npos;
         const char* ptr = sv.data() + pos;
         size_t len = sv.size() - pos;
 
@@ -136,7 +136,7 @@ public:
      * @return 0-based index of the first '\r' or std::string_view::npos.
      */
     static inline size_t find_double_crlf(std::string_view sv, size_t pos = 0) noexcept {
-        if (pos + 3 >= sv.size()) return std::string_view::npos;
+        if (pos >= sv.size() || (sv.size() - pos) < 4) return std::string_view::npos;
         const char* ptr = sv.data() + pos;
         size_t len = sv.size() - pos;
 
@@ -238,10 +238,55 @@ public:
             __mmask32 eq_mask = _mm256_cmpeq_epi8_mask(v1, v2);
             return (eq_mask & mask) == mask;
         }
+        size_t i = 0;
+#elif defined(__AVX2__)
+        size_t i = 0;
+        const __m256i upper_a = _mm256_set1_epi8('A' - 1);
+        const __m256i upper_z = _mm256_set1_epi8('Z' + 1);
+        const __m256i to_lower = _mm256_set1_epi8(32);
+
+        for (; i + 32 <= len; i += 32) {
+            __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p1 + i));
+            __m256i v2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p2 + i));
+
+            __m256i is_u1 = _mm256_and_si256(_mm256_cmpgt_epi8(v1, upper_a), _mm256_cmpgt_epi8(upper_z, v1));
+            __m256i is_u2 = _mm256_and_si256(_mm256_cmpgt_epi8(v2, upper_a), _mm256_cmpgt_epi8(upper_z, v2));
+
+            v1 = _mm256_or_si256(v1, _mm256_and_si256(is_u1, to_lower));
+            v2 = _mm256_or_si256(v2, _mm256_and_si256(is_u2, to_lower));
+
+            __m256i cmp = _mm256_cmpeq_epi8(v1, v2);
+            if (static_cast<uint32_t>(_mm256_movemask_epi8(cmp)) != 0xFFFFFFFFU) {
+                return false;
+            }
+        }
+#elif defined(__SSE4_2__)
+        size_t i = 0;
+        const __m128i upper_a = _mm_set1_epi8('A' - 1);
+        const __m128i upper_z = _mm_set1_epi8('Z' + 1);
+        const __m128i to_lower = _mm_set1_epi8(32);
+
+        for (; i + 16 <= len; i += 16) {
+            __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p1 + i));
+            __m128i v2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p2 + i));
+
+            __m128i is_u1 = _mm_and_si128(_mm_cmpgt_epi8(v1, upper_a), _mm_cmpgt_epi8(upper_z, v1));
+            __m128i is_u2 = _mm_and_si128(_mm_cmpgt_epi8(v2, upper_a), _mm_cmpgt_epi8(upper_z, v2));
+
+            v1 = _mm_or_si128(v1, _mm_and_si128(is_u1, to_lower));
+            v2 = _mm_or_si128(v2, _mm_and_si128(is_u2, to_lower));
+
+            __m128i cmp = _mm_cmpeq_epi8(v1, v2);
+            if (static_cast<uint32_t>(_mm_movemask_epi8(cmp)) != 0xFFFFU) {
+                return false;
+            }
+        }
+#else
+        size_t i = 0;
 #endif
 
-        // Scalar fallback
-        for (size_t i = 0; i < len; ++i) {
+        // Scalar remainder
+        for (; i < len; ++i) {
             char ca = p1[i];
             char cb = p2[i];
             if (ca >= 'A' && ca <= 'Z') ca += 32;
@@ -272,6 +317,32 @@ public:
             __m512i chunk = _mm512_maskz_loadu_epi8(mask_tail, ptr + i);
             uint64_t mask = _mm512_cmpeq_epi8_mask(chunk, pct) | _mm512_cmpeq_epi8_mask(chunk, plus);
             if (mask != 0) return true;
+        }
+        return false;
+#elif defined(__AVX2__)
+        const __m256i pct = _mm256_set1_epi8('%');
+        const __m256i plus = _mm256_set1_epi8('+');
+        size_t i = 0;
+        for (; i + 32 <= len; i += 32) {
+            __m256i chunk = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ptr + i));
+            __m256i cmp = _mm256_or_si256(_mm256_cmpeq_epi8(chunk, pct), _mm256_cmpeq_epi8(chunk, plus));
+            if (_mm256_movemask_epi8(cmp) != 0) return true;
+        }
+        for (; i < len; ++i) {
+            if (ptr[i] == '%' || ptr[i] == '+') return true;
+        }
+        return false;
+#elif defined(__SSE4_2__)
+        const __m128i pct = _mm_set1_epi8('%');
+        const __m128i plus = _mm_set1_epi8('+');
+        size_t i = 0;
+        for (; i + 16 <= len; i += 16) {
+            __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
+            __m128i cmp = _mm_or_si128(_mm_cmpeq_epi8(chunk, pct), _mm_cmpeq_epi8(chunk, plus));
+            if (_mm_movemask_epi8(cmp) != 0) return true;
+        }
+        for (; i < len; ++i) {
+            if (ptr[i] == '%' || ptr[i] == '+') return true;
         }
         return false;
 #else

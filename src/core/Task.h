@@ -63,7 +63,9 @@ struct TaskPromise final : TaskPromiseBase {
         if (exception_) [[unlikely]] {
             std::rethrow_exception(exception_);
         }
-        assert(value_.has_value());
+        if (!value_.has_value()) [[unlikely]] {
+            throw std::runtime_error("Attempted to read result from uncompleted Task");
+        }
         return *value_;
     }
 
@@ -71,7 +73,9 @@ struct TaskPromise final : TaskPromiseBase {
         if (exception_) [[unlikely]] {
             std::rethrow_exception(exception_);
         }
-        assert(value_.has_value());
+        if (!value_.has_value()) [[unlikely]] {
+            throw std::runtime_error("Attempted to read result from uncompleted Task");
+        }
         return std::move(*value_);
     }
 };

@@ -35,14 +35,17 @@ public:
 
     // Returns a slice to the buffer corresponding to the kernel-returned buffer ID
     [[nodiscard]] inline std::span<uint8_t> get_buffer(uint16_t bid, int bytes) const noexcept {
-        if (bid >= entries_) [[unlikely]] return {};
+        if (!memory_ || bid >= entries_ || bytes < 0) [[unlikely]] return {};
         uint8_t* ptr = memory_ + (static_cast<size_t>(bid) * buffer_size_);
-        size_t len = bytes > 0 ? static_cast<size_t>(bytes) : 0;
+        size_t len = std::min(static_cast<size_t>(bytes), buffer_size_);
         return {ptr, len};
     }
 
     // Return a consumed buffer back to the kernel ring
     inline void return_buffer(uint16_t bid) noexcept {
+        if (!buf_ring_ || !memory_ || bid >= entries_) [[unlikely]] {
+            return;
+        }
         io_uring_buf_ring_add(buf_ring_, 
                               memory_ + (static_cast<size_t>(bid) * buffer_size_),
                               static_cast<unsigned int>(buffer_size_), 

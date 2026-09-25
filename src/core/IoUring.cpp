@@ -7,50 +7,22 @@ namespace aegon::core {
 
 void IoUring::init(const IoUringConfig& config) {
     struct io_uring_params params{};
-    params.flags = config.flags;
-    if (config.enable_sqpoll) {
-        params.flags |= IORING_SETUP_SQPOLL;
-        params.sq_thread_idle = config.sq_thread_idle_ms;
-        if (config.sq_thread_cpu >= 0) {
-            params.flags |= IORING_SETUP_SQ_AFF;
-            params.sq_thread_cpu = static_cast<uint32_t>(config.sq_thread_cpu);
-        }
-    }
+    // Modern Linux 6.0+ zero-contention thread-per-core io_uring features:
+    // - IORING_SETUP_SINGLE_ISSUER: lockless submission queue for single-threaded loop
+    // - IORING_SETUP_COOP_TASKRUN: run task_work cooperatively to eliminate inter-core IPIs
+    // - IORING_SETUP_TASKRUN_FLAG: signal pending task_work via SQ ring flag
+    // - IORING_SETUP_SUBMIT_ALL: submit entire batch unconditionally
+    params.flags = config.flags | 
+                   IORING_SETUP_SINGLE_ISSUER | 
+                   IORING_SETUP_COOP_TASKRUN | 
+                   IORING_SETUP_TASKRUN_FLAG | 
+                   IORING_SETUP_SUBMIT_ALL;
 
     int ret = io_uring_queue_init_params(config.entries, &ring_, &params);
-    if (ret == 0) {
-        initialized_ = true;
-        sqpoll_enabled_ = (params.flags & IORING_SETUP_SQPOLL) != 0;
-        return;
+    if (ret != 0) {
+        throw std::system_error(-ret, std::generic_category(), "io_uring_queue_init_params failed");
     }
-
-    // Graceful fallback for SQPOLL if unprivileged or memory locked limit reached
-    if (config.enable_sqpoll && (ret == -EPERM || ret == -EACCES || ret == -ENOMEM)) {
-        std::memset(&params, 0, sizeof(params));
-        params.flags = config.flags;
-        ret = io_uring_queue_init_params(config.entries, &ring_, &params);
-        if (ret == 0) {
-            initialized_ = true;
-            sqpoll_enabled_ = false;
-            return;
-        }
-    }
-
-    // Graceful fallback if RLIMIT_MEMLOCK is restricted on host
-    uint32_t current_entries = config.entries;
-    while (ret == -ENOMEM && current_entries > 128) {
-        current_entries /= 2;
-        std::memset(&params, 0, sizeof(params));
-        params.flags = config.flags;
-        ret = io_uring_queue_init_params(current_entries, &ring_, &params);
-        if (ret == 0) {
-            initialized_ = true;
-            sqpoll_enabled_ = false;
-            return;
-        }
-    }
-
-    throw std::system_error(-ret, std::generic_category(), "io_uring_queue_init_params failed");
+    initialized_ = true;
 }
 
 IoUring::IoUring(uint32_t entries, uint32_t flags) {
@@ -73,10 +45,8 @@ IoUring::~IoUring() {
 
 IoUring::IoUring(IoUring&& other) noexcept
     : ring_(other.ring_),
-      initialized_(other.initialized_),
-      sqpoll_enabled_(other.sqpoll_enabled_) {
+      initialized_(other.initialized_) {
     other.initialized_ = false;
-    other.sqpoll_enabled_ = false;
 }
 
 IoUring& IoUring::operator=(IoUring&& other) noexcept {
@@ -86,26 +56,40 @@ IoUring& IoUring::operator=(IoUring&& other) noexcept {
         }
         ring_ = other.ring_;
         initialized_ = other.initialized_;
-        sqpoll_enabled_ = other.sqpoll_enabled_;
         other.initialized_ = false;
-        other.sqpoll_enabled_ = false;
     }
     return *this;
 }
 
-void IoUring::MultishotAcceptAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+struct io_uring_sqe* IoUring::acquire_sqe() noexcept {
+    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_);
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        int ret = io_uring_submit(&ring_);
+        if (ret >= 0) {
+            sqe = io_uring_get_sqe(&ring_);
+        }
     }
-    io_uring_prep_multishot_accept(sqe, listen_fd, 
-                                   reinterpret_cast<struct sockaddr*>(&addr), 
-                                   &addr_len, 0);
+    return sqe;
+}
+
+void IoUring::AcceptAwaiter::submit() noexcept {
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
+    if (!sqe) [[unlikely]] {
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
+    }
+    io_uring_prep_accept(sqe, listen_fd, 
+                         reinterpret_cast<struct sockaddr*>(&addr), 
+                         &addr_len, 0);
     io_uring_sqe_set_data(sqe, this);
 }
 
-AcceptResult IoUring::MultishotAcceptAwaiter::await_resume() noexcept {
+AcceptResult IoUring::AcceptAwaiter::await_resume() noexcept {
     AcceptResult res;
     res.fd = result;
     res.addr = addr;
@@ -114,48 +98,169 @@ AcceptResult IoUring::MultishotAcceptAwaiter::await_resume() noexcept {
     return res;
 }
 
-void MultishotAcceptStream::StreamAwaiter::submit() noexcept {
-    // If not yet armed in kernel, submit IORING_ACCEPT_MULTISHOT SQE
-    if (!stream.armed_) {
-        struct io_uring_sqe* sqe = io_uring_get_sqe(&stream.ring_.ring_);
-        if (!sqe) [[unlikely]] {
-            stream.ring_.submit_and_wait(0);
-            sqe = io_uring_get_sqe(&stream.ring_.ring_);
+MultishotAcceptStream::StreamState::~StreamState() {
+    for (const auto& res : backlog) {
+        if (res.fd >= 0) {
+            ::close(res.fd);
         }
-        io_uring_prep_multishot_accept(sqe, stream.listen_fd_, nullptr, nullptr, 0);
-        io_uring_sqe_set_data(sqe, this);
-        stream.armed_ = true;
     }
-    // If already armed, no SQE needed! Kernel will generate CQE directly on incoming connection.
+    backlog.clear();
 }
 
-AcceptResult MultishotAcceptStream::StreamAwaiter::await_resume() noexcept {
-    AcceptResult res;
-    res.fd = result;
-    res.has_more = (cqe_flags & IORING_CQE_F_MORE) != 0;
-    if (!res.has_more || result < 0) {
-        stream.armed_ = false;
+void MultishotAcceptStream::StreamState::submit() noexcept {
+    if (!armed) {
+        struct io_uring_sqe* sqe = ring.acquire_sqe();
+        if (!sqe) [[unlikely]] {
+            result = -EBUSY;
+            if (continuation && !continuation.done()) {
+                auto cont = continuation;
+                continuation = nullptr;
+                cont.resume();
+            }
+            return;
+        }
+        io_uring_prep_multishot_accept(sqe, listen_fd, nullptr, nullptr, 0);
+        io_uring_sqe_set_data(sqe, this);
+        armed = true;
+        self_ = shared_from_this();
     }
-    return res;
 }
+
+void MultishotAcceptStream::StreamState::on_completion(int res, uint32_t flags) noexcept {
+    AcceptResult ar;
+    ar.fd = res;
+    ar.has_more = (flags & IORING_CQE_F_MORE) != 0;
+    if (!ar.has_more || res < 0) {
+        armed = false;
+        finished = true;
+    }
+
+    if (continuation && !continuation.done()) {
+        current_result = ar;
+        auto cont = continuation;
+        continuation = nullptr;
+        cont.resume();
+    } else {
+        if (ar.fd >= 0) {
+            backlog.push_back(ar);
+        }
+    }
+
+    if (!armed) {
+        self_.reset();
+    }
+}
+
+MultishotAcceptStream::MultishotAcceptStream(IoUring& ring, int listen_fd)
+    : state_(std::make_shared<StreamState>(ring, listen_fd)) {}
+
+MultishotAcceptStream::~MultishotAcceptStream() {
+    cancel();
+}
+
+MultishotAcceptStream::MultishotAcceptStream(MultishotAcceptStream&&) noexcept = default;
+MultishotAcceptStream& MultishotAcceptStream::operator=(MultishotAcceptStream&&) noexcept = default;
 
 void MultishotAcceptStream::cancel() noexcept {
-    if (armed_ && ring_.raw_ring()) {
-        struct io_uring_sqe* sqe = io_uring_get_sqe(ring_.raw_ring());
+    if (state_ && state_->armed && state_->ring.raw_ring()) {
+        struct io_uring_sqe* sqe = state_->ring.acquire_sqe();
         if (sqe) {
-            io_uring_prep_cancel64(sqe, reinterpret_cast<uint64_t>(&awaiter_), 0);
+            io_uring_prep_cancel64(sqe, reinterpret_cast<uint64_t>(state_.get()), 0);
             io_uring_sqe_set_data(sqe, nullptr);
-            (void)io_uring_submit(ring_.raw_ring());
+            (void)io_uring_submit(state_->ring.raw_ring());
         }
-        armed_ = false;
+        state_->armed = false;
+        state_->cancelled = true;
+        state_->finished = true;
+    }
+}
+
+MultishotRecvStream::StreamState::~StreamState() {
+    backlog.clear();
+}
+
+void MultishotRecvStream::StreamState::submit() noexcept {
+    if (!armed && !finished && !cancelled) {
+        struct io_uring_sqe* sqe = ring.acquire_sqe();
+        if (!sqe) [[unlikely]] {
+            result = -EBUSY;
+            finished = true;
+            if (continuation && !continuation.done()) {
+                auto cont = continuation;
+                continuation = nullptr;
+                cont.resume();
+            }
+            return;
+        }
+        io_uring_prep_recv_multishot(sqe, socket_fd, nullptr, 0, 0);
+        sqe->flags |= IOSQE_BUFFER_SELECT;
+        sqe->buf_group = bgid;
+        io_uring_sqe_set_data(sqe, this);
+        armed = true;
+        self_ = shared_from_this();
+    }
+}
+
+void MultishotRecvStream::StreamState::on_completion(int res, uint32_t flags) noexcept {
+    RecvResult rr;
+    rr.bytes = res;
+    rr.has_more = (flags & IORING_CQE_F_MORE) != 0;
+    if (flags & IORING_CQE_F_BUFFER) {
+        rr.bid = static_cast<uint16_t>(flags >> IORING_CQE_BUFFER_SHIFT);
+    }
+    if (!rr.has_more || res <= 0) {
+        armed = false;
+        finished = true;
+    }
+
+    if (continuation && !continuation.done()) {
+        current_result = rr;
+        auto cont = continuation;
+        continuation = nullptr;
+        cont.resume();
+    } else {
+        backlog.push_back(rr);
+    }
+
+    if (!armed) {
+        self_.reset();
+    }
+}
+
+MultishotRecvStream::MultishotRecvStream(IoUring& ring, int socket_fd, uint16_t bgid)
+    : state_(std::make_shared<StreamState>(ring, socket_fd, bgid)) {}
+
+MultishotRecvStream::~MultishotRecvStream() {
+    cancel();
+}
+
+MultishotRecvStream::MultishotRecvStream(MultishotRecvStream&&) noexcept = default;
+MultishotRecvStream& MultishotRecvStream::operator=(MultishotRecvStream&&) noexcept = default;
+
+void MultishotRecvStream::cancel() noexcept {
+    if (state_ && state_->armed && state_->ring.raw_ring()) {
+        struct io_uring_sqe* sqe = state_->ring.acquire_sqe();
+        if (sqe) {
+            io_uring_prep_cancel64(sqe, reinterpret_cast<uint64_t>(state_.get()), 0);
+            io_uring_sqe_set_data(sqe, nullptr);
+            (void)io_uring_submit(state_->ring.raw_ring());
+        }
+        state_->armed = false;
+        state_->cancelled = true;
+        state_->finished = true;
     }
 }
 
 void IoUring::MultishotRecvAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     io_uring_prep_recv(sqe, socket_fd, nullptr, 0, 0);
     sqe->flags |= IOSQE_BUFFER_SELECT;
@@ -174,10 +279,15 @@ RecvResult IoUring::MultishotRecvAwaiter::await_resume() noexcept {
 }
 
 void IoUring::RecvAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     io_uring_prep_recv(sqe, socket_fd, buf, len, flags);
     io_uring_sqe_set_data(sqe, this);
@@ -188,12 +298,19 @@ int IoUring::RecvAwaiter::await_resume() noexcept {
 }
 
 void IoUring::ConnectAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
-    io_uring_prep_connect(sqe, socket_fd, addr, addr_len);
+    io_uring_prep_connect(sqe, socket_fd, 
+                          reinterpret_cast<const struct sockaddr*>(&addr), 
+                          addr_len);
     io_uring_sqe_set_data(sqe, this);
 }
 
@@ -202,10 +319,15 @@ int IoUring::ConnectAwaiter::await_resume() noexcept {
 }
 
 void IoUring::SendAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     io_uring_prep_send(sqe, socket_fd, buf, len, MSG_NOSIGNAL);
     io_uring_sqe_set_data(sqe, this);
@@ -216,18 +338,23 @@ int IoUring::SendAwaiter::await_resume() noexcept {
 }
 
 void IoUring::SendZcAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     if (fixed_buf_idx >= 0) {
         io_uring_prep_send_zc_fixed(sqe, socket_fd, buf, len, MSG_NOSIGNAL, 
-                                   static_cast<unsigned>(zc_flags), 
-                                   static_cast<unsigned>(fixed_buf_idx));
+                                    static_cast<unsigned>(zc_flags), 
+                                    static_cast<unsigned>(fixed_buf_idx));
     } else {
         io_uring_prep_send_zc(sqe, socket_fd, buf, len, MSG_NOSIGNAL, 
-                             static_cast<unsigned>(zc_flags));
+                              static_cast<unsigned>(zc_flags));
     }
     io_uring_sqe_set_data(sqe, this);
 }
@@ -237,25 +364,30 @@ void IoUring::SendZcAwaiter::on_completion(int res, uint32_t flags) noexcept {
         result = res;
         cqe_flags = flags;
         if (continuation && !continuation.done()) {
-            continuation.resume();
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
         }
         return;
     }
 
     if (flags & IORING_CQE_F_NOTIF) {
+        notif_received = true;
+    } else {
+        bytes_sent = res;
+        send_completed = true;
+        if (!(flags & IORING_CQE_F_MORE)) {
+            notif_received = true;
+        }
+    }
+
+    if (send_completed && notif_received) {
         result = bytes_sent;
         cqe_flags = flags;
         if (continuation && !continuation.done()) {
-            continuation.resume();
-        }
-    } else {
-        bytes_sent = res;
-        if (!(flags & IORING_CQE_F_MORE)) {
-            result = bytes_sent;
-            cqe_flags = flags;
-            if (continuation && !continuation.done()) {
-                continuation.resume();
-            }
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
         }
     }
 }
@@ -265,10 +397,15 @@ int IoUring::SendZcAwaiter::await_resume() noexcept {
 }
 
 void IoUring::SpliceAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     io_uring_prep_splice(sqe, fd_in, off_in, fd_out, off_out, nbytes, splice_flags);
     io_uring_sqe_set_data(sqe, this);
@@ -279,10 +416,15 @@ int IoUring::SpliceAwaiter::await_resume() noexcept {
 }
 
 void IoUring::CloseAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     io_uring_prep_close(sqe, fd);
     io_uring_sqe_set_data(sqe, this);
@@ -293,10 +435,15 @@ int IoUring::CloseAwaiter::await_resume() noexcept {
 }
 
 void IoUring::CancelAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     io_uring_prep_cancel64(sqe, user_data, cancel_flags);
     io_uring_sqe_set_data(sqe, this);
@@ -307,10 +454,15 @@ int IoUring::CancelAwaiter::await_resume() noexcept {
 }
 
 void IoUring::RecvmsgAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     io_uring_prep_recvmsg(sqe, socket_fd, msg, 0);
     io_uring_sqe_set_data(sqe, this);
@@ -321,10 +473,15 @@ int IoUring::RecvmsgAwaiter::await_resume() noexcept {
 }
 
 void IoUring::TimeoutAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     io_uring_prep_timeout(sqe, &ts, 0, 0);
     io_uring_sqe_set_data(sqe, this);
@@ -335,10 +492,15 @@ int IoUring::TimeoutAwaiter::await_resume() noexcept {
 }
 
 void IoUring::PollAwaiter::submit() noexcept {
-    struct io_uring_sqe* sqe = io_uring_get_sqe(&ring.ring_);
+    struct io_uring_sqe* sqe = ring.acquire_sqe();
     if (!sqe) [[unlikely]] {
-        ring.submit_and_wait(0);
-        sqe = io_uring_get_sqe(&ring.ring_);
+        result = -EBUSY;
+        if (continuation && !continuation.done()) {
+            auto cont = continuation;
+            continuation = nullptr;
+            cont.resume();
+        }
+        return;
     }
     io_uring_prep_poll_add(sqe, fd, poll_mask);
     io_uring_sqe_set_data(sqe, this);
@@ -384,6 +546,15 @@ Task<int> IoUring::send_all(int fd, const void* buf, size_t len) {
         total_sent += static_cast<size_t>(n);
     }
     co_return static_cast<int>(total_sent);
+}
+
+Task<int> IoUring::send_all(int fd, const char* str) {
+    if (!str) co_return 0;
+    co_return co_await send_all(fd, std::string_view(str));
+}
+
+Task<int> IoUring::send_all(int fd, std::string data) {
+    co_return co_await send_all(fd, data.data(), data.size());
 }
 
 Task<int> IoUring::send_all(int fd, std::string_view data) {

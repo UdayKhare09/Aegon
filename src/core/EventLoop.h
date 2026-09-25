@@ -5,6 +5,7 @@
 #include "Task.h"
 #include <vector>
 #include <functional>
+#include <atomic>
 
 namespace aegon::core {
 
@@ -49,12 +50,12 @@ public:
 
     [[nodiscard]] IoUring& ring() noexcept { return ring_; }
     [[nodiscard]] BufferPool& buffer_pool() noexcept { return buffer_pool_; }
-    [[nodiscard]] bool is_running() const noexcept { return running_; }
+    [[nodiscard]] bool is_running() const noexcept { return running_.load(std::memory_order_relaxed); }
 
 private:
     IoUring ring_;
     BufferPool buffer_pool_;
-    bool running_{false};
+    std::atomic<bool> running_{false};
     std::vector<Task<void>> tasks_;
 };
 

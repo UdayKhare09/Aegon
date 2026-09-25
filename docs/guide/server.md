@@ -103,13 +103,9 @@ Aegon exposes direct knobs for kernel I/O submission ring tuning:
 // Configure ring capacity (default: 4096 SQEs)
 server.ring_entries(8192);
 
-// Enable SQPOLL: Kernel polling thread for zero syscall overhead
-// Parameters: enable, idle_ms (kernel thread sleep threshold), cpu (pinned core, -1 = any)
-server.enable_sqpoll(true, 2000, 2);
+// Configure provided buffer pool entries (default: 8192)
+server.buffer_pool_entries(16384);
 ```
-
-### What is SQPOLL?
-With `IORING_SETUP_SQPOLL`, the Linux kernel spawns a dedicated kernel thread that continually polls the submission queue. The application produces I/O requests to ring buffers in user space without executing `io_uring_enter()` syscalls, enabling true zero-syscall network processing.
 
 ---
 

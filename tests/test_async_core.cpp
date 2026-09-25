@@ -132,6 +132,44 @@ int main() {
         std::cout << "  -> PASS: Multishot accept, multishot recv, and zero-copy send verified.\n";
     }
 
+    // 4. Edge-Case Hardening Tests
+    std::cout << "[TEST 4] Testing BufferPool bounds clamping & Coroutine exception handling...\n";
+    {
+        IoUring ring(256);
+        BufferPool pool(ring.raw_ring(), 2, 32, 2048);
+
+        // SEC-CORE-004: Length exceeding buffer_size_ is clamped
+        auto clamped = pool.get_buffer(0, 5000);
+        assert(clamped.size() == 2048);
+
+        // Out-of-bounds bid returns empty span
+        auto oob = pool.get_buffer(999, 100);
+        assert(oob.empty());
+
+        // SEC-CORE-005: Out-of-bounds return_buffer does not crash
+        pool.return_buffer(999);
+
+        // SEC-CORE-016: Coroutine exception propagation
+        auto throwing_task = []() -> Task<int> {
+            throw std::runtime_error("simulated_error");
+            co_return 10;
+        };
+
+        auto task = throwing_task();
+        task.resume();
+        assert(task.is_ready());
+
+        bool caught = false;
+        try {
+            (void)task.result();
+        } catch (const std::runtime_error& e) {
+            assert(std::string(e.what()) == "simulated_error");
+            caught = true;
+        }
+        assert(caught);
+        std::cout << "  -> PASS: Buffer clamping, OOB protection, and coroutine exceptions verified.\n";
+    }
+
     std::cout << "\n=======================================================\n";
     std::cout << "ALL ASYNC CORE TESTS PASSED SUCCESSFULLY!\n";
     std::cout << "=======================================================\n";

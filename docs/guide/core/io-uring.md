@@ -2,7 +2,7 @@
 
 The `aegon::core::IoUring` class provides an object-oriented, coroutine-native C++26 interface directly over the Linux kernel's `io_uring` asynchronous I/O subsystem.
 
-It leverages state-of-the-art Linux 6.x features: **Multishot Accept**, **Multishot Recv with Provided Buffer Rings (`PBUF_RING`)**, **Zero-Copy Send (`IORING_OP_SEND_ZC`)**, **Zero-Copy File Splice**, and **Kernel Submission Polling (`SQPOLL`)**.
+It leverages state-of-the-art Linux 6.x features: **Multishot Accept**, **Multishot Recv with Provided Buffer Rings (`PBUF_RING`)**, **Zero-Copy Send (`IORING_OP_SEND_ZC`)**, **Zero-Copy File Splice**, and **Single-Issuer Cooperative Taskrun**.
 
 ---
 
@@ -15,10 +15,7 @@ using namespace aegon::core;
 
 IoUringConfig config{
     .entries = 8192,                // SQ ring size (power of 2)
-    .flags = 0,                     // Additional IORING_SETUP_* flags
-    .enable_sqpoll = true,          // Dedicated kernel SQPOLL worker thread
-    .sq_thread_idle_ms = 2000,      // Thread sleep threshold in milliseconds
-    .sq_thread_cpu = 3              // Pin kernel polling thread to CPU core 3
+    .flags = 0                      // Additional IORING_SETUP_* flags
 };
 
 IoUring ring(config);

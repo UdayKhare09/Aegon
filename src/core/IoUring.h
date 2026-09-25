@@ -9,6 +9,9 @@
 #include <system_error>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <memory>
+#include <vector>
+#include <cstring>
 
 namespace aegon::core {
 
@@ -49,9 +52,6 @@ struct IoAwaiter {
 struct IoUringConfig {
     uint32_t entries{4096};
     uint32_t flags{0};
-    bool enable_sqpoll{false};
-    uint32_t sq_thread_idle_ms{2000};
-    int sq_thread_cpu{-1};
 };
 
 /**
@@ -74,12 +74,13 @@ struct RecvResult {
 };
 
 class MultishotAcceptStream;
+class MultishotRecvStream;
 
 /**
  * @brief Modern C++26 high-performance io_uring engine.
  *
  * Implements multishot accept, multishot recv (using PBUF_RING), zero-copy send,
- * zero-copy splice, SQPOLL kernel thread submission, and zero-allocation coroutine resumption.
+ * zero-copy splice, and zero-allocation coroutine resumption.
  */
 class IoUring {
 public:
@@ -96,31 +97,33 @@ public:
 
     // --- Coroutine Awaiters ---
 
-    // Multishot Accept Awaiter (one-shot or multishot step)
-    struct MultishotAcceptAwaiter : IoAwaiter {
+    // One-Shot Accept Awaiter
+    struct AcceptAwaiter : IoAwaiter {
         IoUring& ring;
         int listen_fd;
         sockaddr_storage addr{};
         socklen_t addr_len{sizeof(sockaddr_storage)};
 
-        MultishotAcceptAwaiter(IoUring& r, int fd) noexcept : ring(r), listen_fd(fd) {}
+        AcceptAwaiter(IoUring& r, int fd) noexcept : ring(r), listen_fd(fd) {}
 
         void submit() noexcept override;
         [[nodiscard]] AcceptResult await_resume() noexcept;
     };
+    using MultishotAcceptAwaiter = AcceptAwaiter;
 
-    // Multishot Recv: continuously yields packets directly into a Provided Buffer Ring
-    struct MultishotRecvAwaiter : IoAwaiter {
+    // One-Shot Recv with Provided Buffer Ring (PBUF_RING)
+    struct RecvProvidedAwaiter : IoAwaiter {
         IoUring& ring;
         int socket_fd;
         uint16_t bgid;
 
-        MultishotRecvAwaiter(IoUring& r, int fd, uint16_t b) noexcept 
+        RecvProvidedAwaiter(IoUring& r, int fd, uint16_t b) noexcept 
             : ring(r), socket_fd(fd), bgid(b) {}
 
         void submit() noexcept override;
         [[nodiscard]] RecvResult await_resume() noexcept;
     };
+    using MultishotRecvAwaiter = RecvProvidedAwaiter;
 
     // Direct Recv
     struct RecvAwaiter : IoAwaiter {
@@ -141,11 +144,15 @@ public:
     struct ConnectAwaiter : IoAwaiter {
         IoUring& ring;
         int socket_fd;
-        const sockaddr* addr;
-        socklen_t addr_len;
+        sockaddr_storage addr{};
+        socklen_t addr_len{0};
 
         ConnectAwaiter(IoUring& r, int fd, const sockaddr* a, socklen_t l) noexcept
-            : ring(r), socket_fd(fd), addr(a), addr_len(l) {}
+            : ring(r), socket_fd(fd), addr_len(std::min<socklen_t>(l, sizeof(sockaddr_storage))) {
+            if (a && addr_len > 0) {
+                std::memcpy(&addr, a, addr_len);
+            }
+        }
 
         void submit() noexcept override;
         [[nodiscard]] int await_resume() noexcept;
@@ -174,6 +181,8 @@ public:
         int zc_flags{0};
         int fixed_buf_idx{-1};
         int bytes_sent{0};
+        bool send_completed{false};
+        bool notif_received{false};
 
         SendZcAwaiter(IoUring& r, int fd, const void* b, size_t l, int zc_fl = 0, int buf_idx = -1) noexcept 
             : ring(r), socket_fd(fd), buf(b), len(l), zc_flags(zc_fl), fixed_buf_idx(buf_idx) {}
@@ -275,8 +284,15 @@ public:
 
     [[nodiscard]] MultishotAcceptStream accept_multishot(int listen_fd) noexcept;
 
-    [[nodiscard]] MultishotRecvAwaiter recv_multishot(int fd, uint16_t bgid) noexcept {
-        return MultishotRecvAwaiter{*this, fd, bgid};
+    [[nodiscard]] MultishotRecvStream recv_multishot_stream(int fd, uint16_t bgid) noexcept;
+    [[nodiscard]] MultishotRecvStream recv_stream(int fd, uint16_t bgid) noexcept;
+
+    [[nodiscard]] RecvProvidedAwaiter recv_provided(int fd, uint16_t bgid) noexcept {
+        return RecvProvidedAwaiter{*this, fd, bgid};
+    }
+
+    [[nodiscard]] RecvProvidedAwaiter recv_multishot(int fd, uint16_t bgid) noexcept {
+        return RecvProvidedAwaiter{*this, fd, bgid};
     }
 
     [[nodiscard]] RecvAwaiter recv(int fd, void* buf, size_t len, int flags = 0) noexcept {
@@ -296,6 +312,8 @@ public:
     }
 
     [[nodiscard]] Task<int> send_all(int fd, const void* buf, size_t len);
+    [[nodiscard]] Task<int> send_all(int fd, const char* str);
+    [[nodiscard]] Task<int> send_all(int fd, std::string data);
     [[nodiscard]] Task<int> send_all(int fd, std::string_view data);
     [[nodiscard]] Task<int> send_all(int fd, std::span<const uint8_t> data);
 
@@ -339,15 +357,17 @@ public:
 
     // Direct access to underlying struct io_uring
     [[nodiscard]] struct io_uring* raw_ring() noexcept { return &ring_; }
-    [[nodiscard]] bool is_sqpoll_enabled() const noexcept { return sqpoll_enabled_; }
+
+    // Safely acquire an SQE, submitting pending requests if queue is full. Non-throwing.
+    [[nodiscard]] struct io_uring_sqe* acquire_sqe() noexcept;
 
 private:
     friend class MultishotAcceptStream;
+    friend class MultishotRecvStream;
     void init(const IoUringConfig& config);
 
     struct io_uring ring_{};
     bool initialized_{false};
-    bool sqpoll_enabled_{false};
 };
 
 /**
@@ -358,50 +378,150 @@ private:
  */
 class MultishotAcceptStream {
 public:
-    MultishotAcceptStream(IoUring& ring, int listen_fd) noexcept
-        : ring_(ring), listen_fd_(listen_fd) {}
+    struct StreamState : IoAwaiter, std::enable_shared_from_this<StreamState> {
+        IoUring& ring;
+        int listen_fd{-1};
+        bool armed{false};
+        bool finished{false};
+        bool cancelled{false};
+        std::vector<AcceptResult> backlog{};
+        AcceptResult current_result{};
+        std::shared_ptr<StreamState> self_{nullptr};
 
-    ~MultishotAcceptStream() {
-        cancel();
-    }
+        StreamState(IoUring& r, int fd) noexcept : ring(r), listen_fd(fd) {}
+        ~StreamState();
+
+        void submit() noexcept override;
+        void on_completion(int res, uint32_t flags) noexcept override;
+    };
+
+    MultishotAcceptStream(IoUring& ring, int listen_fd);
+    ~MultishotAcceptStream();
 
     MultishotAcceptStream(const MultishotAcceptStream&) = delete;
     MultishotAcceptStream& operator=(const MultishotAcceptStream&) = delete;
-    MultishotAcceptStream(MultishotAcceptStream&& other) noexcept
-        : ring_(other.ring_), listen_fd_(other.listen_fd_),
-          armed_(other.armed_), awaiter_(other.awaiter_) {
-        other.armed_ = false;
-        other.listen_fd_ = -1;
-    }
+    MultishotAcceptStream(MultishotAcceptStream&&) noexcept;
+    MultishotAcceptStream& operator=(MultishotAcceptStream&&) noexcept;
 
-    struct StreamAwaiter : IoAwaiter {
-        MultishotAcceptStream& stream;
+    struct NextAwaiter {
+        StreamState& state;
 
-        explicit StreamAwaiter(MultishotAcceptStream& s) noexcept : stream(s) {}
+        bool await_ready() const noexcept {
+            return !state.backlog.empty() || state.finished || state.cancelled;
+        }
 
-        void submit() noexcept override;
-        [[nodiscard]] AcceptResult await_resume() noexcept;
+        void await_suspend(std::coroutine_handle<> h) noexcept {
+            state.continuation = h;
+            if (!state.armed && !state.finished && !state.cancelled) {
+                state.submit();
+            }
+        }
+
+        [[nodiscard]] AcceptResult await_resume() noexcept {
+            if (!state.backlog.empty()) {
+                auto res = state.backlog.front();
+                state.backlog.erase(state.backlog.begin());
+                return res;
+            }
+            return state.current_result;
+        }
     };
 
-    [[nodiscard]] StreamAwaiter next() noexcept {
-        return StreamAwaiter{*this};
+    [[nodiscard]] NextAwaiter next() noexcept {
+        return NextAwaiter{*state_};
     }
 
     void cancel() noexcept;
 
-    [[nodiscard]] bool is_armed() const noexcept { return armed_; }
-    [[nodiscard]] int listen_fd() const noexcept { return listen_fd_; }
+    [[nodiscard]] bool is_armed() const noexcept { return state_ && state_->armed; }
+    [[nodiscard]] int listen_fd() const noexcept { return state_ ? state_->listen_fd : -1; }
 
 private:
-    friend struct StreamAwaiter;
-    IoUring& ring_;
-    int listen_fd_{-1};
-    bool armed_{false};
-    StreamAwaiter awaiter_{*this};
+    std::shared_ptr<StreamState> state_;
 };
 
 inline MultishotAcceptStream IoUring::accept_multishot(int listen_fd) noexcept {
     return MultishotAcceptStream{*this, listen_fd};
+}
+
+/**
+ * @brief Asynchronous stream for IORING_RECV_MULTISHOT with provided buffer pools (PBUF_RING).
+ *
+ * Continuously yields packets from the socket into kernel provided buffers without
+ * SQE re-submission on each read packet.
+ */
+class MultishotRecvStream {
+public:
+    struct StreamState : IoAwaiter, std::enable_shared_from_this<StreamState> {
+        IoUring& ring;
+        int socket_fd{-1};
+        uint16_t bgid{0};
+        bool armed{false};
+        bool finished{false};
+        bool cancelled{false};
+        std::vector<RecvResult> backlog{};
+        RecvResult current_result{};
+        std::shared_ptr<StreamState> self_{nullptr};
+
+        StreamState(IoUring& r, int fd, uint16_t b) noexcept 
+            : ring(r), socket_fd(fd), bgid(b) {}
+        ~StreamState();
+
+        void submit() noexcept override;
+        void on_completion(int res, uint32_t flags) noexcept override;
+    };
+
+    MultishotRecvStream(IoUring& ring, int socket_fd, uint16_t bgid);
+    ~MultishotRecvStream();
+
+    MultishotRecvStream(const MultishotRecvStream&) = delete;
+    MultishotRecvStream& operator=(const MultishotRecvStream&) = delete;
+    MultishotRecvStream(MultishotRecvStream&&) noexcept;
+    MultishotRecvStream& operator=(MultishotRecvStream&&) noexcept;
+
+    struct NextAwaiter {
+        StreamState& state;
+
+        bool await_ready() const noexcept {
+            return !state.backlog.empty() || state.finished || state.cancelled;
+        }
+
+        void await_suspend(std::coroutine_handle<> h) noexcept {
+            state.continuation = h;
+            if (!state.armed && !state.finished && !state.cancelled) {
+                state.submit();
+            }
+        }
+
+        [[nodiscard]] RecvResult await_resume() noexcept {
+            if (!state.backlog.empty()) {
+                auto res = state.backlog.front();
+                state.backlog.erase(state.backlog.begin());
+                return res;
+            }
+            return state.current_result;
+        }
+    };
+
+    [[nodiscard]] NextAwaiter next() noexcept {
+        return NextAwaiter{*state_};
+    }
+
+    void cancel() noexcept;
+
+    [[nodiscard]] bool is_armed() const noexcept { return state_ && state_->armed; }
+    [[nodiscard]] int socket_fd() const noexcept { return state_ ? state_->socket_fd : -1; }
+
+private:
+    std::shared_ptr<StreamState> state_;
+};
+
+inline MultishotRecvStream IoUring::recv_multishot_stream(int fd, uint16_t bgid) noexcept {
+    return MultishotRecvStream{*this, fd, bgid};
+}
+
+inline MultishotRecvStream IoUring::recv_stream(int fd, uint16_t bgid) noexcept {
+    return MultishotRecvStream{*this, fd, bgid};
 }
 
 } // namespace aegon::core

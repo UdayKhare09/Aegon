@@ -34,9 +34,6 @@ Server::Server(Server&& other) noexcept
       background_workers_(std::move(other.background_workers_)),
       running_(other.running_.load()),
       workers_(std::move(other.workers_)),
-      sqpoll_enabled_(other.sqpoll_enabled_),
-      sq_thread_idle_ms_(other.sq_thread_idle_ms_),
-      sq_thread_cpu_(other.sq_thread_cpu_),
       ring_entries_(other.ring_entries_),
       buffer_pool_entries_(other.buffer_pool_entries_),
       tls_enabled_(other.tls_enabled_),
@@ -58,9 +55,6 @@ Server& Server::operator=(Server&& other) noexcept {
         background_workers_ = std::move(other.background_workers_);
         running_.store(other.running_.load());
         workers_ = std::move(other.workers_);
-        sqpoll_enabled_ = other.sqpoll_enabled_;
-        sq_thread_idle_ms_ = other.sq_thread_idle_ms_;
-        sq_thread_cpu_ = other.sq_thread_cpu_;
         ring_entries_ = other.ring_entries_;
         buffer_pool_entries_ = other.buffer_pool_entries_;
         tls_enabled_ = other.tls_enabled_;
@@ -143,8 +137,9 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
         }
     }
 
+    auto stream = loop.ring().recv_stream(client_fd, loop.buffer_pool().bgid());
     while (running_ && !h2.is_closed()) {
-        auto recv_res = co_await loop.ring().recv_multishot(client_fd, loop.buffer_pool().bgid());
+        auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
             break;
         }
@@ -183,8 +178,9 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_
         }
     }
 
+    auto stream = loop.ring().recv_stream(client_fd, loop.buffer_pool().bgid());
     while (running_ && !h2.is_closed()) {
-        auto recv_res = co_await loop.ring().recv_multishot(client_fd, loop.buffer_pool().bgid());
+        auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
             break;
         }
@@ -338,8 +334,10 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
     resp_batch.reserve(512);
     bool first_packet = true;
 
+    auto stream = loop.ring().recv_stream(client_fd, loop.buffer_pool().bgid());
+
     while (running_) {
-        auto recv_res = co_await loop.ring().recv_multishot(client_fd, loop.buffer_pool().bgid());
+        auto recv_res = co_await stream.next();
         if (recv_res.bytes == -ENOBUFS) {
             co_await loop.ring().timeout(100'000ULL);
             continue;
@@ -358,6 +356,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
             if (first_packet) {
                 first_packet = false;
                 if (req_accum.starts_with(v2::CLIENT_PREFACE)) {
+                    stream.cancel();
                     co_await handle_http2_connection(loop, client_fd, std::move(req_accum));
                     co_return;
                 }
@@ -408,6 +407,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 (void)(co_await loop.ring().send_all(client_fd, upgrade_res));
                 req_accum.erase(0, bytes_consumed);
                 std::string h2_settings = std::string(req.headers().get("HTTP2-Settings").value_or(""));
+                stream.cancel();
                 co_await handle_http2_upgrade(loop, client_fd, std::move(req), std::move(h2_settings), std::move(req_accum));
                 co_return;
             }
@@ -446,6 +446,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                     trailing = req_accum.substr(bytes_consumed);
                 }
 
+                stream.cancel();
                 websocket::WebSocketConnection ws_conn(loop, client_fd, std::string(req.path()),
                                                       ws_entry->handler, ws_entry->echo_handler);
                 co_await ws_conn.run(std::move(trailing));
@@ -601,9 +602,6 @@ void Server::run() {
 
     core::IoUringConfig ring_cfg;
     ring_cfg.entries = ring_entries_;
-    ring_cfg.enable_sqpoll = sqpoll_enabled_;
-    ring_cfg.sq_thread_idle_ms = sq_thread_idle_ms_;
-    ring_cfg.sq_thread_cpu = sq_thread_cpu_;
 
     core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
     for (const auto& al : thread_listeners) {
@@ -677,9 +675,6 @@ void Server::run(size_t threads) {
 
                 core::IoUringConfig ring_cfg;
                 ring_cfg.entries = ring_entries_;
-                ring_cfg.enable_sqpoll = sqpoll_enabled_;
-                ring_cfg.sq_thread_idle_ms = sq_thread_idle_ms_;
-                ring_cfg.sq_thread_cpu = sq_thread_cpu_ >= 0 ? sq_thread_cpu_ : static_cast<int>(i);
 
                 core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
                 cpu_set_t current_mask;

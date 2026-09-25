@@ -19,7 +19,7 @@ hero:
 features:
   - icon: ⚡
     title: Linux-Native io_uring Engine
-    details: Complete kernel bypass and zero-syscall runtime leveraging multishot accept, multishot recv, buffer rings, and optional SQPOLL kernel worker threads.
+    details: Complete kernel bypass and zero-contention runtime leveraging multishot accept, multishot recv, buffer rings, and single-issuer cooperative task work.
   - icon: 🔄
     title: Pure C++26 Coroutines
     details: Symmetric transfer coroutines via Task<T> with zero heap allocations in hot paths, eliminating thread pool exhaustion and context switching.

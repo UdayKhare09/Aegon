@@ -28,6 +28,8 @@ void test_find_crlf() {
     assert(SimdString::find_crlf("hello", 0) == std::string_view::npos);
     assert(SimdString::find_crlf("\r", 0) == std::string_view::npos);
     assert(SimdString::find_crlf("", 0) == std::string_view::npos);
+    assert(SimdString::find_crlf("hello\r\n", std::string_view::npos) == std::string_view::npos);
+    assert(SimdString::find_crlf("hello\r\n", 100) == std::string_view::npos);
 
     // Test pattern across 64-byte boundary
     std::string long_s(150, 'x');
@@ -44,6 +46,8 @@ void test_find_double_crlf() {
     std::string s = "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\nBody";
     assert(SimdString::find_double_crlf(s) == 37);
     assert(SimdString::find_double_crlf("invalid headers\r\n") == std::string_view::npos);
+    assert(SimdString::find_double_crlf("invalid headers\r\n\r\n", std::string_view::npos) == std::string_view::npos);
+    assert(SimdString::find_double_crlf("invalid headers\r\n\r\n", 500) == std::string_view::npos);
 
     std::string long_s(200, 'w');
     long_s[130] = '\r';
