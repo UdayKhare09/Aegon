@@ -40,6 +40,14 @@ public:
                 return pos + i + std::countr_zero(mask);
             }
         }
+        // Masked-load tail: handles remaining 1..63 bytes without scalar loop
+        if (i < len) {
+            __mmask64 tail = (__mmask64)((1ULL << (len - i)) - 1ULL);
+            __m512i chunk = _mm512_maskz_loadu_epi8(tail, ptr + i);
+            uint64_t mask = _mm512_cmpeq_epi8_mask(chunk, target) & (uint64_t)tail;
+            if (mask != 0) return pos + i + std::countr_zero(mask);
+        }
+        return std::string_view::npos;
 #elif defined(__AVX2__)
         const __m256i target = _mm256_set1_epi8(c);
         size_t i = 0;
@@ -65,7 +73,7 @@ public:
 #else
         size_t i = 0;
 #endif
-        // Scalar remainder
+        // Scalar remainder (AVX2 / SSE4.2 paths fall through here; AVX-512 returns early)
         for (; i < len; ++i) {
             if (ptr[i] == c) return pos + i;
         }
@@ -93,6 +101,17 @@ public:
                 return pos + i + std::countr_zero(mask);
             }
         }
+        // Masked-load tail: valid start positions are [i, len-2]
+        if (i + 1 < len) {
+            size_t n = len - i - 1; // number of valid CRLF start positions (1..63)
+            __mmask64 tail = (__mmask64)((1ULL << n) - 1ULL);
+            __m512i chunk_cr = _mm512_maskz_loadu_epi8(tail, ptr + i);
+            __m512i chunk_lf = _mm512_maskz_loadu_epi8(tail, ptr + i + 1);
+            uint64_t mask = (uint64_t)(_mm512_cmpeq_epi8_mask(chunk_cr, cr) &
+                                        _mm512_cmpeq_epi8_mask(chunk_lf, lf) & tail);
+            if (mask != 0) return pos + i + std::countr_zero(mask);
+        }
+        return std::string_view::npos;
 #elif defined(__AVX2__)
         const __m256i cr = _mm256_set1_epi8('\r');
         const __m256i lf = _mm256_set1_epi8('\n');
@@ -157,6 +176,21 @@ public:
                 return pos + i + std::countr_zero(mask);
             }
         }
+        // Masked-load tail: valid start positions are [i, len-4]
+        if (i + 3 < len) {
+            size_t n = len - i - 3; // number of valid start positions (1..63)
+            __mmask64 tail = (__mmask64)((1ULL << n) - 1ULL);
+            __m512i c0 = _mm512_maskz_loadu_epi8(tail, ptr + i);
+            __m512i c1 = _mm512_maskz_loadu_epi8(tail, ptr + i + 1);
+            __m512i c2 = _mm512_maskz_loadu_epi8(tail, ptr + i + 2);
+            __m512i c3 = _mm512_maskz_loadu_epi8(tail, ptr + i + 3);
+            uint64_t mask = (uint64_t)(_mm512_cmpeq_epi8_mask(c0, cr) &
+                                        _mm512_cmpeq_epi8_mask(c1, lf) &
+                                        _mm512_cmpeq_epi8_mask(c2, cr) &
+                                        _mm512_cmpeq_epi8_mask(c3, lf) & tail);
+            if (mask != 0) return pos + i + std::countr_zero(mask);
+        }
+        return std::string_view::npos;
 #elif defined(__AVX2__)
         const __m256i cr = _mm256_set1_epi8('\r');
         const __m256i lf = _mm256_set1_epi8('\n');
@@ -203,6 +237,11 @@ public:
 
     /**
      * @brief Case-insensitive ASCII equality comparison accelerated with SIMD.
+     *
+     * Fixes:
+     *  - AVX-512: added full 64-byte loop + masked-load tail for len > 32
+     *    (previously fell straight to scalar for any len > 32)
+     *  - SSE4.2:  fixed movemask comparison to avoid sign-extension artifacts
      */
     static inline bool iequals(std::string_view a, std::string_view b) noexcept {
         const size_t len = a.size();
@@ -213,6 +252,13 @@ public:
         const char* p2 = b.data();
 
 #if defined(__AVX512VL__) && defined(__AVX512BW__)
+        // Shared constants for all sub-paths
+        const __m512i upper_a_v = _mm512_set1_epi8('A' - 1);
+        const __m512i upper_z_v = _mm512_set1_epi8('Z' + 1);
+        const __m512i to_lower_v = _mm512_set1_epi8(32);
+
+        size_t i = 0; // declared here so the (dead) scalar fallback after #endif compiles
+
         if (len <= 16) {
             __mmask16 mask = (1U << len) - 1U;
             __m128i v1 = _mm_maskz_loadu_epi8(mask, p1);
@@ -237,8 +283,32 @@ public:
             v2 = _mm256_mask_add_epi8(v2, is_upper2, v2, _mm256_set1_epi8(32));
             __mmask32 eq_mask = _mm256_cmpeq_epi8_mask(v1, v2);
             return (eq_mask & mask) == mask;
+        } else {
+            // len > 32: full 64-byte AVX-512 loop with masked-load tail
+            for (; i + 64 <= len; i += 64) {
+                __m512i v1 = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(p1 + i));
+                __m512i v2 = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(p2 + i));
+                __mmask64 is_u1 = _mm512_cmpgt_epi8_mask(v1, upper_a_v) & _mm512_cmplt_epi8_mask(v1, upper_z_v);
+                __mmask64 is_u2 = _mm512_cmpgt_epi8_mask(v2, upper_a_v) & _mm512_cmplt_epi8_mask(v2, upper_z_v);
+                v1 = _mm512_mask_add_epi8(v1, is_u1, v1, to_lower_v);
+                v2 = _mm512_mask_add_epi8(v2, is_u2, v2, to_lower_v);
+                if (_mm512_cmpeq_epi8_mask(v1, v2) != ~(__mmask64)0) return false;
+            }
+            // Masked-load tail: remaining 1..63 bytes
+            if (i < len) {
+                size_t rem = len - i;
+                __mmask64 tail = (__mmask64)((1ULL << rem) - 1ULL);
+                __m512i v1 = _mm512_maskz_loadu_epi8(tail, p1 + i);
+                __m512i v2 = _mm512_maskz_loadu_epi8(tail, p2 + i);
+                __mmask64 is_u1 = _mm512_cmpgt_epi8_mask(v1, upper_a_v) & _mm512_cmplt_epi8_mask(v1, upper_z_v);
+                __mmask64 is_u2 = _mm512_cmpgt_epi8_mask(v2, upper_a_v) & _mm512_cmplt_epi8_mask(v2, upper_z_v);
+                v1 = _mm512_mask_add_epi8(v1, is_u1, v1, to_lower_v);
+                v2 = _mm512_mask_add_epi8(v2, is_u2, v2, to_lower_v);
+                if ((_mm512_cmpeq_epi8_mask(v1, v2) & tail) != tail) return false;
+            }
+            return true; // all 64-byte chunks and tail matched
         }
-        size_t i = 0;
+        // All branches above return — scalar loop below is dead code for AVX-512 path
 #elif defined(__AVX2__)
         size_t i = 0;
         const __m256i upper_a = _mm256_set1_epi8('A' - 1);
@@ -277,7 +347,8 @@ public:
             v2 = _mm_or_si128(v2, _mm_and_si128(is_u2, to_lower));
 
             __m128i cmp = _mm_cmpeq_epi8(v1, v2);
-            if (static_cast<uint32_t>(_mm_movemask_epi8(cmp)) != 0xFFFFU) {
+            // FIX: mask to 16 bits before comparison to avoid sign-extension artifacts
+            if ((_mm_movemask_epi8(cmp) & 0xFFFF) != 0xFFFF) {
                 return false;
             }
         }
@@ -285,7 +356,7 @@ public:
         size_t i = 0;
 #endif
 
-        // Scalar remainder
+        // Scalar remainder (reached by AVX2 and SSE4.2 paths; dead code for AVX-512)
         for (; i < len; ++i) {
             char ca = p1[i];
             char cb = p2[i];
@@ -313,7 +384,7 @@ public:
             if (mask != 0) return true;
         }
         if (i < len) {
-            __mmask64 mask_tail = (1ULL << (len - i)) - 1ULL;
+            __mmask64 mask_tail = (__mmask64)((1ULL << (len - i)) - 1ULL);
             __m512i chunk = _mm512_maskz_loadu_epi8(mask_tail, ptr + i);
             uint64_t mask = _mm512_cmpeq_epi8_mask(chunk, pct) | _mm512_cmpeq_epi8_mask(chunk, plus);
             if (mask != 0) return true;

@@ -59,23 +59,27 @@ struct TaskPromise final : TaskPromiseBase {
         value_.emplace(std::forward<U>(val));
     }
 
-    T& result() & {
-        if (exception_) [[unlikely]] {
-            std::rethrow_exception(exception_);
-        }
-        if (!value_.has_value()) [[unlikely]] {
+    // Non-destructive const& — safe to call multiple times after coroutine completes
+    const T& result() const& {
+        if (exception_) [[unlikely]] std::rethrow_exception(exception_);
+        if (!value_.has_value()) [[unlikely]]
             throw std::runtime_error("Attempted to read result from uncompleted Task");
-        }
         return *value_;
     }
 
-    T&& result() && {
-        if (exception_) [[unlikely]] {
-            std::rethrow_exception(exception_);
-        }
-        if (!value_.has_value()) [[unlikely]] {
+    // Non-destructive lvalue & — safe to call multiple times
+    T& result() & {
+        if (exception_) [[unlikely]] std::rethrow_exception(exception_);
+        if (!value_.has_value()) [[unlikely]]
             throw std::runtime_error("Attempted to read result from uncompleted Task");
-        }
+        return *value_;
+    }
+
+    // Destructive rvalue && — moves value out; used exclusively by co_await await_resume
+    T&& result() && {
+        if (exception_) [[unlikely]] std::rethrow_exception(exception_);
+        if (!value_.has_value()) [[unlikely]]
+            throw std::runtime_error("Attempted to read result from uncompleted Task");
         return std::move(*value_);
     }
 };
@@ -86,20 +90,29 @@ struct TaskPromise<void> final : TaskPromiseBase {
 
     void return_void() noexcept {}
 
+    // const overload: required so Task<void>::result() const& compiles
+    void result() const {
+        if (exception_) [[unlikely]] std::rethrow_exception(exception_);
+    }
+
     void result() {
-        if (exception_) [[unlikely]] {
-            std::rethrow_exception(exception_);
-        }
+        if (exception_) [[unlikely]] std::rethrow_exception(exception_);
     }
 };
 
 } // namespace detail
 
 /**
- * @brief High-performance C++26 lazy coroutine task with symmetric transfer.
+ * @brief High-performance C++ lazy coroutine task with symmetric transfer.
  *
- * Implements zero-cost coroutine chaining and symmetric transfer to prevent
- * stack-overflow during continuous network packet processing.
+ * Implements zero-cost coroutine chaining to prevent stack overflow during
+ * continuous network packet processing.
+ *
+ * Result semantics:
+ *  - result() &       : non-destructive reference; safe to call multiple times
+ *  - result() const&  : same, on a const Task
+ *  - take_result()    : moves the value out (single-use; explicit opt-in)
+ *  - co_await         : internally uses move semantics (single-use by nature)
  */
 template <typename T>
 class [[nodiscard]] Task {
@@ -136,7 +149,8 @@ public:
         return !coro_ || coro_.done();
     }
 
-    auto operator co_await() const & = delete;
+    // Disallow co_awaiting a named (lvalue) Task — prevents use-after-move bugs
+    auto operator co_await() const& = delete;
 
     auto operator co_await() && noexcept {
         struct Awaiter {
@@ -151,6 +165,7 @@ public:
                 return coro_;
             }
 
+            // co_await is single-use; move value for zero-copy forwarding
             decltype(auto) await_resume() {
                 if (!coro_) [[unlikely]] {
                     throw std::runtime_error("co_awaiting an invalid Task");
@@ -162,17 +177,42 @@ public:
         return Awaiter{coro_};
     }
 
-    // Direct resume for entrypoint loops
+    // Direct resume for entry-point loops (non-coroutine callers)
     void resume() {
         if (coro_ && !coro_.done()) {
             coro_.resume();
         }
     }
 
-    decltype(auto) result() {
-        if (!coro_) [[unlikely]] {
+    /**
+     * Non-destructive lvalue result — safe to call multiple times after is_ready().
+     * Uses decltype(auto) so T=void degrades to void return without a specialization.
+     */
+    [[nodiscard]] decltype(auto) result() & {
+        if (!coro_) [[unlikely]]
             throw std::runtime_error("Accessing result of an invalid Task");
-        }
+        return coro_.promise().result();
+    }
+
+    /**
+     * Non-destructive const result — safe on const Task.
+     */
+    [[nodiscard]] decltype(auto) result() const& {
+        if (!coro_) [[unlikely]]
+            throw std::runtime_error("Accessing result of an invalid Task");
+        return coro_.promise().result();
+    }
+
+    /**
+     * Destructive move — explicitly moves the stored value out of the task.
+     * Calling result() after take_result() is undefined behavior.
+     * Not available for Task<void>.
+     */
+    template <typename U = T>
+        requires (!std::is_void_v<U>)
+    [[nodiscard]] U take_result() {
+        if (!coro_) [[unlikely]]
+            throw std::runtime_error("Accessing result of an invalid Task");
         return std::move(coro_.promise()).result();
     }
 

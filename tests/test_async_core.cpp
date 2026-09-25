@@ -79,11 +79,12 @@ int main() {
 
         // Server coroutine
         auto server_task = [&](EventLoop& el) -> Task<void> {
-            auto accept_res = co_await el.ring().accept(listen_fd);
+            auto accept_res = co_await el.ring().accept_once(listen_fd);
             assert(accept_res.fd >= 0);
 
             // Multishot recv using buffer pool
-            auto recv_res = co_await el.ring().recv_multishot(accept_res.fd, el.buffer_pool().bgid());
+            auto recv_res = co_await el.ring().recv_provided(accept_res.fd, el.buffer_pool().bgid());
+            assert(recv_res.buffer_valid);
             assert(recv_res.bytes > 0);
 
             auto buf = el.buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);

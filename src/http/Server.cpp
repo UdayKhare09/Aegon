@@ -137,7 +137,7 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
         }
     }
 
-    auto stream = loop.ring().recv_stream(client_fd, loop.buffer_pool().bgid());
+    auto stream = loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
     while (running_ && !h2.is_closed()) {
         auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
@@ -178,7 +178,7 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_
         }
     }
 
-    auto stream = loop.ring().recv_stream(client_fd, loop.buffer_pool().bgid());
+    auto stream = loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
     while (running_ && !h2.is_closed()) {
         auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
@@ -334,7 +334,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
     resp_batch.reserve(512);
     bool first_packet = true;
 
-    auto stream = loop.ring().recv_stream(client_fd, loop.buffer_pool().bgid());
+    auto stream = loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
 
     while (running_) {
         auto recv_res = co_await stream.next();

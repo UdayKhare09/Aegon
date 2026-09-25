@@ -295,7 +295,7 @@ void test_multishot_recv_stream() {
     IoUring ring(256);
     BufferPool pool(ring.raw_ring(), 1, 64, 4096);
 
-    auto stream = ring.recv_stream(sv[0], pool.bgid());
+    auto stream = ring.recv_multishot_stream(sv[0], pool.bgid());
 
     std::vector<std::string> received_chunks;
     constexpr int TOTAL_MESSAGES = 10;

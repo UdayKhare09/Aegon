@@ -49,7 +49,7 @@ core::Task<bool> TlsStream::handshake() {
 
         int err = SSL_get_error(ssl_, ret);
         if (err == SSL_ERROR_WANT_READ) {
-            auto recv_res = co_await loop_.ring().recv_multishot(client_fd_, loop_.buffer_pool().bgid());
+            auto recv_res = co_await loop_.ring().recv_provided(client_fd_, loop_.buffer_pool().bgid());
             if (recv_res.bytes <= 0) {
                 co_return false;
             }
@@ -81,7 +81,7 @@ core::Task<int> TlsStream::read_plaintext(void* buf, size_t max_len) {
         }
 
         if (err == SSL_ERROR_WANT_READ) {
-            auto recv_res = co_await loop_.ring().recv_multishot(client_fd_, loop_.buffer_pool().bgid());
+            auto recv_res = co_await loop_.ring().recv_provided(client_fd_, loop_.buffer_pool().bgid());
             if (recv_res.bytes <= 0) {
                 co_return 0; // EOF
             }
