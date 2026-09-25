@@ -29,6 +29,14 @@ int on_frame_recv_cb(nghttp2_session*, const nghttp2_frame* frame, void* user_da
     return static_cast<Http2Connection*>(user_data)->on_frame_recv(frame);
 }
 
+int on_frame_send_cb(nghttp2_session*, const nghttp2_frame* frame, void* user_data) {
+    return static_cast<Http2Connection*>(user_data)->on_frame_send(frame);
+}
+
+int on_invalid_frame_recv_cb(nghttp2_session*, const nghttp2_frame* frame, int lib_error_code, void* user_data) {
+    return static_cast<Http2Connection*>(user_data)->on_invalid_frame_recv(frame, lib_error_code);
+}
+
 int on_stream_close_cb(nghttp2_session*, int32_t stream_id, uint32_t error_code, void* user_data) {
     return static_cast<Http2Connection*>(user_data)->on_stream_close(stream_id, error_code);
 }
@@ -53,6 +61,8 @@ Http2Connection::Http2Connection(core::EventLoop& loop, int client_fd, const Rou
     nghttp2_session_callbacks_set_on_header_callback(callbacks, on_header_cb);
     nghttp2_session_callbacks_set_on_data_chunk_recv_callback(callbacks, on_data_chunk_recv_cb);
     nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, on_frame_recv_cb);
+    nghttp2_session_callbacks_set_on_frame_send_callback(callbacks, on_frame_send_cb);
+    nghttp2_session_callbacks_set_on_invalid_frame_recv_callback(callbacks, on_invalid_frame_recv_cb);
     nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, on_stream_close_cb);
 
     nghttp2_session_server_new(&session_, callbacks, this);
@@ -85,7 +95,28 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
         return 0;
     }
 
-    auto* stream = get_or_create_stream(frame->hd.stream_id);
+    int32_t sid = frame->hd.stream_id;
+    if (closed_stream_ids_.contains(sid)) {
+        nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, sid, NGHTTP2_STREAM_CLOSED);
+        return 0;
+    }
+
+    if (streams_.find(sid) == streams_.end()) {
+        if (sid <= max_remote_stream_id_) {
+            nghttp2_session_terminate_session(session_, NGHTTP2_PROTOCOL_ERROR);
+            closed_ = true;
+            return NGHTTP2_ERR_CALLBACK_FAILURE;
+        }
+        max_remote_stream_id_ = sid;
+    }
+
+    auto* stream = get_or_create_stream(sid);
+    if (stream->request_complete) {
+        stream->reset = true;
+        nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, sid, NGHTTP2_STREAM_CLOSED);
+        return 0;
+    }
+
     std::string_view n(reinterpret_cast<const char*>(name), namelen);
     std::string_view v(reinterpret_cast<const char*>(value), valuelen);
 
@@ -128,7 +159,16 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
 }
 
 int Http2Connection::on_data_chunk_recv(uint8_t, int32_t stream_id, const uint8_t* data, size_t len) {
+    if (closed_stream_ids_.contains(stream_id)) {
+        nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_STREAM_CLOSED);
+        return 0;
+    }
     auto* stream = get_or_create_stream(stream_id);
+    if (stream->request_complete) {
+        stream->reset = true;
+        nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_STREAM_CLOSED);
+        return 0;
+    }
     if (stream->body_accum.size() + len > MAX_BODY_SIZE) {
         if (stream->error_status == StatusCode::Ok) {
             stream->error_status = StatusCode::PayloadTooLarge;
@@ -152,6 +192,13 @@ int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
             stream->request_complete = true;
             pending_dispatch_.push_back(frame->hd.stream_id);
         }
+    } else if (frame->hd.type == NGHTTP2_PRIORITY) {
+        if (frame->hd.stream_id == 0) {
+            nghttp2_submit_goaway(session_, NGHTTP2_FLAG_NONE, 0, NGHTTP2_PROTOCOL_ERROR, nullptr, 0);
+            closed_ = true;
+        } else if (frame->priority.pri_spec.stream_id == frame->hd.stream_id) {
+            nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, frame->hd.stream_id, NGHTTP2_PROTOCOL_ERROR);
+        }
     } else if (frame->hd.type == NGHTTP2_RST_STREAM) {
         // CVE-2023-44487: Rapid Reset Attack mitigation
         ++rst_count_;
@@ -161,11 +208,42 @@ int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
             closed_ = true;
             return NGHTTP2_ERR_CALLBACK_FAILURE;
         }
+    } else if (frame->hd.type == NGHTTP2_GOAWAY) {
+        closed_ = true;
+    }
+    return 0;
+}
+
+int Http2Connection::on_frame_send(const nghttp2_frame* frame) {
+    if (frame->hd.type == NGHTTP2_GOAWAY) {
+        closed_ = true;
+    }
+    return 0;
+}
+
+int Http2Connection::on_invalid_frame_recv(const nghttp2_frame* frame, int lib_error_code) {
+    if (frame->hd.stream_id != 0) {
+        auto it = streams_.find(frame->hd.stream_id);
+        if (it != streams_.end()) {
+            it->second->reset = true;
+        }
+        if (lib_error_code == NGHTTP2_ERR_STREAM_CLOSED || lib_error_code == NGHTTP2_ERR_STREAM_CLOSING) {
+            nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, frame->hd.stream_id, NGHTTP2_STREAM_CLOSED);
+        } else {
+            nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, frame->hd.stream_id, NGHTTP2_PROTOCOL_ERROR);
+        }
+    } else {
+        nghttp2_session_terminate_session(session_, NGHTTP2_PROTOCOL_ERROR);
+        closed_ = true;
     }
     return 0;
 }
 
 int Http2Connection::on_stream_close(int32_t stream_id, uint32_t) {
+    closed_stream_ids_.insert(stream_id);
+    if (closed_stream_ids_.size() > 1024) {
+        closed_stream_ids_.erase(closed_stream_ids_.begin());
+    }
     streams_.erase(stream_id);
     return 0;
 }
@@ -339,10 +417,11 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
     pending_dispatch_.clear();
 
     for (int32_t sid : ready) {
+        if (closed_stream_ids_.contains(sid)) continue;
         auto it = streams_.find(sid);
         if (it == streams_.end()) continue;
         auto* stream = it->second.get();
-        if (stream->response_submitted) continue;
+        if (stream->reset || stream->response_submitted) continue;
 
         if (stream->error_status != StatusCode::Ok) {
             stream->res.status(stream->error_status).text(status_phrase(stream->error_status));
@@ -410,11 +489,16 @@ core::Task<bool> Http2Connection::feed_data(const void* data, size_t len) {
     ssize_t readlen = nghttp2_session_mem_recv(session_, reinterpret_cast<const uint8_t*>(data), len);
     if (readlen < 0) {
         closed_ = true;
+        (void)co_await flush_outbound();
         co_return false;
     }
 
     co_await dispatch_pending_requests();
-    co_return co_await flush_outbound();
+    bool flushed = co_await flush_outbound();
+    if (!nghttp2_session_want_read(session_) && !nghttp2_session_want_write(session_)) {
+        closed_ = true;
+    }
+    co_return flushed && !closed_;
 }
 
 bool Http2Connection::wants_read() const noexcept {

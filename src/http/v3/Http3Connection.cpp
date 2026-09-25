@@ -221,6 +221,7 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
         if ((stream_id & 0x03) == 0) {
             ngtcp2_conn_extend_max_streams_bidi(conn, 1);
         }
+        self->on_stream_reset();
         return 0;
     };
 
@@ -425,6 +426,13 @@ int Http3Connection::on_stream_data(int64_t stream_id, const uint8_t* data, size
 int Http3Connection::on_stream_close(int64_t stream_id, uint64_t) {
     streams_.erase(stream_id);
     return 0;
+}
+
+void Http3Connection::on_stream_reset() {
+    ++rst_count_;
+    if (rst_count_ > rst_burst_limit_) {
+        closed_ = true;
+    }
 }
 
 nghttp3_ssize Http3Connection::on_stream_read(int64_t stream_id, uint32_t* pflags, nghttp3_vec* vec, size_t veccnt) {

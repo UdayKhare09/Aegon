@@ -182,7 +182,7 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
     }
 
     auto stream = loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
-    while (running_ && !h2.is_closed()) {
+    while (running_ && !h2.is_closed() && h2.wants_read()) {
         auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
             break;
@@ -197,6 +197,7 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
         }
     }
 
+    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
     (void)(co_await loop.ring().close(client_fd));
 }
 
@@ -223,7 +224,7 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_
     }
 
     auto stream = loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
-    while (running_ && !h2.is_closed()) {
+    while (running_ && !h2.is_closed() && h2.wants_read()) {
         auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
             break;
@@ -238,6 +239,7 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_
         }
     }
 
+    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
     (void)(co_await loop.ring().close(client_fd));
 }
 
@@ -268,7 +270,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
         }
 
         char read_buf[4096];
-        while (running_ && !h2.is_closed()) {
+        while (running_ && !h2.is_closed() && h2.wants_read()) {
             int n = co_await tls_stream.read_plaintext(read_buf, sizeof(read_buf));
             if (n <= 0) break;
 
@@ -345,6 +347,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
         }
     }
 
+    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
     (void)(co_await loop.ring().close(client_fd));
 }
 

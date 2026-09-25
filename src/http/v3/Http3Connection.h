@@ -121,11 +121,15 @@ private:
     ngtcp2_crypto_ossl_ctx* ossl_ctx_{nullptr};
     ngtcp2_crypto_conn_ref conn_ref_{};
 
+    void on_stream_reset();
+
     std::unordered_map<int64_t, std::unique_ptr<Http3Stream>> streams_;
     std::vector<int64_t> pending_dispatch_;
     std::vector<std::string> scids_;
     bool http3_streams_setup_{false};
     bool closed_{false};
+    uint32_t rst_count_{0};
+    uint32_t rst_burst_limit_{100};
 };
 
 } // namespace aegon::http::v3

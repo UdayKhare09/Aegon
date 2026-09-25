@@ -6,6 +6,7 @@
 #include "core/EventLoop.h"
 #include <nghttp2/nghttp2.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -27,6 +28,7 @@ struct Http2Stream {
     StatusCode error_status{StatusCode::Ok};
     bool request_complete{false};
     bool response_submitted{false};
+    bool reset{false};
 };
 
 using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
@@ -76,6 +78,8 @@ public:
                   const uint8_t* value, size_t valuelen, uint8_t flags);
     int on_data_chunk_recv(uint8_t flags, int32_t stream_id, const uint8_t* data, size_t len);
     int on_frame_recv(const nghttp2_frame* frame);
+    int on_frame_send(const nghttp2_frame* frame);
+    int on_invalid_frame_recv(const nghttp2_frame* frame, int lib_error_code);
     int on_stream_close(int32_t stream_id, uint32_t error_code);
     ssize_t on_data_source_read(int32_t stream_id, uint8_t* buf, size_t length, uint32_t* data_flags);
 
@@ -97,6 +101,8 @@ private:
     bool closed_{false};
     uint32_t rst_count_{0};
     uint32_t rst_burst_limit_{100};
+    int32_t max_remote_stream_id_{0};
+    std::unordered_set<int32_t> closed_stream_ids_;
 };
 
 } // namespace aegon::http::v2
