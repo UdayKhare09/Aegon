@@ -2,6 +2,7 @@
 #include "http/Request.h"
 #include "http/Response.h"
 #include "http/Context.h"
+#include "http/v1/Http1Parser.h"
 #include "data/types/UUIDGenerator.h"
 #include <iostream>
 #include <cassert>
@@ -541,6 +542,49 @@ void test_http_subsystem_fixes() {
         auto ct = res.headers().get("Content-Type");
         TEST_CHECK(ct.has_value());
         TEST_CHECK(*ct == "application/problem+json");
+    }
+
+    // 6. RFC 9110: 405 Method Not Allowed must emit Allow header
+    {
+        Router router;
+        router.get("/api/items", [](Context& ctx) { ctx.res().text("get"); });
+        router.post("/api/items", [](Context& ctx) { ctx.res().text("post"); });
+
+        Request req;
+        req.set_method(Method::DELETE);
+        req.set_path("/api/items");
+        Response res;
+
+        auto task = router.dispatch(req, res, nullptr);
+        task.resume();
+
+        TEST_CHECK(res.status() == StatusCode::MethodNotAllowed);
+        auto allow = res.headers().get("Allow");
+        TEST_CHECK(allow.has_value());
+        TEST_CHECK(allow->find("GET") != std::string_view::npos);
+        TEST_CHECK(allow->find("POST") != std::string_view::npos);
+    }
+
+    // 7. RFC 9112: 414 URI Too Long and 431 Headers Too Large
+    {
+        Request req;
+        size_t consumed = 0;
+        std::string long_uri = "GET /" + std::string(9000, 'a') + " HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        auto st1 = v1::Http1Parser::parse(long_uri, req, consumed);
+        TEST_CHECK(st1 == v1::ParseStatus::UriTooLong);
+
+        std::string huge_headers = "GET / HTTP/1.1\r\nHost: localhost\r\n";
+        for (int i = 0; i < 700; ++i) {
+            huge_headers += "X-Large-" + std::to_string(i) + ": " + std::string(100, 'x') + "\r\n";
+        }
+        huge_headers += "\r\n";
+        auto st2 = v1::Http1Parser::parse(huge_headers, req, consumed);
+        TEST_CHECK(st2 == v1::ParseStatus::HeadersTooLarge);
+
+        // 8. RFC 9112 / RFC 9110: 413 Payload Too Large
+        std::string huge_cl = "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 20000000\r\n\r\n";
+        auto st3 = v1::Http1Parser::parse(huge_cl, req, consumed);
+        TEST_CHECK(st3 == v1::ParseStatus::PayloadTooLarge);
     }
 
     std::cout << "  -> PASS: All HTTP subsystem fixes & RFC compliance checks verified.\n";

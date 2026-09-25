@@ -14,11 +14,17 @@ enum class ParseStatus {
     Complete,
     NeedMoreData,
     Error,
-    NotImplemented
+    NotImplemented,
+    UriTooLong,
+    HeadersTooLarge,
+    PayloadTooLarge
 };
 
 class Http1Parser {
 public:
+    static constexpr size_t MAX_URI_LENGTH = aegon::http::MAX_URI_LENGTH;
+    static constexpr size_t MAX_HEADERS_SIZE = aegon::http::MAX_HEADERS_SIZE;
+    static constexpr size_t MAX_BODY_SIZE = aegon::http::MAX_BODY_SIZE;
     /**
      * @brief Parse hex chunk size per RFC 9112 §7.1 using branchless lookup table
      */
@@ -74,6 +80,9 @@ public:
         size_t sp2 = aegon::core::simd::SimdString::find_char(req_line, ' ', sp1 + 1);
         if (sp2 == std::string_view::npos) return ParseStatus::Error;
         std::string_view full_path = req_line.substr(sp1 + 1, sp2 - (sp1 + 1));
+        if (full_path.size() > MAX_URI_LENGTH) {
+            return ParseStatus::UriTooLong;
+        }
         if (full_path.empty() || full_path[0] != '/') {
             // Asterisk form for OPTIONS or absoluteURI
             if (full_path != "*" && !full_path.starts_with("http://") && !full_path.starts_with("https://")) {
@@ -129,6 +138,9 @@ public:
         bool headers_complete = false;
 
         while (cursor < buffer.size()) {
+            if (cursor - req_line_end > MAX_HEADERS_SIZE) {
+                return ParseStatus::HeadersTooLarge;
+            }
             // Check for end of headers (\r\n)
             if (buffer.size() >= cursor + 2 && buffer[cursor] == '\r' && buffer[cursor + 1] == '\n') {
                 cursor += 2;
@@ -182,6 +194,9 @@ public:
                 for (char c : value) {
                     if (c >= '0' && c <= '9') {
                         content_length = content_length * 10 + (c - '0');
+                        if (content_length > MAX_BODY_SIZE) {
+                            return ParseStatus::PayloadTooLarge;
+                        }
                     } else {
                         return ParseStatus::Error; // Invalid non-digit in Content-Length
                     }
@@ -282,6 +297,10 @@ public:
                 // Verify chunk ends with \r\n
                 if (buffer[chunk_cursor + chunk_size] != '\r' || buffer[chunk_cursor + chunk_size + 1] != '\n') {
                     return ParseStatus::Error;
+                }
+
+                if (decoded_body.size() + chunk_size > MAX_BODY_SIZE) {
+                    return ParseStatus::PayloadTooLarge;
                 }
 
                 decoded_body.append(buffer.data() + chunk_cursor, chunk_size);

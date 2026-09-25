@@ -319,10 +319,17 @@ public:
                 };
             }
             // Path matched statically, but method was not registered
+            uint16_t mask = 0;
+            for (size_t i = 0; i < it->second.has_handler.size(); ++i) {
+                if (it->second.has_handler[i]) {
+                    mask |= static_cast<uint16_t>(1U << i);
+                }
+            }
             return MatchResult{
                 .handler = nullptr,
                 .route_found = true,
-                .method_not_allowed = true
+                .method_not_allowed = true,
+                .allowed_methods = mask
             };
         }
 
@@ -411,6 +418,18 @@ public:
             if (match_res.route_found && match_res.handler) {
                 co_await (*match_res.handler)(ctx);
             } else if (match_res.method_not_allowed) {
+                // RFC 9110 §15.5.6: Server generating a 405 MUST generate an Allow header field
+                std::string allow_str;
+                for (size_t i = 0; i < 9; ++i) {
+                    if (match_res.allowed_methods & (1U << i)) {
+                        if (!allow_str.empty()) allow_str.append(", ");
+                        allow_str.append(to_string(static_cast<Method>(i)));
+                    }
+                }
+                if (!allow_str.empty()) {
+                    res.set_header_owned("Allow", std::move(allow_str));
+                }
+
                 if (method_not_allowed_handler_) {
                     std::exception_ptr fallback_ex{nullptr};
                     try {

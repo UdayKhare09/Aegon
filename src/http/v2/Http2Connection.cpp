@@ -89,9 +89,17 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
     std::string_view n(reinterpret_cast<const char*>(name), namelen);
     std::string_view v(reinterpret_cast<const char*>(value), valuelen);
 
+    stream->headers_total_size += namelen + valuelen;
+    if (stream->headers_total_size > MAX_HEADERS_SIZE && stream->error_status == StatusCode::Ok) {
+        stream->error_status = StatusCode::RequestHeaderFieldsTooLarge;
+    }
+
     if (n == ":method") {
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
+        if (v.size() > MAX_URI_LENGTH && stream->error_status == StatusCode::Ok) {
+            stream->error_status = StatusCode::UriTooLong;
+        }
         size_t qmark = core::simd::SimdString::find_char(v, '?');
         if (qmark != std::string_view::npos) {
             stream->path_storage.assign(v.data(), qmark);
@@ -121,6 +129,12 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
 
 int Http2Connection::on_data_chunk_recv(uint8_t, int32_t stream_id, const uint8_t* data, size_t len) {
     auto* stream = get_or_create_stream(stream_id);
+    if (stream->body_accum.size() + len > MAX_BODY_SIZE) {
+        if (stream->error_status == StatusCode::Ok) {
+            stream->error_status = StatusCode::PayloadTooLarge;
+        }
+        return 0;
+    }
     stream->body_accum.append(reinterpret_cast<const char*>(data), len);
     return 0;
 }
@@ -137,6 +151,15 @@ int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
             auto* stream = get_or_create_stream(frame->hd.stream_id);
             stream->request_complete = true;
             pending_dispatch_.push_back(frame->hd.stream_id);
+        }
+    } else if (frame->hd.type == NGHTTP2_RST_STREAM) {
+        // CVE-2023-44487: Rapid Reset Attack mitigation
+        ++rst_count_;
+        if (rst_count_ > rst_burst_limit_) {
+            nghttp2_submit_goaway(session_, NGHTTP2_FLAG_NONE, frame->hd.stream_id,
+                                  NGHTTP2_ENHANCE_YOUR_CALM, nullptr, 0);
+            closed_ = true;
+            return NGHTTP2_ERR_CALLBACK_FAILURE;
         }
     }
     return 0;
@@ -210,10 +233,7 @@ void Http2Connection::submit_response(Http2Stream* stream) {
     push_nv(reinterpret_cast<const uint8_t*>(":status"), 7,
             reinterpret_cast<const uint8_t*>(status_buf), status_len);
 
-    uint16_t sc = static_cast<uint16_t>(stream->res.status());
-    bool no_content_body = (sc >= 100 && sc < 200) || sc == 204 || sc == 304;
-
-    if (!no_content_body && !stream->res.headers().contains("content-length")) {
+    if (!should_suppress_content_length(stream->res.status()) && !stream->res.headers().contains("content-length")) {
         push_nv(reinterpret_cast<const uint8_t*>("content-length"), 14,
                 reinterpret_cast<const uint8_t*>(cl_buf), cl_len);
     }
@@ -223,20 +243,10 @@ void Http2Connection::submit_response(Http2Stream* stream) {
     lower_names.reserve(stream->res.headers().size());
 
     for (const auto& h : stream->res.headers()) {
-        // RFC 9113 §8.2.2: Connection-specific headers must not be sent in HTTP/2
-        if (core::simd::SimdString::iequals(h.name, "connection") ||
-            core::simd::SimdString::iequals(h.name, "keep-alive") ||
-            core::simd::SimdString::iequals(h.name, "transfer-encoding") ||
-            core::simd::SimdString::iequals(h.name, "upgrade")) {
+        if (is_hop_by_hop_header(h.name)) {
             continue;
         }
-        // RFC 9113 §8.2.1: Header field names must be lowercase
-        std::string lower_name;
-        lower_name.reserve(h.name.size());
-        for (char c : h.name) {
-            lower_name.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-        }
-        lower_names.push_back(std::move(lower_name));
+        lower_names.push_back(to_lower_ascii(h.name));
         const auto& ln = lower_names.back();
         push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
                 reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
@@ -333,6 +343,12 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
         if (it == streams_.end()) continue;
         auto* stream = it->second.get();
         if (stream->response_submitted) continue;
+
+        if (stream->error_status != StatusCode::Ok) {
+            stream->res.status(stream->error_status).text(status_phrase(stream->error_status));
+            submit_response(stream);
+            continue;
+        }
 
         if (!stream->body_accum.empty()) {
             stream->req.set_body(stream->body_accum);

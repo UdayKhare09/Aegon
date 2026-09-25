@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <string_view>
+#include <string>
+#include <cctype>
 
 namespace aegon::http {
 
@@ -103,6 +105,7 @@ enum class StatusCode : uint16_t {
     UnprocessableEntity = 422,
     UpgradeRequired = 426,
     TooManyRequests = 429,
+    RequestHeaderFieldsTooLarge = 431,
 
     // 5xx Server Error
     InternalServerError = 500,
@@ -146,6 +149,7 @@ constexpr std::string_view status_phrase(StatusCode code) noexcept {
         case StatusCode::UnprocessableEntity: return "Unprocessable Entity";
         case StatusCode::UpgradeRequired: return "Upgrade Required";
         case StatusCode::TooManyRequests: return "Too Many Requests";
+        case StatusCode::RequestHeaderFieldsTooLarge: return "Request Header Fields Too Large";
         case StatusCode::InternalServerError: return "Internal Server Error";
         case StatusCode::NotImplemented: return "Not Implemented";
         case StatusCode::BadGateway: return "Bad Gateway";
@@ -154,6 +158,52 @@ constexpr std::string_view status_phrase(StatusCode code) noexcept {
         case StatusCode::HttpVersionNotSupported: return "HTTP Version Not Supported";
     }
     return "Unknown";
+}
+
+// Aegon Protocol Constraints & Limits across H1, H2, and H3
+inline constexpr size_t MAX_URI_LENGTH = 8192;            // 8 KB limit -> 414 URI Too Long
+inline constexpr size_t MAX_HEADERS_SIZE = 65536;         // 64 KB total header section limit -> 431 Request Header Fields Too Large
+inline constexpr size_t MAX_BODY_SIZE = 16 * 1024 * 1024; // 16 MB maximum payload size -> 413 Payload Too Large
+
+/**
+ * @brief Checks if a header is hop-by-hop (prohibited in HTTP/2 RFC 9113 §8.2.2 and HTTP/3 RFC 9114 §4.2)
+ */
+inline bool is_hop_by_hop_header(std::string_view name) noexcept {
+    auto iequals = [](std::string_view a, std::string_view b) noexcept {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            char ca = a[i];
+            char cb = b[i];
+            if (ca >= 'A' && ca <= 'Z') ca += 32;
+            if (cb >= 'A' && cb <= 'Z') cb += 32;
+            if (ca != cb) return false;
+        }
+        return true;
+    };
+    return iequals(name, "connection") ||
+           iequals(name, "keep-alive") ||
+           iequals(name, "transfer-encoding") ||
+           iequals(name, "upgrade");
+}
+
+/**
+ * @brief Checks if status code mandates suppression of Content-Length (RFC 9110 §8.6)
+ */
+inline bool should_suppress_content_length(StatusCode code) noexcept {
+    uint16_t sc = static_cast<uint16_t>(code);
+    return (sc >= 100 && sc < 200) || sc == 204 || sc == 304;
+}
+
+/**
+ * @brief Fast ASCII lowercase conversion
+ */
+inline std::string to_lower_ascii(std::string_view sv) {
+    std::string s;
+    s.reserve(sv.size());
+    for (char c : sv) {
+        s.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    return s;
 }
 
 } // namespace aegon::http

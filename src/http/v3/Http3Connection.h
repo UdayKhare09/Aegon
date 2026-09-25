@@ -15,6 +15,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <deque>
 #include <span>
 #include <cstdint>
 
@@ -33,9 +34,11 @@ struct Http3Stream {
     Response res;
     std::string path_storage;
     std::string query_storage;
-    std::vector<std::pair<std::string, std::string>> header_storage;
+    std::deque<std::pair<std::string, std::string>> header_storage;
     std::string body_accum;
     size_t body_offset{0};
+    size_t headers_total_size{0};
+    StatusCode error_status{StatusCode::Ok};
     bool request_complete{false};
     bool response_submitted{false};
 };

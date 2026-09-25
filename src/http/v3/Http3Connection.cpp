@@ -12,14 +12,7 @@
 namespace aegon::http::v3 {
 
 bool is_prohibited_header(std::string_view n) {
-    if (n.size() == 10) {
-        return core::simd::SimdString::iequals(n, "connection") ||
-               core::simd::SimdString::iequals(n, "keep-alive");
-    }
-    if (n.size() == 16) return core::simd::SimdString::iequals(n, "proxy-connection");
-    if (n.size() == 17) return core::simd::SimdString::iequals(n, "transfer-encoding");
-    if (n.size() == 7) return core::simd::SimdString::iequals(n, "upgrade");
-    return false;
+    return is_hop_by_hop_header(n) || core::simd::SimdString::iequals(n, "proxy-connection");
 }
 
 namespace {
@@ -347,9 +340,17 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     }
 
+    stream->headers_total_size += name_buf.len + val_buf.len;
+    if (stream->headers_total_size > MAX_HEADERS_SIZE && stream->error_status == StatusCode::Ok) {
+        stream->error_status = StatusCode::RequestHeaderFieldsTooLarge;
+    }
+
     if (n == ":method") {
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
+        if (v.size() > MAX_URI_LENGTH && stream->error_status == StatusCode::Ok) {
+            stream->error_status = StatusCode::UriTooLong;
+        }
         size_t qmark = core::simd::SimdString::find_char(v, '?');
         if (qmark != std::string_view::npos) {
             stream->path_storage.assign(v.data(), qmark);
@@ -411,6 +412,12 @@ int Http3Connection::on_stream_end(int64_t stream_id) {
 
 int Http3Connection::on_stream_data(int64_t stream_id, const uint8_t* data, size_t datalen) {
     auto* stream = get_or_create_stream(stream_id);
+    if (stream->body_accum.size() + datalen > MAX_BODY_SIZE) {
+        if (stream->error_status == StatusCode::Ok) {
+            stream->error_status = StatusCode::PayloadTooLarge;
+        }
+        return 0;
+    }
     stream->body_accum.append(reinterpret_cast<const char*>(data), datalen);
     return 0;
 }
@@ -481,13 +488,21 @@ void Http3Connection::submit_response(Http3Stream* stream) {
     push_nv(reinterpret_cast<const uint8_t*>(":status"), 7,
             reinterpret_cast<const uint8_t*>(status_buf), status_len);
 
-    if (!stream->res.headers().contains("content-length")) {
+    if (!should_suppress_content_length(stream->res.status()) && !stream->res.headers().contains("content-length")) {
         push_nv(reinterpret_cast<const uint8_t*>("content-length"), 14,
                 reinterpret_cast<const uint8_t*>(cl_buf), cl_len);
     }
 
+    std::vector<std::string> lower_names;
+    lower_names.reserve(stream->res.headers().size());
+
     for (const auto& h : stream->res.headers()) {
-        push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+        if (is_prohibited_header(h.name)) {
+            continue;
+        }
+        lower_names.push_back(to_lower_ascii(h.name));
+        const auto& ln = lower_names.back();
+        push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
                 reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
     }
 
@@ -509,6 +524,12 @@ core::Task<void> Http3Connection::dispatch_pending_requests() {
         if (it == streams_.end()) continue;
         auto* stream = it->second.get();
         if (stream->response_submitted) continue;
+
+        if (stream->error_status != StatusCode::Ok) {
+            stream->res.status(stream->error_status).text(status_phrase(stream->error_status));
+            submit_response(stream);
+            continue;
+        }
 
         if (!stream->body_accum.empty()) {
             stream->req.set_body(stream->body_accum);

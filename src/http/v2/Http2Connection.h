@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <deque>
 #include "http/ServiceRegistry.h"
 
 namespace aegon::http::v2 {
@@ -19,9 +20,11 @@ struct Http2Stream {
     Response res;
     std::string path_storage;
     std::string query_storage;
-    std::vector<std::pair<std::string, std::string>> header_storage;
+    std::deque<std::pair<std::string, std::string>> header_storage;
     std::string body_accum;
     size_t body_offset{0};
+    size_t headers_total_size{0};
+    StatusCode error_status{StatusCode::Ok};
     bool request_complete{false};
     bool response_submitted{false};
 };
@@ -92,6 +95,8 @@ private:
     std::string outbound_buf_;
     std::string alt_svc_;
     bool closed_{false};
+    uint32_t rst_count_{0};
+    uint32_t rst_burst_limit_{100};
 };
 
 } // namespace aegon::http::v2

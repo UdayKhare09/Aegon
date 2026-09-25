@@ -19,6 +19,50 @@
 
 namespace aegon::http {
 
+namespace {
+
+inline std::optional<Response> make_http1_parse_error_response(v1::ParseStatus status) {
+    Response res;
+    res.header("Connection", "close");
+    switch (status) {
+        case v1::ParseStatus::UriTooLong:
+            res.status(StatusCode::UriTooLong).text("URI Too Long: request URI exceeds limit");
+            return res;
+        case v1::ParseStatus::HeadersTooLarge:
+            res.status(StatusCode::RequestHeaderFieldsTooLarge).text("Request Header Fields Too Large");
+            return res;
+        case v1::ParseStatus::PayloadTooLarge:
+            res.status(StatusCode::PayloadTooLarge).text("Payload Too Large: maximum body size exceeded");
+            return res;
+        case v1::ParseStatus::Error:
+            res.status(StatusCode::BadRequest).text("Bad Request");
+            return res;
+        case v1::ParseStatus::NotImplemented:
+            res.status(StatusCode::NotImplemented).text("Not Implemented");
+            return res;
+        default:
+            return std::nullopt;
+    }
+}
+
+inline bool evaluate_http1_keep_alive(const Request& req, Response& res) {
+    bool keep_alive = true;
+    if (auto conn_hdr = req.headers().get("Connection")) {
+        if (core::simd::SimdString::iequals(*conn_hdr, "close")) {
+            keep_alive = false;
+        }
+    }
+    if (req.version() == HttpVersion::Http1_0 && !req.headers().contains("Connection")) {
+        keep_alive = false;
+    }
+    if (!keep_alive) {
+        res.header("Connection", "close");
+    }
+    return keep_alive;
+}
+
+} // anonymous namespace
+
 Server::Server() = default;
 Server::Server(Router router) : router_(std::move(router)) {}
 Server::~Server() = default;
@@ -265,21 +309,9 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
                     break;
                 }
 
-                if (status == v1::ParseStatus::Error) {
-                    Response bad_res;
-                    bad_res.status(StatusCode::BadRequest).text("Bad Request");
+                if (auto err_res = make_http1_parse_error_response(status)) {
                     std::string out;
-                    bad_res.serialize_http1(out);
-                    (void)(co_await tls_stream.write_plaintext(out.data(), out.size()));
-                    keep_alive = false;
-                    break;
-                }
-
-                if (status == v1::ParseStatus::NotImplemented) {
-                    Response ni_res;
-                    ni_res.status(StatusCode::NotImplemented).text("Not Implemented");
-                    std::string out;
-                    ni_res.serialize_http1(out);
+                    err_res->serialize_http1(out);
                     (void)(co_await tls_stream.write_plaintext(out.data(), out.size()));
                     keep_alive = false;
                     break;
@@ -288,18 +320,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
                 Response res;
                 co_await router_.dispatch(req, res, services_.get());
 
-                if (auto conn_hdr = req.headers().get("Connection")) {
-                    if (iequals(*conn_hdr, "close")) {
-                        keep_alive = false;
-                    }
-                }
-                if (req.version() == HttpVersion::Http1_0 && !req.headers().contains("Connection")) {
-                    keep_alive = false;
-                }
-
-                if (!keep_alive) {
-                    res.header("Connection", "close");
-                }
+                keep_alive = evaluate_http1_keep_alive(req, res);
 
                 if (!alt_svc_hdr.empty()) {
                     res.set_header_owned("alt-svc", alt_svc_hdr);
@@ -374,21 +395,9 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 break;
             }
 
-            if (status == v1::ParseStatus::Error) {
-                Response bad_res;
-                bad_res.status(StatusCode::BadRequest).text("Bad Request");
+            if (auto err_res = make_http1_parse_error_response(status)) {
                 std::string out;
-                bad_res.serialize_http1(out);
-                (void)(co_await loop.ring().send_all(client_fd, out));
-                keep_alive = false;
-                break;
-            }
-
-            if (status == v1::ParseStatus::NotImplemented) {
-                Response ni_res;
-                ni_res.status(StatusCode::NotImplemented).text("Not Implemented");
-                std::string out;
-                ni_res.serialize_http1(out);
+                err_res->serialize_http1(out);
                 (void)(co_await loop.ring().send_all(client_fd, out));
                 keep_alive = false;
                 break;
@@ -456,18 +465,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
             Response res;
             co_await router_.dispatch(req, res, services_.get());
 
-            if (auto conn_hdr = req.headers().get("Connection")) {
-                if (iequals(*conn_hdr, "close")) {
-                    keep_alive = false;
-                }
-            }
-            if (req.version() == HttpVersion::Http1_0 && !req.headers().contains("Connection")) {
-                keep_alive = false;
-            }
-
-            if (!keep_alive) {
-                res.header("Connection", "close");
-            }
+            keep_alive = evaluate_http1_keep_alive(req, res);
 
             if (res.has_file()) {
                 if (!resp_batch.empty()) {

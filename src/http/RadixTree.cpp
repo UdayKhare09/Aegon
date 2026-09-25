@@ -276,10 +276,19 @@ RadixTree::MatchResult RadixTree::match(Request& req) const {
     }
 
     // Path matched a registered route, but HTTP method not registered on this route
+    uint16_t mask = 0;
+    if (matched_node) {
+        for (size_t i = 0; i < matched_node->has_handler.size(); ++i) {
+            if (matched_node->has_handler[i]) {
+                mask |= static_cast<uint16_t>(1U << i);
+            }
+        }
+    }
     return MatchResult{
         .handler = nullptr,
         .route_found = true,
-        .method_not_allowed = true
+        .method_not_allowed = true,
+        .allowed_methods = mask
     };
 }
 

@@ -62,18 +62,23 @@ void test_rfc9000_version_negotiation() {
     uint16_t port = 19443;
     Router router;
     tls::TlsContext tls_ctx;
+    std::atomic<bool> server_ready{false};
+    v3::Http3Server* p_h3_server = nullptr;
 
-    core::EventLoop loop(1024, 128, 2048);
-    v3::Http3Server h3_server(loop, port, router, tls_ctx.native_handle());
-    TEST_CHECK(h3_server.start());
-
-    std::thread server_thread([&loop, &h3_server]() {
+    std::thread server_thread([&]() {
+        core::EventLoop loop(1024, 128, 2048);
+        v3::Http3Server h3_server(loop, port, router, tls_ctx.native_handle());
+        if (!h3_server.start()) return;
+        p_h3_server = &h3_server;
         loop.spawn(h3_server.run_receive_loop());
         loop.spawn(h3_server.run_timer_loop());
+        server_ready = true;
         loop.run();
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    while (!server_ready) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
 
     int client_fd = socket(AF_INET, SOCK_DGRAM, 0);
     TEST_CHECK(client_fd >= 0);
@@ -166,7 +171,7 @@ void test_rfc9000_version_negotiation() {
 
     close(client_fd);
 
-    h3_server.stop();
+    if (p_h3_server) p_h3_server->stop();
     // Wake up event loop
     int wake_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (wake_fd >= 0) {

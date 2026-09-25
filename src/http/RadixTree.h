@@ -54,6 +54,7 @@ public:
         const Handler* handler{nullptr};
         bool route_found{false};
         bool method_not_allowed{false};
+        uint16_t allowed_methods{0}; // Bitmask of (1 << Method) supported on this route
     };
 
     /**
