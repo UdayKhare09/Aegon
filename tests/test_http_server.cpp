@@ -256,6 +256,43 @@ void test_live_server_loopback() {
         std::cout << "  -> RFC 9113 §3.2: HTTP/1.1 Upgrade to h2c handshakes with 101 Switching Protocols: PASS\n";
     }
 
+    // 12. HTTP/1.1 16x Pipelined Requests Verification
+    {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        assert(fd >= 0);
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(19876);
+        inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+        int rc = connect(fd, (sockaddr*)&addr, sizeof(addr));
+        assert(rc == 0);
+
+        std::string pipelined_req;
+        for (int i = 0; i < 16; ++i) {
+            pipelined_req += "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        }
+        ssize_t sent = write(fd, pipelined_req.data(), pipelined_req.size());
+        assert(sent == static_cast<ssize_t>(pipelined_req.size()));
+
+        std::string pipelined_resp;
+        char buf[4096];
+        size_t count_200 = 0;
+        while (count_200 < 16) {
+            ssize_t r = read(fd, buf, sizeof(buf));
+            if (r <= 0) break;
+            pipelined_resp.append(buf, r);
+            count_200 = 0;
+            size_t pos = 0;
+            while ((pos = pipelined_resp.find("200 OK", pos)) != std::string::npos) {
+                count_200++;
+                pos += 6;
+            }
+        }
+        assert(count_200 == 16);
+        close(fd);
+        std::cout << "  -> HTTP/1.1 16x Pipelined requests batching: PASS (all 16 responses received)\n";
+    }
+
     server.stop();
     // Connect dummy to wake up accept
     int dummy = socket(AF_INET, SOCK_STREAM, 0);

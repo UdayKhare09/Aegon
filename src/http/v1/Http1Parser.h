@@ -83,22 +83,21 @@ public:
         if (full_path.size() > MAX_URI_LENGTH) {
             return ParseStatus::UriTooLong;
         }
-        if (full_path.empty() || full_path[0] != '/') {
-            // Asterisk form for OPTIONS or absoluteURI
-            if (full_path != "*" && !full_path.starts_with("http://") && !full_path.starts_with("https://")) {
+        if (full_path.empty() || full_path[0] != '/') [[unlikely]] {
+            // Asterisk form for OPTIONS or absoluteURI per RFC 9112 §3.2.2
+            if (full_path == "*") {
+                // asterisk form
+            } else if (full_path.starts_with("http://")) {
+                full_path.remove_prefix(7);
+                size_t slash = aegon::core::simd::SimdString::find_char(full_path, '/');
+                full_path = (slash != std::string_view::npos) ? full_path.substr(slash) : "/";
+            } else if (full_path.starts_with("https://")) {
+                full_path.remove_prefix(8);
+                size_t slash = aegon::core::simd::SimdString::find_char(full_path, '/');
+                full_path = (slash != std::string_view::npos) ? full_path.substr(slash) : "/";
+            } else {
                 return ParseStatus::Error;
             }
-        }
-
-        // If absolute-form (e.g. "http://example.com/path"), extract path per RFC 9112 §3.2.2
-        if (full_path.starts_with("http://")) {
-            full_path.remove_prefix(7);
-            size_t slash = aegon::core::simd::SimdString::find_char(full_path, '/');
-            full_path = (slash != std::string_view::npos) ? full_path.substr(slash) : "/";
-        } else if (full_path.starts_with("https://")) {
-            full_path.remove_prefix(8);
-            size_t slash = aegon::core::simd::SimdString::find_char(full_path, '/');
-            full_path = (slash != std::string_view::npos) ? full_path.substr(slash) : "/";
         }
 
         size_t qmark = aegon::core::simd::SimdString::find_char(full_path, '?');

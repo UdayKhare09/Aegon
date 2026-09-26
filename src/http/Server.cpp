@@ -52,8 +52,7 @@ inline bool evaluate_http1_keep_alive(const Request& req, Response& res) {
         if (core::simd::SimdString::iequals(*conn_hdr, "close")) {
             keep_alive = false;
         }
-    }
-    if (req.version() == HttpVersion::Http1_0 && !req.headers().contains("Connection")) {
+    } else if (req.version() == HttpVersion::Http1_0) {
         keep_alive = false;
     }
     if (!keep_alive) {
@@ -304,11 +303,13 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
 
             req_accum.append(read_buf, static_cast<size_t>(n));
             bool keep_alive = true;
+            size_t req_offset = 0;
 
-            while (!req_accum.empty()) {
+            while (req_offset < req_accum.size()) {
+                std::string_view unparsed(req_accum.data() + req_offset, req_accum.size() - req_offset);
                 Request req;
                 size_t bytes_consumed = 0;
-                auto status = v1::Http1Parser::parse(req_accum, req, bytes_consumed);
+                auto status = v1::Http1Parser::parse(unparsed, req, bytes_consumed);
 
                 if (status == v1::ParseStatus::NeedMoreData) {
                     if (req.expect_continue()) {
@@ -337,11 +338,17 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
                 }
 
                 res.append_http1(resp_batch);
-                req_accum.erase(0, bytes_consumed);
+                req_offset += bytes_consumed;
 
                 if (!keep_alive) {
                     break;
                 }
+            }
+
+            if (req_offset >= req_accum.size()) {
+                req_accum.clear();
+            } else if (req_offset > 0) {
+                req_accum.erase(0, req_offset);
             }
 
             if (!resp_batch.empty()) {
@@ -361,15 +368,13 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
 
 core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd) {
     std::string req_accum;
-    req_accum.reserve(512);
+    req_accum.reserve(4096);
     std::string resp_batch;
-    resp_batch.reserve(512);
+    resp_batch.reserve(4096);
     bool first_packet = true;
 
-    auto stream = loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
-
     while (running_) {
-        auto recv_res = co_await stream.next();
+        auto recv_res = co_await loop.ring().recv_provided(client_fd, loop.buffer_pool().bgid());
         if (recv_res.bytes == -ENOBUFS) {
             co_await loop.ring().timeout(100'000ULL);
             continue;
@@ -383,19 +388,24 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
         loop.buffer_pool().return_buffer(recv_res.bid);
 
         bool keep_alive = true;
+        size_t req_offset = 0;
 
-        while (!req_accum.empty()) {
+        while (req_offset < req_accum.size()) {
+            std::string_view unparsed(req_accum.data() + req_offset, req_accum.size() - req_offset);
             if (first_packet) {
                 first_packet = false;
-                if (req_accum.starts_with(v2::CLIENT_PREFACE)) {
-                    co_await handle_http2_connection(loop, client_fd, std::move(req_accum), std::move(stream));
+                if (unparsed.starts_with(v2::CLIENT_PREFACE)) {
+                    if (req_offset > 0) {
+                        req_accum.erase(0, req_offset);
+                    }
+                    co_await handle_http2_connection(loop, client_fd, std::move(req_accum));
                     co_return;
                 }
             }
 
             Request req;
             size_t bytes_consumed = 0;
-            auto status = v1::Http1Parser::parse(req_accum, req, bytes_consumed);
+            auto status = v1::Http1Parser::parse(unparsed, req, bytes_consumed);
 
             if (status == v1::ParseStatus::NeedMoreData) {
                 if (req.expect_continue()) {
@@ -429,9 +439,13 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                     "Connection: Upgrade\r\n"
                     "Upgrade: h2c\r\n\r\n";
                 (void)(co_await loop.ring().send_all(client_fd, upgrade_res));
-                req_accum.erase(0, bytes_consumed);
+                req_offset += bytes_consumed;
+                std::string trailing;
+                if (req_offset < req_accum.size()) {
+                    trailing = req_accum.substr(req_offset);
+                }
                 std::string h2_settings = std::string(req.headers().get("HTTP2-Settings").value_or(""));
-                co_await handle_http2_upgrade(loop, client_fd, std::move(req), std::move(h2_settings), std::move(req_accum), std::move(stream));
+                co_await handle_http2_upgrade(loop, client_fd, std::move(req), std::move(h2_settings), std::move(trailing));
                 co_return;
             }
 
@@ -470,13 +484,13 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 (void)(co_await loop.ring().send_all(client_fd, upgrade_res));
 
                 std::string trailing;
-                if (bytes_consumed < req_accum.size()) {
-                    trailing = req_accum.substr(bytes_consumed);
+                if (req_offset + bytes_consumed < req_accum.size()) {
+                    trailing = req_accum.substr(req_offset + bytes_consumed);
                 }
 
                 websocket::WebSocketConnection ws_conn(loop, client_fd, std::string(req.path()),
                                                       ws_entry->handler, ws_entry->echo_handler);
-                co_await ws_conn.run(std::move(stream), std::move(trailing));
+                co_await ws_conn.run(std::move(trailing));
                 co_return;
             }
 
@@ -503,15 +517,17 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 res.append_http1(resp_batch);
             }
 
-            if (bytes_consumed >= req_accum.size()) {
-                req_accum.clear();
-            } else {
-                req_accum.erase(0, bytes_consumed);
-            }
+            req_offset += bytes_consumed;
 
             if (!keep_alive) {
                 break;
             }
+        }
+
+        if (req_offset >= req_accum.size()) {
+            req_accum.clear();
+        } else if (req_offset > 0) {
+            req_accum.erase(0, req_offset);
         }
 
         if (!resp_batch.empty()) {
