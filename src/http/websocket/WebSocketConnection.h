@@ -42,6 +42,13 @@ public:
      */
     core::Task<void> run(std::string initial_data = "");
 
+    /**
+     * @brief Starts the io_uring multishot receive and frame processing loop, reusing an existing stream.
+     * @param stream The existing MultishotRecvStream to avoid dropping packets or re-arming.
+     * @param initial_data Any trailing bytes left in the HTTP receive buffer after handshake.
+     */
+    core::Task<void> run(core::MultishotRecvStream stream, std::string initial_data = "");
+
 private:
     core::EventLoop& loop_;
     int client_fd_{-1};

@@ -219,8 +219,9 @@ void MultishotAcceptStream::StreamState::on_completion(int res, uint32_t flags) 
     }
     // (res >= 0 && has_more): still armed, nothing to change
 
+    current_result = ar;
+
     if (continuation && !continuation.done()) {
-        current_result = ar;
         auto cont = continuation;
         continuation = nullptr;
         cont.resume();
@@ -293,38 +294,39 @@ void MultishotRecvStream::StreamState::on_completion(int res, uint32_t flags) no
         rr.bid = static_cast<uint16_t>(flags >> IORING_CQE_BUFFER_SHIFT);
     }
 
-    if (res < 0) {
-        // Hard error — terminate stream; no valid buffer to return
-        armed    = false;
-        finished = true;
+    if (res > 0) {
+        rr.bytes = res;
+        rr.bid   = static_cast<uint16_t>(flags >> IORING_CQE_BUFFER_SHIFT);
+        rr.buffer_valid = true;
         rr.eof   = false;
+        if (!rr.has_more) {
+            armed = false;
+        }
     } else if (res == 0) {
         // Clean EOF from peer
         armed    = false;
         finished = true;
         rr.eof   = true;
-    } else if (!rr.has_more) {
-        // Kernel temporarily disarmed (e.g., ENOBUFS on buffer ring, transient SQ pressure)
+    } else if (res == -ENOBUFS) {
+        // Kernel temporarily disarmed due to buffer pool starvation
         // Do NOT set finished — re-arm on next await_suspend()
         armed = false;
+        rr.bytes = res;
+    } else {
+        // Hard error (e.g. ECONNRESET, ECANCELED, EPIPE)
+        armed    = false;
+        finished = true;
+        rr.bytes = res;
     }
-    // (res > 0 && has_more): still armed, kernel will deliver more CQEs
 
-    // Only forward to consumer if there's actual data, or if the stream terminated
-    // with a clean EOF (res == 0, no buffer ID). On hard error (res < 0), only
-    // forward if there's no buffer associated (rr.buffer_valid is false, bid stays 0).
-    bool should_deliver = (res > 0) || (res <= 0 && rr.eof) || (res < 0);
+    current_result = rr;
 
-    if (should_deliver) {
-        if (continuation && !continuation.done()) {
-            current_result = rr;
-            auto cont = continuation;
-            continuation = nullptr;
-            cont.resume();
-        } else if (res > 0) {
-            // Only buffer results with valid data (avoids backlog with invalid bids)
-            backlog.push_back(rr);
-        }
+    if (continuation && !continuation.done()) {
+        auto cont = continuation;
+        continuation = nullptr;
+        cont.resume();
+    } else {
+        backlog.push_back(rr);
     }
 
     if (!armed) {
@@ -683,10 +685,6 @@ Task<int> IoUring::send_all(int fd, const void* buf, size_t len) {
 Task<int> IoUring::send_all(int fd, const char* str) {
     if (!str) co_return 0;
     co_return co_await send_all(fd, std::string_view(str));
-}
-
-Task<int> IoUring::send_all(int fd, std::string data) {
-    co_return co_await send_all(fd, data.data(), data.size());
 }
 
 Task<int> IoUring::send_all(int fd, std::string_view data) {

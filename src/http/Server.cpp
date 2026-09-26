@@ -16,6 +16,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cerrno>
+#include <csignal>
 
 namespace aegon::http {
 
@@ -165,7 +166,8 @@ int Server::create_listen_socket(uint16_t port, const std::string& host) {
     return fd;
 }
 
-core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data) {
+core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data,
+                                                  std::optional<core::MultishotRecvStream> existing_stream) {
     v2::Http2Connection h2(loop, client_fd, router_, services_.get());
     bool ok = co_await h2.init();
     if (!ok) {
@@ -181,7 +183,9 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
         }
     }
 
-    auto stream = loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
+    auto stream = existing_stream.has_value()
+        ? std::move(*existing_stream)
+        : loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
     while (running_ && !h2.is_closed() && h2.wants_read()) {
         auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
@@ -201,7 +205,9 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
     (void)(co_await loop.ring().close(client_fd));
 }
 
-core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings, std::string initial_data) {
+core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings,
+                                              std::string initial_data,
+                                              std::optional<core::MultishotRecvStream> existing_stream) {
     v2::Http2Connection h2(loop, client_fd, router_, services_.get());
     bool ok = co_await h2.init();
     if (!ok) {
@@ -223,7 +229,9 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_
         }
     }
 
-    auto stream = loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
+    auto stream = existing_stream.has_value()
+        ? std::move(*existing_stream)
+        : loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
     while (running_ && !h2.is_closed() && h2.wants_read()) {
         auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
@@ -380,8 +388,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
             if (first_packet) {
                 first_packet = false;
                 if (req_accum.starts_with(v2::CLIENT_PREFACE)) {
-                    stream.cancel();
-                    co_await handle_http2_connection(loop, client_fd, std::move(req_accum));
+                    co_await handle_http2_connection(loop, client_fd, std::move(req_accum), std::move(stream));
                     co_return;
                 }
             }
@@ -409,7 +416,12 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
             // RFC 9113 §3.2 HTTP/1.1 to HTTP/2 Cleartext Upgrade
             if (req.is_upgrade_h2c()) {
                 if (!resp_batch.empty()) {
-                    (void)(co_await loop.ring().send_all(client_fd, resp_batch));
+                    int sent = co_await loop.ring().send(client_fd, resp_batch);
+                    if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
+                        if (sent > 0) {
+                            (void)(co_await loop.ring().send_all(client_fd, std::string_view(resp_batch).substr(sent)));
+                        }
+                    }
                     resp_batch.clear();
                 }
                 std::string upgrade_res =
@@ -419,8 +431,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 (void)(co_await loop.ring().send_all(client_fd, upgrade_res));
                 req_accum.erase(0, bytes_consumed);
                 std::string h2_settings = std::string(req.headers().get("HTTP2-Settings").value_or(""));
-                stream.cancel();
-                co_await handle_http2_upgrade(loop, client_fd, std::move(req), std::move(h2_settings), std::move(req_accum));
+                co_await handle_http2_upgrade(loop, client_fd, std::move(req), std::move(h2_settings), std::move(req_accum), std::move(stream));
                 co_return;
             }
 
@@ -445,7 +456,12 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 }
 
                 if (!resp_batch.empty()) {
-                    (void)(co_await loop.ring().send_all(client_fd, resp_batch));
+                    int sent = co_await loop.ring().send(client_fd, resp_batch);
+                    if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
+                        if (sent > 0) {
+                            (void)(co_await loop.ring().send_all(client_fd, std::string_view(resp_batch).substr(sent)));
+                        }
+                    }
                     resp_batch.clear();
                 }
 
@@ -458,10 +474,9 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                     trailing = req_accum.substr(bytes_consumed);
                 }
 
-                stream.cancel();
                 websocket::WebSocketConnection ws_conn(loop, client_fd, std::string(req.path()),
                                                       ws_entry->handler, ws_entry->echo_handler);
-                co_await ws_conn.run(std::move(trailing));
+                co_await ws_conn.run(std::move(stream), std::move(trailing));
                 co_return;
             }
 
@@ -472,7 +487,12 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
 
             if (res.has_file()) {
                 if (!resp_batch.empty()) {
-                    (void)(co_await loop.ring().send_all(client_fd, resp_batch));
+                    int sent = co_await loop.ring().send(client_fd, resp_batch);
+                    if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
+                        if (sent <= 0) { keep_alive = false; break; }
+                        int rem = co_await loop.ring().send_all(client_fd, std::string_view(resp_batch).substr(sent));
+                        if (rem != static_cast<int>(resp_batch.size() - sent)) { keep_alive = false; break; }
+                    }
                     resp_batch.clear();
                 }
                 std::string header_out;
@@ -495,7 +515,16 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
         }
 
         if (!resp_batch.empty()) {
-            (void)(co_await loop.ring().send_all(client_fd, resp_batch));
+            int sent = co_await loop.ring().send(client_fd, resp_batch);
+            if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
+                if (sent <= 0) {
+                    break;
+                }
+                int rem = co_await loop.ring().send_all(client_fd, std::string_view(resp_batch).substr(sent));
+                if (rem != static_cast<int>(resp_batch.size() - sent)) {
+                    break;
+                }
+            }
             resp_batch.clear();
         }
 
@@ -571,6 +600,7 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, uint1
 }
 
 void Server::run() {
+    ::signal(SIGPIPE, SIG_IGN);
     running_ = true;
 
     // 1. Freeze service registry for zero-lock hot-path lookups during request handling

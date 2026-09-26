@@ -12,6 +12,7 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <optional>
 
 namespace aegon::http {
 
@@ -259,8 +260,11 @@ public:
 
 private:
     core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
-    core::Task<void> handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data);
-    core::Task<void> handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings, std::string initial_data);
+    core::Task<void> handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data,
+                                              std::optional<core::MultishotRecvStream> existing_stream = std::nullopt);
+    core::Task<void> handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings,
+                                          std::string initial_data,
+                                          std::optional<core::MultishotRecvStream> existing_stream = std::nullopt);
     core::Task<void> handle_tls_connection(core::EventLoop& loop, int client_fd, uint16_t port);
     core::Task<void> accept_loop(core::EventLoop& loop, int listen_fd, uint16_t port, bool is_tls);
     core::Task<bool> stream_file_zero_copy(core::EventLoop& loop, int client_fd, const std::string& file_path, size_t file_size);

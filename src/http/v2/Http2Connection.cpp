@@ -459,7 +459,19 @@ core::Task<bool> Http2Connection::flush_outbound() {
             if (sender_) {
                 sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
             } else {
-                sent = co_await loop_.ring().send_all(client_fd_, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
+                sent = co_await loop_.ring().send(client_fd_, outbound_buf_);
+                if (sent != static_cast<int>(outbound_buf_.size())) [[unlikely]] {
+                    if (sent <= 0) {
+                        closed_ = true;
+                        co_return false;
+                    }
+                    int rem = co_await loop_.ring().send_all(client_fd_, std::string_view(outbound_buf_).substr(sent));
+                    if (rem != static_cast<int>(outbound_buf_.size() - sent)) {
+                        closed_ = true;
+                        co_return false;
+                    }
+                    sent += rem;
+                }
             }
             if (sent <= 0) {
                 closed_ = true;
@@ -474,7 +486,19 @@ core::Task<bool> Http2Connection::flush_outbound() {
         if (sender_) {
             sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
         } else {
-            sent = co_await loop_.ring().send_all(client_fd_, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
+            sent = co_await loop_.ring().send(client_fd_, outbound_buf_);
+            if (sent != static_cast<int>(outbound_buf_.size())) [[unlikely]] {
+                if (sent <= 0) {
+                    closed_ = true;
+                    co_return false;
+                }
+                int rem = co_await loop_.ring().send_all(client_fd_, std::string_view(outbound_buf_).substr(sent));
+                if (rem != static_cast<int>(outbound_buf_.size() - sent)) {
+                    closed_ = true;
+                    co_return false;
+                }
+                sent += rem;
+            }
         }
         if (sent <= 0) {
             closed_ = true;

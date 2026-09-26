@@ -354,7 +354,6 @@ public:
 
     [[nodiscard]] Task<int> send_all(int fd, const void* buf, size_t len);
     [[nodiscard]] Task<int> send_all(int fd, const char* str);
-    [[nodiscard]] Task<int> send_all(int fd, std::string data);
     [[nodiscard]] Task<int> send_all(int fd, std::string_view data);
     [[nodiscard]] Task<int> send_all(int fd, std::span<const uint8_t> data);
 
@@ -597,10 +596,14 @@ public:
                 state.backlog.pop_front(); // O(1)
                 return res;
             }
-            if (state.finished && state.current_result.bytes <= 0) {
-                // Return the terminal result with eof flag set
+            if (state.cancelled) {
+                return RecvResult{.bytes = -ECANCELED};
+            }
+            if (state.finished) {
                 RecvResult r = state.current_result;
-                r.eof = (state.current_result.bytes == 0);
+                if (r.bytes == 0) {
+                    r.eof = true;
+                }
                 return r;
             }
             return state.current_result;

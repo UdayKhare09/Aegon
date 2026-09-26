@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <csignal>
 
 using namespace aegon::http;
 using namespace aegon::http::websocket;
@@ -256,7 +257,7 @@ void test_live_websocket_server() {
     close_frame.push_back(static_cast<char>(code_bytes[0] ^ mask[0]));
     close_frame.push_back(static_cast<char>(code_bytes[1] ^ mask[1]));
 
-    sent = ::send(sock, close_frame.data(), close_frame.size(), 0);
+    sent = ::send(sock, close_frame.data(), close_frame.size(), MSG_NOSIGNAL);
     assert(sent == static_cast<ssize_t>(close_frame.size()));
 
     recvd = ::recv(sock, buf, sizeof(buf), 0);
@@ -275,7 +276,7 @@ void test_live_websocket_server() {
         "GET /ws HTTP/1.1\r\n"
         "Host: 127.0.0.1:19890\r\n"
         "Connection: close\r\n\r\n";
-    ::send(sock2, plain_get.data(), plain_get.size(), 0);
+    ::send(sock2, plain_get.data(), plain_get.size(), MSG_NOSIGNAL);
     recvd = ::recv(sock2, buf, sizeof(buf) - 1, 0);
     assert(recvd > 0);
     buf[recvd] = '\0';
@@ -287,12 +288,96 @@ void test_live_websocket_server() {
     server.stop();
 }
 
+// 5. Test pipelined WebSocket upgrade with initial frame and rapid reconnections (HttpArena echo-ws-limited pattern)
+void test_pipelined_handshake_and_reconnection() {
+    std::cout << "[TEST 5] Testing Pipelined Handshake + Frame and Rapid Reconnections...\n";
+    Server server;
+    server.ws("/ws");
+    server.listen(19891, "127.0.0.1");
+
+    std::thread server_thread([&]() {
+        server.run();
+    });
+    server_thread.detach();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(19891);
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+    std::string upgrade_req =
+        "GET /ws HTTP/1.1\r\n"
+        "Host: 127.0.0.1:19891\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+
+    std::string msg = "PipelinedFrame!";
+    uint8_t mask[4] = {0x11, 0x22, 0x33, 0x44};
+    std::string frame;
+    frame.push_back(static_cast<char>(0x81)); // FIN + Text
+    frame.push_back(static_cast<char>(0x80 | msg.size())); // Masked + len
+    frame.append(reinterpret_cast<const char*>(mask), 4);
+    for (size_t i = 0; i < msg.size(); ++i) {
+        frame.push_back(static_cast<char>(msg[i] ^ mask[i % 4]));
+    }
+
+    std::string pipelined_payload = upgrade_req + frame;
+
+    // Run 50 reconnect iterations verifying zero frame drops
+    for (int iter = 0; iter < 50; ++iter) {
+        int sock = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) {
+            std::cerr << "Socket failed: " << errno << "\n";
+            abort();
+        }
+        int c_res = ::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        if (c_res != 0) {
+            std::cerr << "Connect failed: " << errno << " (" << strerror(errno) << ")\n";
+            abort();
+        }
+
+        // Send upgrade request AND first frame in a single write
+        ssize_t sent = ::send(sock, pipelined_payload.data(), pipelined_payload.size(), MSG_NOSIGNAL);
+        if (sent != static_cast<ssize_t>(pipelined_payload.size())) {
+            std::cerr << "Send failed: " << errno << "\n";
+            abort();
+        }
+
+        (void)sent;
+
+        char buf[4096]{};
+        std::string accumulated;
+        while (accumulated.find(msg) == std::string::npos) {
+            ssize_t recvd = ::recv(sock, buf, sizeof(buf), 0);
+            if (recvd <= 0) {
+                std::cerr << "FAILED at iter " << iter << ": recvd=" << recvd << " errno=" << errno << " (" << strerror(errno) << ") accum='" << accumulated << "'\n";
+                abort();
+            }
+            accumulated.append(buf, static_cast<size_t>(recvd));
+        }
+
+        assert(accumulated.find("101 Switching Protocols") != std::string::npos);
+        assert(accumulated.find(msg) != std::string::npos);
+
+        ::close(sock);
+    }
+
+    std::cout << "  -> 50 Pipelined Handshake & Reconnect cycles succeeded with zero drops\n";
+    server.stop();
+}
+
 int main() {
+    std::signal(SIGPIPE, SIG_IGN);
     std::cout << "=== Running Aegon WebSocket Tests ===\n";
     test_handshake_rfc_vector();
     test_frame_header_parsing_and_serializing();
     test_websocket_session_mock();
     test_live_websocket_server();
+    test_pipelined_handshake_and_reconnection();
     std::cout << "=== All WebSocket Tests Passed Successfully! ===\n";
     return 0;
 }
