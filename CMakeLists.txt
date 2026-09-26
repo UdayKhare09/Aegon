@@ -311,6 +311,11 @@ add_executable(test_http3_compliance
 )
 target_link_libraries(test_http3_compliance PRIVATE aegon_http aegon_core)
 
+add_executable(test_spec_server
+    tests/test_spec_server.cpp
+)
+target_link_libraries(test_spec_server PRIVATE aegon_http aegon_core)
+
 add_executable(test_radix_router
     tests/test_radix_router.cpp
 )

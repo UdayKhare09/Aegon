@@ -41,6 +41,12 @@ struct Http3Stream {
     StatusCode error_status{StatusCode::Ok};
     bool request_complete{false};
     bool response_submitted{false};
+    bool headers_received{false};
+    bool seen_method{false};
+    bool seen_path{false};
+    bool seen_scheme{false};
+    bool seen_authority{false};
+    bool seen_regular_headers{false};
 };
 
 class Http3Connection {
@@ -56,12 +62,12 @@ public:
     /**
      * @brief Initialize QUIC and HTTP/3 sessions.
      */
-    bool init(const uint8_t* dcid, size_t dcidlen, const uint8_t* scid, size_t scidlen);
+    bool init(const uint8_t* dcid, size_t dcidlen, const uint8_t* scid, size_t scidlen, uint32_t version = NGTCP2_PROTO_VER_V1);
 
     /**
      * @brief Process an incoming UDP datagram.
      */
-    core::Task<bool> feed_datagram(std::span<const uint8_t> pkt);
+    core::Task<bool> feed_datagram(std::span<const uint8_t> pkt, const sockaddr_storage& from_addr, socklen_t from_len);
 
     /**
      * @brief Flush pending outbound QUIC packets over UDP.
@@ -130,6 +136,10 @@ private:
     bool closed_{false};
     uint32_t rst_count_{0};
     uint32_t rst_burst_limit_{100};
+    int last_h3_error_{0};
+    uint32_t version_{0};
+    ngtcp2_cid client_dcid_{};
+    ngtcp2_cid client_scid_{};
 };
 
 } // namespace aegon::http::v3

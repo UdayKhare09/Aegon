@@ -393,14 +393,27 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
         while (req_offset < req_accum.size()) {
             std::string_view unparsed(req_accum.data() + req_offset, req_accum.size() - req_offset);
             if (first_packet) {
-                first_packet = false;
                 if (unparsed.starts_with(v2::CLIENT_PREFACE)) {
+                    first_packet = false;
                     if (req_offset > 0) {
                         req_accum.erase(0, req_offset);
                     }
                     co_await handle_http2_connection(loop, client_fd, std::move(req_accum));
                     co_return;
                 }
+                if (v2::CLIENT_PREFACE.starts_with(unparsed)) {
+                    // Incomplete preface chunk, wait for subsequent bytes
+                    break;
+                }
+                if (unparsed.starts_with("PRI ") || unparsed.starts_with("INVALID CONNECTION PREFACE")) {
+                    // RFC 9113 §3.5: Invalid connection preface. Send GOAWAY and terminate TCP.
+                    auto goaway = v2::make_goaway_frame(0, 0x1 /* NGHTTP2_PROTOCOL_ERROR */);
+                    (void)co_await loop.ring().send_all(client_fd, std::string_view(reinterpret_cast<const char*>(goaway.data()), goaway.size()));
+                    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
+                    (void)(co_await loop.ring().close(client_fd));
+                    co_return;
+                }
+                first_packet = false;
             }
 
             Request req;

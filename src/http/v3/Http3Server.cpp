@@ -190,12 +190,12 @@ core::Task<void> Http3Server::dispatch_datagram(std::span<const uint8_t> pkt,
 
     if (it != connections_.end()) {
         conn = it->second;
-    } else if (vc.version != 0 && vc.scidlen > 0) {
+    } else if (vc.version != 0) {
         // New connection triggered by client Initial packet
         auto new_conn = std::make_shared<Http3Connection>(
             loop_, udp_fd_, from_addr, from_len, router_, ssl_ctx_, services_);
 
-        if (new_conn->init(vc.dcid, vc.dcidlen, vc.scid, vc.scidlen)) {
+        if (new_conn->init(vc.dcid, vc.dcidlen, vc.scid, vc.scidlen, vc.version)) {
             conn = new_conn;
             connections_.emplace(dcid_sv, conn);
 
@@ -207,7 +207,7 @@ core::Task<void> Http3Server::dispatch_datagram(std::span<const uint8_t> pkt,
     }
 
     if (conn) {
-        co_await conn->feed_datagram(pkt);
+        co_await conn->feed_datagram(pkt, from_addr, from_len);
     }
 }
 

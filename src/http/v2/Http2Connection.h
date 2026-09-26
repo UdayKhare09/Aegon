@@ -102,6 +102,7 @@ private:
     uint32_t rst_count_{0};
     uint32_t rst_burst_limit_{100};
     int32_t max_remote_stream_id_{0};
+    uint32_t last_error_code_{0};
     std::unordered_set<int32_t> closed_stream_ids_;
 };
 

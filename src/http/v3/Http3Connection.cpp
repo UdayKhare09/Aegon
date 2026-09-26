@@ -90,6 +90,7 @@ void Http3Connection::add_source_conn_id(std::string_view cid) {
 
 void Http3Connection::setup_http3_streams() {
     if (http3_streams_setup_ || !qconn_ || !h3conn_) return;
+    if (!ngtcp2_conn_get_handshake_completed(qconn_)) return;
 
     int64_t ctrl_stream_id = -1;
     if (ngtcp2_conn_open_uni_stream(qconn_, &ctrl_stream_id, nullptr) != 0) {
@@ -110,7 +111,7 @@ void Http3Connection::setup_http3_streams() {
     http3_streams_setup_ = true;
 }
 
-bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* scid, size_t scidlen) {
+bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* scid, size_t scidlen, uint32_t version) {
     if (!ssl_ctx_) return false;
 
     ssl_ = SSL_new(ssl_ctx_);
@@ -184,6 +185,7 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
         int fin = (flags & NGTCP2_STREAM_DATA_FLAG_FIN) ? 1 : 0;
         nghttp3_ssize nconsumed = nghttp3_conn_read_stream(self->h3conn(), stream_id, data, datalen, fin);
         if (nconsumed < 0) {
+            self->last_h3_error_ = static_cast<int>(nconsumed);
             return NGTCP2_ERR_CALLBACK_FAILURE;
         }
         ngtcp2_conn_extend_max_stream_offset(conn, stream_id, nconsumed);
@@ -269,6 +271,10 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
     qparams.original_dcid_present = 1;
     ngtcp2_cid_init(&qparams.original_dcid, dcid, dcidlen);
 
+    version_ = version;
+    ngtcp2_cid_init(&client_dcid_, dcid, dcidlen);
+    ngtcp2_cid_init(&client_scid_, scid, scidlen);
+
     // Generate local server SCID
     uint8_t local_scid[16];
     RAND_bytes(local_scid, sizeof(local_scid));
@@ -300,7 +306,7 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
     path.remote.addr = const_cast<sockaddr*>(reinterpret_cast<const sockaddr*>(&remote_addr_));
     path.remote.addrlen = remote_addr_len_;
 
-    rv = ngtcp2_conn_server_new(&qconn_, &qdcid, &qscid, &path, NGTCP2_PROTO_VER_V1,
+    rv = ngtcp2_conn_server_new(&qconn_, &qdcid, &qscid, &path, version,
                                 &qcb, &qsettings, &qparams, nullptr, this);
     if (rv != 0) return false;
 
@@ -346,9 +352,18 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         stream->error_status = StatusCode::RequestHeaderFieldsTooLarge;
     }
 
+    stream->headers_received = true;
+    if (stream->seen_regular_headers && n.starts_with(':')) {
+        return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+    }
+
     if (n == ":method") {
+        if (stream->seen_method) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+        stream->seen_method = true;
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
+        if (stream->seen_path) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+        stream->seen_path = true;
         if (v.size() > MAX_URI_LENGTH && stream->error_status == StatusCode::Ok) {
             stream->error_status = StatusCode::UriTooLong;
         }
@@ -364,13 +379,19 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
             stream->req.set_path(stream->path_storage);
             stream->req.set_query("");
         }
+    } else if (n == ":scheme") {
+        if (stream->seen_scheme) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+        stream->seen_scheme = true;
     } else if (n == ":authority") {
+        if (stream->seen_authority) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+        stream->seen_authority = true;
         stream->header_storage.emplace_back("Host", std::string(v));
         const auto& back = stream->header_storage.back();
         stream->req.headers().add(back.first, back.second);
     } else if (n.starts_with(':')) {
-        // Other pseudo headers (:scheme, etc.)
+        return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     } else {
+        stream->seen_regular_headers = true;
         stream->header_storage.emplace_back(std::string(n), std::string(v));
         const auto& back = stream->header_storage.back();
         stream->req.headers().add(back.first, back.second);
@@ -413,6 +434,9 @@ int Http3Connection::on_stream_end(int64_t stream_id) {
 
 int Http3Connection::on_stream_data(int64_t stream_id, const uint8_t* data, size_t datalen) {
     auto* stream = get_or_create_stream(stream_id);
+    if (!stream->headers_received) {
+        return NGHTTP3_ERR_H3_FRAME_UNEXPECTED;
+    }
     if (stream->body_accum.size() + datalen > MAX_BODY_SIZE) {
         if (stream->error_status == StatusCode::Ok) {
             stream->error_status = StatusCode::PayloadTooLarge;
@@ -573,6 +597,9 @@ void Http3Connection::shutdown() {
 
 bool Http3Connection::flush_outbound() {
     if (!qconn_) return false;
+    if (ngtcp2_conn_get_negotiated_version(qconn_) == 0) {
+        return true;
+    }
 
     size_t max_payload = ngtcp2_conn_get_max_tx_udp_payload_size(qconn_);
     if (max_payload == 0 || max_payload > 1500) {
@@ -620,7 +647,7 @@ bool Http3Connection::flush_outbound() {
         nghttp3_vec vec[16];
         nghttp3_ssize veccnt = 0;
 
-        if (h3conn_) {
+        if (h3conn_ && ngtcp2_conn_get_handshake_completed(qconn_)) {
             veccnt = nghttp3_conn_writev_stream(h3conn_, &stream_id, &fin, vec, 16);
             if (veccnt < 0) {
                 closed_ = true;
@@ -673,8 +700,13 @@ bool Http3Connection::flush_outbound() {
     return true;
 }
 
-core::Task<bool> Http3Connection::feed_datagram(std::span<const uint8_t> pkt) {
+core::Task<bool> Http3Connection::feed_datagram(std::span<const uint8_t> pkt,
+                                                const sockaddr_storage& from_addr,
+                                                socklen_t from_len) {
     if (!qconn_) co_return false;
+
+    remote_addr_ = from_addr;
+    remote_addr_len_ = from_len;
 
     ngtcp2_path path{};
     path.local.addr = const_cast<sockaddr*>(reinterpret_cast<const sockaddr*>(&local_addr_));
@@ -684,12 +716,49 @@ core::Task<bool> Http3Connection::feed_datagram(std::span<const uint8_t> pkt) {
 
     ngtcp2_pkt_info pi{};
     int rv = ngtcp2_conn_read_pkt(qconn_, &path, &pi, pkt.data(), pkt.size(), get_timestamp_ns());
-    if (rv == NGTCP2_ERR_DRAINING || rv == NGTCP2_ERR_CLOSING) {
+    if (rv == NGTCP2_ERR_DRAINING) {
         closed_ = true;
         co_return true;
-    } else if (rv != 0) {
+    }
+    if (rv != 0) {
+        if (rv != NGTCP2_ERR_CLOSING) {
+            ngtcp2_ccerr ccerr;
+            ngtcp2_ccerr_default(&ccerr);
+            if (rv == NGTCP2_ERR_CRYPTO || rv == NGTCP2_ERR_DROP_CONN) {
+                uint8_t alert = ngtcp2_conn_get_tls_alert2(qconn_);
+                if (alert == 0) alert = 109; // missing_extension per RFC 9001 §8.2
+                ngtcp2_ccerr_set_tls_alert(&ccerr, alert, nullptr, 0);
+            } else if (last_h3_error_ < 0) {
+                uint64_t app_err = nghttp3_err_infer_quic_app_error_code(last_h3_error_);
+                ngtcp2_ccerr_set_application_error(&ccerr, app_err, nullptr, 0);
+            } else {
+                ngtcp2_ccerr_set_liberr(&ccerr, rv, nullptr, 0);
+            }
+
+            size_t max_payload = ngtcp2_conn_get_max_tx_udp_payload_size(qconn_);
+            if (max_payload == 0 || max_payload > 1500) max_payload = 1452;
+            uint8_t out[1500];
+            ngtcp2_ssize nwrite = 0;
+            if (ngtcp2_conn_get_negotiated_version(qconn_) != 0 && rv != NGTCP2_ERR_DROP_CONN) {
+                ngtcp2_pkt_info close_pi{};
+                nwrite = ngtcp2_conn_write_connection_close(
+                    qconn_, &path, &close_pi, out, max_payload, &ccerr, get_timestamp_ns());
+            }
+            if (nwrite <= 0 && version_ != 0) {
+                nwrite = ngtcp2_crypto_write_connection_close(
+                    out, sizeof(out), version_, &client_scid_, &client_dcid_, ccerr.error_code, nullptr, 0);
+            }
+            if (nwrite > 0 && udp_fd_ >= 0) {
+                sendto(udp_fd_, out, static_cast<size_t>(nwrite), 0,
+                       reinterpret_cast<const sockaddr*>(&remote_addr_), remote_addr_len_);
+            }
+        }
         closed_ = true;
         co_return false;
+    }
+
+    if (is_closed()) {
+        co_return flush_outbound();
     }
 
     co_await dispatch_pending_requests();

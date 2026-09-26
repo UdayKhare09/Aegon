@@ -17,7 +17,7 @@ int alpn_select_cb(SSL*, const unsigned char** out, unsigned char* outlen,
                    const unsigned char* in, unsigned int inlen, void*) {
     if (SSL_select_next_proto(const_cast<unsigned char**>(out), outlen,
                               SERVER_ALPN, SERVER_ALPN_LEN, in, inlen) != OPENSSL_NPN_NEGOTIATED) {
-        return SSL_TLSEXT_ERR_NOACK;
+        return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
     return SSL_TLSEXT_ERR_OK;
 }
@@ -60,6 +60,21 @@ TlsContext& TlsContext::operator=(TlsContext&& other) noexcept {
 void TlsContext::setup_alpn() {
     if (ctx_) {
         SSL_CTX_set_alpn_select_cb(ctx_, alpn_select_cb, nullptr);
+        SSL_CTX_set_client_hello_cb(ctx_, [](SSL* s, int* al, void*) -> int {
+            if (!SSL_is_quic(s)) {
+                return SSL_CLIENT_HELLO_SUCCESS;
+            }
+            const unsigned char* p = nullptr;
+            size_t len = 0;
+            // RFC 9000/9001: quic_transport_parameters extension type is 57 (0x39) or 0xffa5 (draft-29)
+            int ext_present = SSL_client_hello_get0_ext(s, 57, &p, &len) ||
+                              SSL_client_hello_get0_ext(s, 0xffa5, &p, &len);
+            if (!ext_present) {
+                *al = SSL_AD_MISSING_EXTENSION;
+                return SSL_CLIENT_HELLO_ERROR;
+            }
+            return SSL_CLIENT_HELLO_SUCCESS;
+        }, nullptr);
     }
 }
 

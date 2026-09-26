@@ -83,4 +83,35 @@ struct FrameHeader {
     }
 };
 
+inline std::array<uint8_t, 17> make_goaway_frame(uint32_t last_stream_id, uint32_t error_code) noexcept {
+    std::array<uint8_t, 17> buf{};
+    FrameHeader hdr{
+        .length = 8,
+        .type = FrameType::GOAWAY,
+        .flags = 0,
+        .stream_id = 0
+    };
+    hdr.encode(buf.data());
+    uint32_t net_sid = htonl(last_stream_id & 0x7FFFFFFF);
+    std::memcpy(buf.data() + 9, &net_sid, 4);
+    uint32_t net_err = htonl(error_code);
+    std::memcpy(buf.data() + 13, &net_err, 4);
+    return buf;
+}
+
+inline std::array<uint8_t, 13> make_rst_frame(uint32_t stream_id, uint32_t error_code) noexcept {
+    std::array<uint8_t, 13> buf{};
+    FrameHeader hdr{
+        .length = 4,
+        .type = FrameType::RST_STREAM,
+        .flags = 0,
+        .stream_id = stream_id
+    };
+    hdr.encode(buf.data());
+    uint32_t net_err = htonl(error_code);
+    std::memcpy(buf.data() + 9, &net_err, 4);
+    return buf;
+}
+
 } // namespace aegon::http::v2
+

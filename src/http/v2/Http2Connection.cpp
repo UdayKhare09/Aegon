@@ -1,4 +1,5 @@
 #include "http/v2/Http2Connection.h"
+#include "http/v2/Http2Frame.h"
 #include "core/simd/SimdString.h"
 #include <algorithm>
 #include <array>
@@ -181,6 +182,14 @@ int Http2Connection::on_data_chunk_recv(uint8_t, int32_t stream_id, const uint8_
 
 int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
     if (frame->hd.type == NGHTTP2_HEADERS) {
+        if ((frame->hd.flags & NGHTTP2_FLAG_PRIORITY) &&
+            frame->headers.pri_spec.stream_id == frame->hd.stream_id) {
+            nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, frame->hd.stream_id, NGHTTP2_PROTOCOL_ERROR);
+            auto it = streams_.find(frame->hd.stream_id);
+            if (it != streams_.end()) {
+                it->second->reset = true;
+            }
+        }
         if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
             auto* stream = get_or_create_stream(frame->hd.stream_id);
             stream->request_complete = true;
@@ -194,12 +203,20 @@ int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
         }
     } else if (frame->hd.type == NGHTTP2_PRIORITY) {
         if (frame->hd.stream_id == 0) {
-            nghttp2_submit_goaway(session_, NGHTTP2_FLAG_NONE, 0, NGHTTP2_PROTOCOL_ERROR, nullptr, 0);
+            nghttp2_session_terminate_session(session_, NGHTTP2_PROTOCOL_ERROR);
             closed_ = true;
         } else if (frame->priority.pri_spec.stream_id == frame->hd.stream_id) {
             nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, frame->hd.stream_id, NGHTTP2_PROTOCOL_ERROR);
+            auto it = streams_.find(frame->hd.stream_id);
+            if (it != streams_.end()) {
+                it->second->reset = true;
+            }
         }
     } else if (frame->hd.type == NGHTTP2_RST_STREAM) {
+        auto it = streams_.find(frame->hd.stream_id);
+        if (it != streams_.end()) {
+            it->second->reset = true;
+        }
         // CVE-2023-44487: Rapid Reset Attack mitigation
         ++rst_count_;
         if (rst_count_ > rst_burst_limit_) {
@@ -222,18 +239,32 @@ int Http2Connection::on_frame_send(const nghttp2_frame* frame) {
 }
 
 int Http2Connection::on_invalid_frame_recv(const nghttp2_frame* frame, int lib_error_code) {
+    uint32_t error_code = NGHTTP2_PROTOCOL_ERROR;
+    if (lib_error_code == NGHTTP2_ERR_STREAM_CLOSED || lib_error_code == NGHTTP2_ERR_STREAM_CLOSING) {
+        error_code = NGHTTP2_STREAM_CLOSED;
+    } else if (lib_error_code == NGHTTP2_ERR_FLOW_CONTROL) {
+        error_code = NGHTTP2_FLOW_CONTROL_ERROR;
+    } else if (lib_error_code == NGHTTP2_ERR_FRAME_SIZE_ERROR) {
+        error_code = NGHTTP2_FRAME_SIZE_ERROR;
+    }
+    last_error_code_ = error_code;
+
     if (frame->hd.stream_id != 0) {
         auto it = streams_.find(frame->hd.stream_id);
         if (it != streams_.end()) {
             it->second->reset = true;
         }
-        if (lib_error_code == NGHTTP2_ERR_STREAM_CLOSED || lib_error_code == NGHTTP2_ERR_STREAM_CLOSING) {
-            nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, frame->hd.stream_id, NGHTTP2_STREAM_CLOSED);
-        } else {
-            nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, frame->hd.stream_id, NGHTTP2_PROTOCOL_ERROR);
+        if (error_code == NGHTTP2_FLOW_CONTROL_ERROR) {
+            auto rst = make_rst_frame(frame->hd.stream_id, NGHTTP2_FLOW_CONTROL_ERROR);
+            outbound_buf_.append(reinterpret_cast<const char*>(rst.data()), rst.size());
+        }
+        int rv = nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, frame->hd.stream_id, error_code);
+        if (rv != 0) {
+            nghttp2_session_terminate_session(session_, error_code);
+            closed_ = true;
         }
     } else {
-        nghttp2_session_terminate_session(session_, NGHTTP2_PROTOCOL_ERROR);
+        nghttp2_session_terminate_session(session_, error_code);
         closed_ = true;
     }
     return 0;
@@ -255,6 +286,10 @@ ssize_t Http2Connection::on_data_source_read(int32_t stream_id, uint8_t* buf, si
     }
 
     auto* stream = it->second.get();
+    if (stream->reset || closed_stream_ids_.contains(stream_id)) {
+        return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+    }
+
     std::string_view body = stream->res.body();
     size_t available = (stream->body_offset < body.size()) ? (body.size() - stream->body_offset) : 0;
     size_t to_copy = std::min(available, length);
@@ -440,7 +475,6 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
 }
 
 core::Task<bool> Http2Connection::flush_outbound() {
-    outbound_buf_.clear();
     while (nghttp2_session_want_write(session_)) {
         const uint8_t* data = nullptr;
         ssize_t len = nghttp2_session_mem_send(session_, &data);
@@ -510,10 +544,105 @@ core::Task<bool> Http2Connection::flush_outbound() {
 }
 
 core::Task<bool> Http2Connection::feed_data(const void* data, size_t len) {
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
+    size_t rem = len;
+    if (rem >= 24 && std::memcmp(p, CLIENT_PREFACE.data(), 24) == 0) {
+        p += 24;
+        rem -= 24;
+    }
+
+    while (rem >= 9) {
+        auto hdr = FrameHeader::decode(p);
+        size_t frame_total = 9 + hdr.length;
+
+        if (hdr.type == FrameType::PRIORITY) {
+            if (hdr.stream_id == 0) {
+                // RFC 7540 §6.3: PRIORITY with stream_id 0 MUST be connection error PROTOCOL_ERROR
+                last_error_code_ = NGHTTP2_PROTOCOL_ERROR;
+                auto goaway = make_goaway_frame(static_cast<uint32_t>(max_remote_stream_id_), NGHTTP2_PROTOCOL_ERROR);
+                outbound_buf_.append(reinterpret_cast<const char*>(goaway.data()), goaway.size());
+                closed_ = true;
+                (void)co_await flush_outbound();
+                co_return false;
+            }
+            if (rem >= 14 && hdr.length >= 5) {
+                uint32_t dep;
+                std::memcpy(&dep, p + 9, 4);
+                dep = ntohl(dep) & 0x7FFFFFFF;
+                if (dep == hdr.stream_id) {
+                    // RFC 7540 §5.3.1: Stream cannot depend on itself -> stream error PROTOCOL_ERROR
+                    auto rst = make_rst_frame(hdr.stream_id, NGHTTP2_PROTOCOL_ERROR);
+                    outbound_buf_.append(reinterpret_cast<const char*>(rst.data()), rst.size());
+                    (void)co_await flush_outbound();
+                }
+            }
+        } else if (hdr.type == FrameType::HEADERS) {
+            if (hdr.stream_id % 2 == 1) {
+                auto it = streams_.find(hdr.stream_id);
+                bool is_half_closed = (it != streams_.end() && it->second->request_complete);
+                if (closed_stream_ids_.contains(hdr.stream_id) || is_half_closed) {
+                    // RFC 7540 §5.1: receipt of HEADERS on closed stream MUST be STREAM_CLOSED
+                    last_error_code_ = NGHTTP2_STREAM_CLOSED;
+                    auto goaway = make_goaway_frame(static_cast<uint32_t>(max_remote_stream_id_), NGHTTP2_STREAM_CLOSED);
+                    outbound_buf_.append(reinterpret_cast<const char*>(goaway.data()), goaway.size());
+                    closed_ = true;
+                    (void)co_await flush_outbound();
+                    co_return false;
+                }
+                if (it == streams_.end() && hdr.stream_id <= static_cast<uint32_t>(max_remote_stream_id_)) {
+                    // RFC 7540 §5.1.1: unexpected stream identifier MUST be connection error PROTOCOL_ERROR
+                    last_error_code_ = NGHTTP2_PROTOCOL_ERROR;
+                    auto goaway = make_goaway_frame(static_cast<uint32_t>(max_remote_stream_id_), NGHTTP2_PROTOCOL_ERROR);
+                    outbound_buf_.append(reinterpret_cast<const char*>(goaway.data()), goaway.size());
+                    closed_ = true;
+                    (void)co_await flush_outbound();
+                    co_return false;
+                }
+            }
+        } else if (hdr.type == FrameType::DATA) {
+            auto it = streams_.find(hdr.stream_id);
+            bool is_half_closed = (it != streams_.end() && it->second->request_complete);
+            if (closed_stream_ids_.contains(hdr.stream_id) || is_half_closed) {
+                // RFC 7540 §5.1 & §6.1: DATA on closed stream MUST be stream error STREAM_CLOSED
+                auto rst = make_rst_frame(hdr.stream_id, NGHTTP2_STREAM_CLOSED);
+                outbound_buf_.append(reinterpret_cast<const char*>(rst.data()), rst.size());
+                (void)co_await flush_outbound();
+            }
+        }
+
+        if (frame_total > rem) {
+            break;
+        }
+        p += frame_total;
+        rem -= frame_total;
+    }
+
     ssize_t readlen = nghttp2_session_mem_recv(session_, reinterpret_cast<const uint8_t*>(data), len);
     if (readlen < 0) {
+        uint32_t err = (last_error_code_ != 0) ? last_error_code_ : static_cast<uint32_t>(NGHTTP2_PROTOCOL_ERROR);
+        if (readlen == NGHTTP2_ERR_FLOW_CONTROL) {
+            err = NGHTTP2_FLOW_CONTROL_ERROR;
+        } else if (readlen == NGHTTP2_ERR_FRAME_SIZE_ERROR) {
+            err = NGHTTP2_FRAME_SIZE_ERROR;
+        }
+        auto goaway = make_goaway_frame(static_cast<uint32_t>(max_remote_stream_id_), err);
+        if (sender_) {
+            (void)co_await sender_(std::span<const uint8_t>(goaway.data(), goaway.size()));
+        } else {
+            (void)co_await loop_.ring().send_all(client_fd_, std::string_view(reinterpret_cast<const char*>(goaway.data()), goaway.size()));
+        }
         closed_ = true;
-        (void)co_await flush_outbound();
+        co_return false;
+    }
+
+    if (closed_) {
+        uint32_t err = (last_error_code_ != 0) ? last_error_code_ : static_cast<uint32_t>(NGHTTP2_PROTOCOL_ERROR);
+        auto goaway = make_goaway_frame(static_cast<uint32_t>(max_remote_stream_id_), err);
+        if (sender_) {
+            (void)co_await sender_(std::span<const uint8_t>(goaway.data(), goaway.size()));
+        } else {
+            (void)co_await loop_.ring().send_all(client_fd_, std::string_view(reinterpret_cast<const char*>(goaway.data()), goaway.size()));
+        }
         co_return false;
     }
 
