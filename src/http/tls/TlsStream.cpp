@@ -27,7 +27,7 @@ core::Task<bool> TlsStream::flush_outbound() {
             int sent = co_await loop_.ring().send_all(
                 client_fd_,
                 std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(out_buf), static_cast<size_t>(n)));
-            if (sent <= 0) {
+            if (sent != n) {
                 co_return false;
             }
         }
