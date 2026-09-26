@@ -9,6 +9,7 @@
 #include <deque>
 #include <charconv>
 #include <type_traits>
+#include <ctime>
 #include <sys/stat.h>
 
 namespace aegon::http {
@@ -242,6 +243,20 @@ public:
                 out.append(len_buf, lptr - len_buf);
                 out.append("\r\n");
             }
+        }
+
+        if (!headers_.contains("Date") && sc >= 200) {
+            static thread_local time_t last_time = 0;
+            static thread_local char date_buf[64];
+            static thread_local size_t date_len = 0;
+            time_t now = time(nullptr);
+            if (now != last_time) {
+                last_time = now;
+                struct tm gmt;
+                gmtime_r(&now, &gmt);
+                date_len = strftime(date_buf, sizeof(date_buf), "Date: %a, %d %b %Y %H:%M:%S GMT\r\n", &gmt);
+            }
+            out.append(date_buf, date_len);
         }
 
         for (const auto& h : headers_) {

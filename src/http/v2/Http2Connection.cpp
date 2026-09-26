@@ -126,9 +126,19 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
         stream->error_status = StatusCode::RequestHeaderFieldsTooLarge;
     }
 
+    for (char c : v) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (uc == '\0' || uc == '\r' || uc == '\n') {
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        }
+    }
+
     if (n == ":method") {
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
+        if (v == "*" && stream->req.method() != Method::OPTIONS && stream->req.method() != Method::UNKNOWN) {
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        }
         if (v.size() > MAX_URI_LENGTH && stream->error_status == StatusCode::Ok) {
             stream->error_status = StatusCode::UriTooLong;
         }
@@ -145,6 +155,9 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
             stream->req.set_query("");
         }
     } else if (n == ":authority") {
+        if (v.find('@') != std::string_view::npos) {
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        }
         stream->header_storage.emplace_back("Host", std::string(v));
         const auto& back = stream->header_storage.back();
         stream->req.headers().add(back.first, back.second);
@@ -290,6 +303,11 @@ ssize_t Http2Connection::on_data_source_read(int32_t stream_id, uint8_t* buf, si
         return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
     }
 
+    if (stream->req.method() == Method::HEAD) {
+        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+        return 0;
+    }
+
     std::string_view body = stream->res.body();
     size_t available = (stream->body_offset < body.size()) ? (body.size() - stream->body_offset) : 0;
     size_t to_copy = std::min(available, length);
@@ -349,6 +367,21 @@ void Http2Connection::submit_response(Http2Stream* stream) {
     if (!should_suppress_content_length(stream->res.status()) && !stream->res.headers().contains("content-length")) {
         push_nv(reinterpret_cast<const uint8_t*>("content-length"), 14,
                 reinterpret_cast<const uint8_t*>(cl_buf), cl_len);
+    }
+
+    if (!stream->res.headers().contains("date") && static_cast<uint16_t>(stream->res.status()) >= 200) {
+        static thread_local time_t last_time = 0;
+        static thread_local char date_buf[64];
+        static thread_local size_t date_len = 0;
+        time_t now = time(nullptr);
+        if (now != last_time) {
+            last_time = now;
+            struct tm gmt;
+            gmtime_r(&now, &gmt);
+            date_len = strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
+        }
+        push_nv(reinterpret_cast<const uint8_t*>("date"), 4,
+                reinterpret_cast<const uint8_t*>(date_buf), date_len);
     }
 
     // Keep lowercased header names alive for nghttp2_nv pointers

@@ -357,6 +357,13 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     }
 
+    for (char c : v) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (uc == '\0' || uc == '\r' || uc == '\n') {
+            return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+        }
+    }
+
     if (n == ":method") {
         if (stream->seen_method) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         stream->seen_method = true;
@@ -364,6 +371,9 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
     } else if (n == ":path") {
         if (stream->seen_path) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         stream->seen_path = true;
+        if (v == "*" && stream->req.method() != Method::OPTIONS && stream->seen_method) {
+            return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+        }
         if (v.size() > MAX_URI_LENGTH && stream->error_status == StatusCode::Ok) {
             stream->error_status = StatusCode::UriTooLong;
         }
@@ -385,6 +395,9 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
     } else if (n == ":authority") {
         if (stream->seen_authority) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         stream->seen_authority = true;
+        if (v.find('@') != std::string_view::npos) {
+            return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+        }
         stream->header_storage.emplace_back("Host", std::string(v));
         const auto& back = stream->header_storage.back();
         stream->req.headers().add(back.first, back.second);
@@ -466,6 +479,11 @@ nghttp3_ssize Http3Connection::on_stream_read(int64_t stream_id, uint32_t* pflag
     if (it == streams_.end()) return NGHTTP3_ERR_CALLBACK_FAILURE;
 
     auto* stream = it->second.get();
+    if (stream->req.method() == Method::HEAD) {
+        *pflags |= NGHTTP3_DATA_FLAG_EOF;
+        return 0;
+    }
+
     std::string_view body = stream->res.body();
     size_t available = (stream->body_offset < body.size()) ? (body.size() - stream->body_offset) : 0;
 
@@ -523,6 +541,21 @@ void Http3Connection::submit_response(Http3Stream* stream) {
     if (!should_suppress_content_length(stream->res.status()) && !stream->res.headers().contains("content-length")) {
         push_nv(reinterpret_cast<const uint8_t*>("content-length"), 14,
                 reinterpret_cast<const uint8_t*>(cl_buf), cl_len);
+    }
+
+    if (!stream->res.headers().contains("date") && static_cast<uint16_t>(stream->res.status()) >= 200) {
+        static thread_local time_t last_time = 0;
+        static thread_local char date_buf[64];
+        static thread_local size_t date_len = 0;
+        time_t now = time(nullptr);
+        if (now != last_time) {
+            last_time = now;
+            struct tm gmt;
+            gmtime_r(&now, &gmt);
+            date_len = strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
+        }
+        push_nv(reinterpret_cast<const uint8_t*>("date"), 4,
+                reinterpret_cast<const uint8_t*>(date_buf), date_len);
     }
 
     std::vector<std::string> lower_names;

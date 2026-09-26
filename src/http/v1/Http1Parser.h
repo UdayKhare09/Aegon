@@ -24,7 +24,16 @@ class Http1Parser {
 public:
     static constexpr size_t MAX_URI_LENGTH = aegon::http::MAX_URI_LENGTH;
     static constexpr size_t MAX_HEADERS_SIZE = aegon::http::MAX_HEADERS_SIZE;
-    static constexpr size_t MAX_BODY_SIZE = aegon::http::MAX_BODY_SIZE;
+    static constexpr bool is_tchar(char c) noexcept {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if ((uc >= 'a' && uc <= 'z') || (uc >= 'A' && uc <= 'Z') || (uc >= '0' && uc <= '9')) {
+            return true;
+        }
+        return c == '!' || c == '#' || c == '$' || c == '%' || c == '&' ||
+               c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' ||
+               c == '^' || c == '_' || c == '`' || c == '|' || c == '~';
+    }
+
     /**
      * @brief Parse hex chunk size per RFC 9112 §7.1 using branchless lookup table
      */
@@ -86,7 +95,7 @@ public:
         if (full_path.empty() || full_path[0] != '/') [[unlikely]] {
             // Asterisk form for OPTIONS or absoluteURI per RFC 9112 §3.2.2
             if (full_path == "*") {
-                // asterisk form
+                if (m != Method::OPTIONS) return ParseStatus::Error;
             } else if (full_path.starts_with("http://")) {
                 full_path.remove_prefix(7);
                 size_t slash = aegon::core::simd::SimdString::find_char(full_path, '/');
@@ -96,6 +105,14 @@ public:
                 size_t slash = aegon::core::simd::SimdString::find_char(full_path, '/');
                 full_path = (slash != std::string_view::npos) ? full_path.substr(slash) : "/";
             } else {
+                return ParseStatus::Error;
+            }
+        }
+
+        // RFC 9112 §3.2 / RFC 3986: request-target must be ASCII without CTLs, NUL, or high bytes
+        for (char c : full_path) {
+            unsigned char uc = static_cast<unsigned char>(c);
+            if (uc <= 0x20 || uc >= 0x7F) {
                 return ParseStatus::Error;
             }
         }
@@ -115,6 +132,16 @@ public:
             req.set_version(HttpVersion::Http1_1);
         } else if (ver_sv == "HTTP/1.0") {
             req.set_version(HttpVersion::Http1_0);
+        } else if (ver_sv.starts_with("HTTP/1.") && ver_sv.size() >= 8) {
+            bool digits = true;
+            for (size_t i = 7; i < ver_sv.size(); ++i) {
+                if (ver_sv[i] < '0' || ver_sv[i] > '9') { digits = false; break; }
+            }
+            if (digits) {
+                req.set_version(HttpVersion::Http1_1);
+            } else {
+                return ParseStatus::Error;
+            }
         } else {
             return ParseStatus::Error;
         }
@@ -162,12 +189,26 @@ public:
             }
 
             std::string_view name = line.substr(0, colon);
+            // RFC 9110 §5.6.2: Header name must consist only of tchar
+            for (char c : name) {
+                if (!is_tchar(c)) return ParseStatus::Error;
+            }
+
             // RFC 9110: No whitespace allowed between header field name and colon
             if (name.back() == ' ' || name.back() == '\t') {
                 return ParseStatus::Error;
             }
 
-            std::string_view value = line.substr(colon + 1);
+            std::string_view raw_value = line.substr(colon + 1);
+            // RFC 9112 §2.2 / RFC 9110 §5.5: Reject bare CR, NUL, and CTLs (except HTAB)
+            for (char c : raw_value) {
+                unsigned char uc = static_cast<unsigned char>(c);
+                if (uc == '\r' || (uc < 0x20 && uc != '\t') || uc == 0x7F) {
+                    return ParseStatus::Error;
+                }
+            }
+
+            std::string_view value = raw_value;
             // Trim leading whitespace
             while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
                 value.remove_prefix(1);
@@ -184,28 +225,86 @@ public:
                     return ParseStatus::Error; // Multiple Host headers forbidden (RFC 9112 §3.2)
                 }
                 has_host = true;
+                if (value.empty()) {
+                    return ParseStatus::Error; // Empty Host header forbidden
+                }
+                for (char c : value) {
+                    if (c == '@' || c == '/' || c == ',' || c == ' ' || c == '\t') {
+                        return ParseStatus::Error;
+                    }
+                }
             } else if (iequals(name, "Content-Length")) {
                 if (has_content_length) {
                     return ParseStatus::Error; // Duplicate Content-Length forbidden
                 }
                 has_content_length = true;
+                if (value.empty()) {
+                    return ParseStatus::Error; // Empty Content-Length forbidden
+                }
                 content_length = 0;
+                size_t digits = 0;
                 for (char c : value) {
                     if (c >= '0' && c <= '9') {
-                        content_length = content_length * 10 + (c - '0');
-                        if (content_length > MAX_BODY_SIZE) {
-                            return ParseStatus::PayloadTooLarge;
+                        ++digits;
+                        if (digits > 19) {
+                            return ParseStatus::Error; // Integer overflow -> 400
                         }
+                        size_t next = content_length * 10 + (c - '0');
+                        if (next < content_length) {
+                            return ParseStatus::Error; // Overflow -> 400
+                        }
+                        content_length = next;
                     } else {
-                        return ParseStatus::Error; // Invalid non-digit in Content-Length
+                        return ParseStatus::Error; // Invalid non-digit
                     }
                 }
+                if (content_length > MAX_BODY_SIZE) {
+                    return ParseStatus::PayloadTooLarge;
+                }
             } else if (iequals(name, "Transfer-Encoding")) {
+                if (has_transfer_encoding) {
+                    // Duplicate Transfer-Encoding header -> RFC 9112 ambiguous -> 400
+                    return ParseStatus::Error;
+                }
                 has_transfer_encoding = true;
-                if (iequals(value, "chunked")) {
+                if (value.empty()) {
+                    return ParseStatus::Error; // Empty value -> 400
+                }
+
+                // Parse comma-separated codings
+                std::string_view te_val = value;
+                std::vector<std::string_view> codings;
+                while (!te_val.empty()) {
+                    size_t comma = te_val.find(',');
+                    std::string_view token = (comma != std::string_view::npos) ? te_val.substr(0, comma) : te_val;
+                    while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) token.remove_prefix(1);
+                    while (!token.empty() && (token.back() == ' ' || token.back() == '\t')) token.remove_suffix(1);
+                    if (!token.empty()) {
+                        codings.push_back(token);
+                    }
+                    if (comma == std::string_view::npos) break;
+                    te_val.remove_prefix(comma + 1);
+                }
+
+                if (codings.empty()) {
+                    return ParseStatus::Error;
+                }
+
+                size_t chunked_count = 0;
+                for (auto c : codings) {
+                    if (iequals(c, "chunked") || c.starts_with("chunked;")) {
+                        ++chunked_count;
+                    }
+                }
+                if (chunked_count > 1) {
+                    return ParseStatus::Error;
+                }
+
+                std::string_view final_coding = codings.back();
+                if (iequals(final_coding, "chunked") || final_coding.starts_with("chunked;")) {
                     is_chunked = true;
                 } else {
-                    return ParseStatus::NotImplemented; // Only chunked transfer encoding is supported
+                    return ParseStatus::Error;
                 }
             } else if (iequals(name, "Expect")) {
                 if (iequals(value, "100-continue")) {
@@ -253,13 +352,47 @@ public:
             while (true) {
                 size_t line_end = aegon::core::simd::SimdString::find_crlf(buffer, chunk_cursor);
                 if (line_end == std::string_view::npos) {
+                    size_t lf = buffer.find('\n', chunk_cursor);
+                    if (lf != std::string_view::npos) {
+                        return ParseStatus::Error;
+                    }
                     return ParseStatus::NeedMoreData;
                 }
 
                 std::string_view size_line = buffer.substr(chunk_cursor, line_end - chunk_cursor);
-                // Strip chunk-ext if present (e.g. "4;foo=bar")
+                // Strip and validate chunk-ext if present (e.g. "4;foo=bar")
                 size_t semi = aegon::core::simd::SimdString::find_char(size_line, ';');
                 if (semi != std::string_view::npos) {
+                    std::string_view ext = size_line.substr(semi + 1);
+                    if (ext.empty()) {
+                        return ParseStatus::Error;
+                    }
+                    size_t ext_pos = 0;
+                    while (ext_pos < ext.size()) {
+                        size_t eq_or_semi = ext.find_first_of(";=", ext_pos);
+                        std::string_view ext_name = ext.substr(ext_pos, eq_or_semi == std::string_view::npos ? ext.size() - ext_pos : eq_or_semi - ext_pos);
+                        while (!ext_name.empty() && (ext_name.front() == ' ' || ext_name.front() == '\t')) ext_name.remove_prefix(1);
+                        while (!ext_name.empty() && (ext_name.back() == ' ' || ext_name.back() == '\t')) ext_name.remove_suffix(1);
+                        if (ext_name.empty()) {
+                            return ParseStatus::Error;
+                        }
+                        for (char c : ext_name) {
+                            if (!is_tchar(c)) return ParseStatus::Error;
+                        }
+                        if (eq_or_semi == std::string_view::npos || ext[eq_or_semi] == ';') {
+                            ext_pos = (eq_or_semi == std::string_view::npos) ? ext.size() : eq_or_semi + 1;
+                        } else {
+                            size_t next_semi = ext.find(';', eq_or_semi + 1);
+                            std::string_view ext_val = ext.substr(eq_or_semi + 1, next_semi == std::string_view::npos ? ext.size() - (eq_or_semi + 1) : next_semi - (eq_or_semi + 1));
+                            for (char c : ext_val) {
+                                unsigned char uc = static_cast<unsigned char>(c);
+                                if (uc == '\r' || uc < 0x20 || uc == 0x7F) {
+                                    return ParseStatus::Error;
+                                }
+                            }
+                            ext_pos = (next_semi == std::string_view::npos) ? ext.size() : next_semi + 1;
+                        }
+                    }
                     size_line = size_line.substr(0, semi);
                 }
 
@@ -271,6 +404,9 @@ public:
                 chunk_cursor = line_end + 2;
 
                 if (chunk_size == 0) {
+                    if (buffer.size() > chunk_cursor && buffer[chunk_cursor] == '\n') {
+                        return ParseStatus::Error;
+                    }
                     // Last-chunk reached. Now consume trailer section up to \r\n\r\n
                     size_t trailer_end = aegon::core::simd::SimdString::find_double_crlf(buffer, chunk_cursor);
                     if (trailer_end == std::string_view::npos) {
@@ -279,6 +415,10 @@ public:
                             buffer[chunk_cursor] == '\r' && buffer[chunk_cursor + 1] == '\n') {
                             chunk_cursor += 2;
                         } else {
+                            size_t lf = buffer.find('\n', chunk_cursor);
+                            if (lf != std::string_view::npos && (lf == chunk_cursor || buffer[lf - 1] != '\r')) {
+                                return ParseStatus::Error;
+                            }
                             return ParseStatus::NeedMoreData;
                         }
                     } else {

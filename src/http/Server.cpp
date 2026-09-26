@@ -337,7 +337,11 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
                     res.set_header_owned("alt-svc", alt_svc_hdr);
                 }
 
-                res.append_http1(resp_batch);
+                if (req.method() == Method::HEAD) {
+                    res.append_http1_headers(resp_batch);
+                } else {
+                    res.append_http1(resp_batch);
+                }
                 req_offset += bytes_consumed;
 
                 if (!keep_alive) {
@@ -525,9 +529,15 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
                 std::string header_out;
                 res.serialize_http1_headers(header_out);
                 (void)(co_await loop.ring().send_all(client_fd, header_out));
-                co_await stream_file_zero_copy(loop, client_fd, res.file_path(), res.file_size());
+                if (req.method() != Method::HEAD) {
+                    co_await stream_file_zero_copy(loop, client_fd, res.file_path(), res.file_size());
+                }
             } else {
-                res.append_http1(resp_batch);
+                if (req.method() == Method::HEAD) {
+                    res.append_http1_headers(resp_batch);
+                } else {
+                    res.append_http1(resp_batch);
+                }
             }
 
             req_offset += bytes_consumed;
