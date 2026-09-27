@@ -513,6 +513,11 @@ add_executable(test_websocket
 )
 target_link_libraries(test_websocket PRIVATE aegon_http aegon_core)
 
+add_executable(autobahn_server
+    tests/autobahn/server.cpp
+)
+target_link_libraries(autobahn_server PRIVATE aegon_http aegon_core)
+
 # Test Registrations for CTest
 add_test(NAME version COMMAND test_version)
 add_test(NAME websocket COMMAND test_websocket)

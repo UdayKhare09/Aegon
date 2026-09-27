@@ -12,6 +12,7 @@
 #elif defined(__ARM_NEON) || defined(__aarch64__)
 #include <arm_neon.h>
 #endif
+#include <glaze/util/parse.hpp>
 
 namespace aegon::http::websocket {
 
@@ -61,6 +62,52 @@ enum class FrameParseResult {
 };
 
 /**
+ * @brief High-performance streaming UTF-8 validator backed by Glaze.
+ * Utilizes 64-bit adaptive word scanning and SIMD acceleration for fragmented frames.
+ */
+class Utf8Validator {
+public:
+    Utf8Validator() noexcept = default;
+
+    void reset() noexcept {
+        val_.reset();
+    }
+
+    bool update(std::string_view sv) noexcept {
+        return val_.consume(sv.data(), sv.size());
+    }
+
+    [[nodiscard]] bool is_valid_end() const noexcept {
+        return val_.complete();
+    }
+
+private:
+    glz::utf8_stream_validator val_{};
+};
+
+/**
+ * @brief Validates RFC 3629 UTF-8 encoding using Glaze's Lemire & Keiser SIMD validator.
+ */
+inline bool is_valid_utf8(std::string_view sv) noexcept {
+    return glz::validate_utf8(sv.data(), sv.size());
+}
+
+/**
+ * @brief Checks if a close code is valid according to RFC 6455 §7.4.
+ */
+inline bool is_valid_close_code(uint16_t code) noexcept {
+    if (code == 1000 || code == 1001 || code == 1002 || code == 1003 ||
+        code == 1007 || code == 1008 || code == 1009 || code == 1010 ||
+        code == 1011 || code == 1012 || code == 1013 || code == 1014) {
+        return true;
+    }
+    if (code >= 3000 && code <= 4999) {
+        return true;
+    }
+    return false;
+}
+
+/**
  * @brief Parses an RFC 6455 WebSocket frame header from a buffer.
  */
 inline FrameParseResult parse_frame_header(std::string_view buf, FrameHeader& out) noexcept {
@@ -79,11 +126,25 @@ inline FrameParseResult parse_frame_header(std::string_view buf, FrameHeader& ou
     out.opcode = static_cast<Opcode>(b0 & 0x0F);
     out.masked = (b1 & 0x80) != 0;
 
-    // RFC 6455 §5.2: Control frames MUST NOT have RSV bits or fragment (FIN=1)
-    if (is_control_opcode(out.opcode)) {
-        if (!out.fin || out.rsv1 || out.rsv2 || out.rsv3) {
-            return FrameParseResult::ProtocolError;
-        }
+    // RFC 6455 §5.2: Opcode validation (reserved opcodes 0x3-0x7 and 0xB-0xF MUST fail)
+    bool is_valid_op = (out.opcode == Opcode::Continuation ||
+                        out.opcode == Opcode::Text ||
+                        out.opcode == Opcode::Binary ||
+                        out.opcode == Opcode::Close ||
+                        out.opcode == Opcode::Ping ||
+                        out.opcode == Opcode::Pong);
+    if (!is_valid_op) {
+        return FrameParseResult::ProtocolError;
+    }
+
+    // RFC 6455 §5.2: RSV bits MUST be 0 unless an extension is negotiated
+    if (out.rsv1 || out.rsv2 || out.rsv3) {
+        return FrameParseResult::ProtocolError;
+    }
+
+    // RFC 6455 §5.5: Control frames MUST NOT be fragmented (FIN=1)
+    if (is_control_opcode(out.opcode) && !out.fin) {
+        return FrameParseResult::ProtocolError;
     }
 
     uint8_t len_code = b1 & 0x7F;
@@ -98,6 +159,9 @@ inline FrameParseResult parse_frame_header(std::string_view buf, FrameHeader& ou
         uint16_t raw_len;
         std::memcpy(&raw_len, p + offset, 2);
         out.payload_len = be16toh(raw_len);
+        if (out.payload_len < 126) {
+            return FrameParseResult::ProtocolError;
+        }
         offset += 2;
     } else { // 127
         if (buf.size() < offset + 8) {
@@ -105,7 +169,12 @@ inline FrameParseResult parse_frame_header(std::string_view buf, FrameHeader& ou
         }
         uint64_t raw_len;
         std::memcpy(&raw_len, p + offset, 8);
-        out.payload_len = be64toh(raw_len);
+        uint64_t h_len = be64toh(raw_len);
+        // Most significant bit MUST be 0 and length must be >= 65536
+        if ((h_len & 0x8000000000000000ULL) != 0 || h_len < 65536) {
+            return FrameParseResult::ProtocolError;
+        }
+        out.payload_len = h_len;
         offset += 8;
     }
 

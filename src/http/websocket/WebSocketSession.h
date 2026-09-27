@@ -43,6 +43,10 @@ private:
     WebSocketConfig config_{};
     std::string stream_buf_;
     std::string batch_out_;
+    bool fragment_in_progress_{false};
+    Opcode fragment_opcode_{Opcode::Text};
+    std::string fragment_buffer_;
+    Utf8Validator utf8_validator_{};
     bool is_closed_{false};
     bool initialized_{false};
 };

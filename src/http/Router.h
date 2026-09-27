@@ -30,6 +30,9 @@ struct StringHash {
     size_t operator()(const std::string& s) const noexcept {
         return std::hash<std::string_view>{}(s);
     }
+    size_t operator()(const char* s) const noexcept {
+        return std::hash<std::string_view>{}(s);
+    }
 };
 
 struct StringEq {
@@ -289,6 +292,10 @@ public:
         auto it = ws_routes_.find(norm_path);
         if (it != ws_routes_.end()) {
             return &it->second;
+        }
+        auto root_it = ws_routes_.find("/");
+        if (root_it != ws_routes_.end()) {
+            return &root_it->second;
         }
         return nullptr;
     }

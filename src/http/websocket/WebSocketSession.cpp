@@ -61,6 +61,10 @@ core::Task<bool> WebSocketSession::process_incoming_data(std::string_view data) 
         }
 
         if (res == FrameParseResult::ProtocolError) {
+            if (!batch_out_.empty()) {
+                (void)co_await transport_.write_raw(batch_out_);
+                batch_out_.clear();
+            }
             is_closed_ = true;
             co_await ws_.close(CloseCode::ProtocolError, "Protocol Error");
             co_return false;
@@ -93,6 +97,10 @@ core::Task<bool> WebSocketSession::process_incoming_data(std::string_view data) 
         std::string_view payload(reinterpret_cast<const char*>(payload_ptr), header.payload_len);
 
         if (header.opcode == Opcode::Ping) {
+            if (!batch_out_.empty()) {
+                (void)co_await transport_.write_raw(batch_out_);
+                batch_out_.clear();
+            }
             co_await ws_.send_pong(payload);
             if (ws_.ping_callback()) {
                 co_await ws_.ping_callback()(ws_, payload);
@@ -100,14 +108,34 @@ core::Task<bool> WebSocketSession::process_incoming_data(std::string_view data) 
         } else if (header.opcode == Opcode::Pong) {
             // Pong frame received
         } else if (header.opcode == Opcode::Close) {
+            if (payload.size() == 1) {
+                batch_out_.clear();
+                is_closed_ = true;
+                co_await ws_.close(CloseCode::ProtocolError, "Close frame payload cannot be 1 byte");
+                co_return false;
+            }
+
             CloseCode code = CloseCode::Normal;
             std::string_view reason;
             if (payload.size() >= 2) {
                 uint16_t raw_code;
                 std::memcpy(&raw_code, payload.data(), 2);
-                code = static_cast<CloseCode>(be16toh(raw_code));
+                uint16_t ucode = be16toh(raw_code);
+                if (!is_valid_close_code(ucode)) {
+                    batch_out_.clear();
+                    is_closed_ = true;
+                    co_await ws_.close(CloseCode::ProtocolError, "Invalid close code");
+                    co_return false;
+                }
+                code = static_cast<CloseCode>(ucode);
                 if (payload.size() > 2) {
                     reason = payload.substr(2);
+                    if (!is_valid_utf8(reason)) {
+                        batch_out_.clear();
+                        is_closed_ = true;
+                        co_await ws_.close(CloseCode::InvalidFramePayload, "Invalid UTF-8 in close reason");
+                        co_return false;
+                    }
                 }
             }
 
@@ -123,26 +151,137 @@ core::Task<bool> WebSocketSession::process_incoming_data(std::string_view data) 
             co_await ws_.close(code, reason);
             is_closed_ = true;
             co_return false;
-        } else if (header.opcode == Opcode::Text || header.opcode == Opcode::Binary) {
-            if (echo_handler_) {
-                co_await echo_handler_(ws_, Message(payload, header.opcode));
-            } else if (!ws_.message_callback() && !ws_.text_callback() && !ws_.binary_callback()) {
-                // High-performance fast-path echo batching into preallocated batch_out_
-                std::array<uint8_t, 10> out_hdr{};
-                size_t hlen = serialize_frame_header(header.opcode, payload.size(), out_hdr.data(), true);
-                batch_out_.append(reinterpret_cast<const char*>(out_hdr.data()), hlen);
-                batch_out_.append(payload);
-            } else {
-                // Dispatch to registered user callbacks
-                if (ws_.message_callback()) {
-                    co_await ws_.message_callback()(ws_, Message(payload, header.opcode));
+        } else if (header.opcode == Opcode::Continuation) {
+            if (!fragment_in_progress_) {
+                if (!batch_out_.empty()) {
+                    (void)co_await transport_.write_raw(batch_out_);
+                    batch_out_.clear();
                 }
-                if (header.opcode == Opcode::Text && ws_.text_callback()) {
-                    co_await ws_.text_callback()(ws_, payload);
-                } else if (header.opcode == Opcode::Binary && ws_.binary_callback()) {
-                    co_await ws_.binary_callback()(ws_, std::span<const uint8_t>(payload_ptr, header.payload_len));
+                is_closed_ = true;
+                co_await ws_.close(CloseCode::ProtocolError, "Unexpected continuation frame");
+                co_return false;
+            }
+
+            if (fragment_buffer_.size() + payload.size() > config_.max_message_size) {
+                batch_out_.clear();
+                is_closed_ = true;
+                co_await ws_.close(CloseCode::MessageTooBig, "Message Too Big");
+                co_return false;
+            }
+
+            if (fragment_opcode_ == Opcode::Text) {
+                if (!utf8_validator_.update(payload)) {
+                    batch_out_.clear();
+                    is_closed_ = true;
+                    co_await ws_.close(CloseCode::InvalidFramePayload, "Invalid UTF-8 in continuation frame");
+                    co_return false;
                 }
             }
+
+            fragment_buffer_.append(payload);
+
+            if (header.fin) {
+                if (fragment_opcode_ == Opcode::Text && !utf8_validator_.is_valid_end()) {
+                    batch_out_.clear();
+                    is_closed_ = true;
+                    co_await ws_.close(CloseCode::InvalidFramePayload, "Incomplete UTF-8 sequence at end of message");
+                    co_return false;
+                }
+
+                fragment_in_progress_ = false;
+                Opcode eff_opcode = fragment_opcode_;
+                std::string_view full_payload(fragment_buffer_);
+
+                if (echo_handler_) {
+                    co_await echo_handler_(ws_, Message(full_payload, eff_opcode));
+                } else if (!ws_.message_callback() && !ws_.text_callback() && !ws_.binary_callback()) {
+                    std::array<uint8_t, 10> out_hdr{};
+                    size_t hlen = serialize_frame_header(eff_opcode, full_payload.size(), out_hdr.data(), true);
+                    batch_out_.append(reinterpret_cast<const char*>(out_hdr.data()), hlen);
+                    batch_out_.append(full_payload);
+                } else {
+                    if (ws_.message_callback()) {
+                        co_await ws_.message_callback()(ws_, Message(full_payload, eff_opcode));
+                    }
+                    if (eff_opcode == Opcode::Text && ws_.text_callback()) {
+                        co_await ws_.text_callback()(ws_, full_payload);
+                    } else if (eff_opcode == Opcode::Binary && ws_.binary_callback()) {
+                        co_await ws_.binary_callback()(ws_, std::span<const uint8_t>(
+                            reinterpret_cast<const uint8_t*>(full_payload.data()), full_payload.size()));
+                    }
+                }
+                fragment_buffer_.clear();
+            }
+        } else if (header.opcode == Opcode::Text || header.opcode == Opcode::Binary) {
+            if (fragment_in_progress_) {
+                if (!batch_out_.empty()) {
+                    (void)co_await transport_.write_raw(batch_out_);
+                    batch_out_.clear();
+                }
+                is_closed_ = true;
+                co_await ws_.close(CloseCode::ProtocolError, "Received new data frame while previous fragment incomplete");
+                co_return false;
+            }
+
+            if (!header.fin) {
+                fragment_in_progress_ = true;
+                fragment_opcode_ = header.opcode;
+                fragment_buffer_.clear();
+
+                if (header.opcode == Opcode::Text) {
+                    utf8_validator_.reset();
+                    if (!utf8_validator_.update(payload)) {
+                        batch_out_.clear();
+                        is_closed_ = true;
+                        co_await ws_.close(CloseCode::InvalidFramePayload, "Invalid UTF-8 in initial fragment");
+                        co_return false;
+                    }
+                }
+
+                if (payload.size() > config_.max_message_size) {
+                    batch_out_.clear();
+                    is_closed_ = true;
+                    co_await ws_.close(CloseCode::MessageTooBig, "Message Too Big");
+                    co_return false;
+                }
+
+                fragment_buffer_.assign(payload);
+            } else {
+                if (header.opcode == Opcode::Text) {
+                    utf8_validator_.reset();
+                    if (!utf8_validator_.update(payload) || !utf8_validator_.is_valid_end()) {
+                        batch_out_.clear();
+                        is_closed_ = true;
+                        co_await ws_.close(CloseCode::InvalidFramePayload, "Invalid UTF-8 in text frame");
+                        co_return false;
+                    }
+                }
+
+                if (echo_handler_) {
+                    co_await echo_handler_(ws_, Message(payload, header.opcode));
+                } else if (!ws_.message_callback() && !ws_.text_callback() && !ws_.binary_callback()) {
+                    // High-performance fast-path echo batching into preallocated batch_out_
+                    std::array<uint8_t, 10> out_hdr{};
+                    size_t hlen = serialize_frame_header(header.opcode, payload.size(), out_hdr.data(), true);
+                    batch_out_.append(reinterpret_cast<const char*>(out_hdr.data()), hlen);
+                    batch_out_.append(payload);
+                } else {
+                    // Dispatch to registered user callbacks
+                    if (ws_.message_callback()) {
+                        co_await ws_.message_callback()(ws_, Message(payload, header.opcode));
+                    }
+                    if (header.opcode == Opcode::Text && ws_.text_callback()) {
+                        co_await ws_.text_callback()(ws_, payload);
+                    } else if (header.opcode == Opcode::Binary && ws_.binary_callback()) {
+                        co_await ws_.binary_callback()(ws_, std::span<const uint8_t>(payload_ptr, header.payload_len));
+                    }
+                }
+            }
+        }
+
+        if (batch_out_.size() >= 65536) {
+            (void)co_await transport_.write_raw(batch_out_);
+            batch_out_.clear();
         }
 
         consumed += total_frame_len;

@@ -1,0 +1,10 @@
+{
+   "options": {"failByDrop": false},
+   "outdir": "/reports/servers",
+   "servers": [
+      {"agent": "Aegon", "url": "ws://127.0.0.1:9001", "retry": true, "retry_interval": 1}
+   ],
+   "cases": ["*"],
+   "exclude-cases": [],
+   "exclude-options": {}
+}
