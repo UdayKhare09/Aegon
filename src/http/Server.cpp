@@ -1,12 +1,10 @@
 #include "http/Server.h"
-#include "http/v1/Http1Parser.h"
+#include "http/v1/Http1Connection.h"
 #include "http/v2/Http2Connection.h"
 #include "http/v2/Http2Frame.h"
 #include "http/tls/TlsContext.h"
 #include "http/tls/TlsStream.h"
 #include "http/v3/Http3Server.h"
-#include "http/websocket/WebSocketHandshake.h"
-#include "http/websocket/WebSocketConnection.h"
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
@@ -19,52 +17,6 @@
 #include <csignal>
 
 namespace aegon::http {
-
-namespace {
-
-inline std::optional<Response> make_http1_parse_error_response(v1::ParseStatus status) {
-    Response res;
-    res.header("Connection", "close");
-    switch (status) {
-        case v1::ParseStatus::UriTooLong:
-            res.status(StatusCode::UriTooLong).text("URI Too Long: request URI exceeds limit");
-            return res;
-        case v1::ParseStatus::HeadersTooLarge:
-            res.status(StatusCode::RequestHeaderFieldsTooLarge).text("Request Header Fields Too Large");
-            return res;
-        case v1::ParseStatus::PayloadTooLarge:
-            res.status(StatusCode::PayloadTooLarge).text("Payload Too Large: maximum body size exceeded");
-            return res;
-        case v1::ParseStatus::ExpectationFailed:
-            res.status(StatusCode::ExpectationFailed).text("Expectation Failed");
-            return res;
-        case v1::ParseStatus::Error:
-            res.status(StatusCode::BadRequest).text("Bad Request");
-            return res;
-        case v1::ParseStatus::NotImplemented:
-            res.status(StatusCode::NotImplemented).text("Not Implemented");
-            return res;
-        default:
-            return std::nullopt;
-    }
-}
-
-inline bool evaluate_http1_keep_alive(const Request& req, Response& res) {
-    bool keep_alive = true;
-    if (auto conn_hdr = req.headers().get("Connection")) {
-        if (core::simd::SimdString::iequals(*conn_hdr, "close")) {
-            keep_alive = false;
-        }
-    } else if (req.version() == HttpVersion::Http1_0) {
-        keep_alive = false;
-    }
-    if (!keep_alive) {
-        res.header("Connection", "close");
-    }
-    return keep_alive;
-}
-
-} // anonymous namespace
 
 Server::Server() = default;
 Server::Server(Router router) : router_(std::move(router)) {}
@@ -168,17 +120,11 @@ int Server::create_listen_socket(uint16_t port, const std::string& host) {
     return fd;
 }
 
-core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data,
-                                                  std::optional<core::MultishotRecvStream> existing_stream) {
-    v2::Http2Connection h2(loop, client_fd, router_, services_.get());
-    bool ok = co_await h2.init();
-    if (!ok) {
-        (void)(co_await loop.ring().close(client_fd));
-        co_return;
-    }
-
+core::Task<void> Server::run_h2_loop(core::EventLoop& loop, int client_fd, v2::Http2Connection& h2,
+                                     std::string initial_data,
+                                     std::optional<core::MultishotRecvStream> existing_stream) {
     if (!initial_data.empty()) {
-        ok = co_await h2.feed_data(initial_data.data(), initial_data.size());
+        bool ok = co_await h2.feed_data(initial_data.data(), initial_data.size());
         if (!ok) {
             (void)(co_await loop.ring().close(client_fd));
             co_return;
@@ -195,7 +141,7 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
         }
 
         auto buf_slice = loop.buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
-        ok = co_await h2.feed_data(buf_slice.data(), buf_slice.size());
+        bool ok = co_await h2.feed_data(buf_slice.data(), buf_slice.size());
         loop.buffer_pool().return_buffer(recv_res.bid);
 
         if (!ok) {
@@ -205,6 +151,18 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
 
     (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
     (void)(co_await loop.ring().close(client_fd));
+}
+
+core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data,
+                                                  std::optional<core::MultishotRecvStream> existing_stream) {
+    v2::Http2Connection h2(loop, client_fd, router_, services_.get());
+    bool ok = co_await h2.init();
+    if (!ok) {
+        (void)(co_await loop.ring().close(client_fd));
+        co_return;
+    }
+
+    co_await run_h2_loop(loop, client_fd, h2, std::move(initial_data), std::move(existing_stream));
 }
 
 core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings,
@@ -223,34 +181,7 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_
         co_return;
     }
 
-    if (!initial_data.empty()) {
-        ok = co_await h2.feed_data(initial_data.data(), initial_data.size());
-        if (!ok) {
-            (void)(co_await loop.ring().close(client_fd));
-            co_return;
-        }
-    }
-
-    auto stream = existing_stream.has_value()
-        ? std::move(*existing_stream)
-        : loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
-    while (running_ && !h2.is_closed() && h2.wants_read()) {
-        auto recv_res = co_await stream.next();
-        if (recv_res.bytes <= 0) {
-            break;
-        }
-
-        auto buf_slice = loop.buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
-        ok = co_await h2.feed_data(buf_slice.data(), buf_slice.size());
-        loop.buffer_pool().return_buffer(recv_res.bid);
-
-        if (!ok) {
-            break;
-        }
-    }
-
-    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
-    (void)(co_await loop.ring().close(client_fd));
+    co_await run_h2_loop(loop, client_fd, h2, std::move(initial_data), std::move(existing_stream));
 }
 
 core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client_fd, uint16_t port) {
@@ -289,99 +220,9 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
         }
     } else {
         // HTTP/1.1 over TLS (ALPN "http/1.1" or fallback)
-        std::string req_accum;
-        req_accum.reserve(4096);
-        std::string resp_batch;
-        resp_batch.reserve(4096);
-        char read_buf[8192];
-
-        // Progressive protocol ladder on HTTP/1.1 TLS
-        const std::string alt_svc_hdr = http3_enabled_
-            ? ("h3=\":" + std::to_string(port) + "\"; ma=86400, h2=\":" + std::to_string(port) + "\"; ma=86400")
-            : ("h2=\":" + std::to_string(port) + "\"; ma=86400");
-
-        while (running_) {
-            int n = co_await tls_stream.read_plaintext(read_buf, sizeof(read_buf));
-            if (n <= 0) break;
-
-            req_accum.append(read_buf, static_cast<size_t>(n));
-            bool keep_alive = true;
-            size_t req_offset = 0;
-
-            while (req_offset < req_accum.size()) {
-                std::string_view unparsed(req_accum.data() + req_offset, req_accum.size() - req_offset);
-                Request req;
-                size_t bytes_consumed = 0;
-                auto status = v1::Http1Parser::parse(unparsed, req, bytes_consumed);
-
-                if (status == v1::ParseStatus::NeedMoreData) {
-                    if (req.expect_continue()) {
-                        req.set_expect_continue(false);
-                        std::string cont = "HTTP/1.1 100 Continue\r\n\r\n";
-                        (void)(co_await tls_stream.write_plaintext(cont.data(), cont.size()));
-                    }
-                    break;
-                }
-
-                if (auto err_res = make_http1_parse_error_response(status)) {
-                    std::string out;
-                    err_res->serialize_http1(out);
-                    (void)(co_await tls_stream.write_plaintext(out.data(), out.size()));
-                    keep_alive = false;
-                    break;
-                }
-
-                if (req.is_websocket_upgrade()) {
-                    auto ws_ver = req.headers().get("Sec-WebSocket-Version");
-                    if (!ws_ver || *ws_ver != "13") {
-                        Response ver_res;
-                        ver_res.status(StatusCode::UpgradeRequired)
-                               .header("Sec-WebSocket-Version", "13")
-                               .text("Upgrade Required: Sec-WebSocket-Version 13 required");
-                        std::string out;
-                        ver_res.serialize_http1(out);
-                        (void)(co_await tls_stream.write_plaintext(out.data(), out.size()));
-                        keep_alive = false;
-                        break;
-                    }
-                }
-
-                Response res;
-                co_await router_.dispatch(req, res, services_.get());
-
-                keep_alive = evaluate_http1_keep_alive(req, res);
-
-                if (!alt_svc_hdr.empty()) {
-                    res.set_header_owned("alt-svc", alt_svc_hdr);
-                }
-
-                if (req.method() == Method::HEAD) {
-                    res.append_http1_headers(resp_batch);
-                } else {
-                    res.append_http1(resp_batch);
-                }
-                req_offset += bytes_consumed;
-
-                if (!keep_alive) {
-                    break;
-                }
-            }
-
-            if (req_offset >= req_accum.size()) {
-                req_accum.clear();
-            } else if (req_offset > 0) {
-                req_accum.erase(0, req_offset);
-            }
-
-            if (!resp_batch.empty()) {
-                (void)(co_await tls_stream.write_plaintext(resp_batch.data(), resp_batch.size()));
-                resp_batch.clear();
-            }
-
-            if (!keep_alive) {
-                break;
-            }
-        }
+        const std::string alt_svc_hdr = v1::Http1Connection::build_alt_svc_header(port, http3_enabled_);
+        v1::Http1Connection h1(loop, client_fd, router_, services_.get());
+        co_await h1.run_tls(tls_stream, alt_svc_hdr);
     }
 
     (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
@@ -389,274 +230,17 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
 }
 
 core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd) {
-    std::string req_accum;
-    req_accum.reserve(4096);
-    std::string resp_batch;
-    resp_batch.reserve(4096);
-    bool first_packet = true;
-
-    while (running_) {
-        auto recv_res = co_await loop.ring().recv_provided(client_fd, loop.buffer_pool().bgid());
-        if (recv_res.bytes == -ENOBUFS) {
-            co_await loop.ring().timeout(100'000ULL);
-            continue;
+    v1::Http1Connection h1(loop, client_fd, router_, services_.get());
+    co_await h1.run(
+        [this, &loop](int fd, std::string preface_data) -> core::Task<void> {
+            co_await handle_http2_connection(loop, fd, std::move(preface_data));
+        },
+        [this, &loop](int fd, Request req, std::string settings, std::string trailing) -> core::Task<void> {
+            co_await handle_http2_upgrade(loop, fd, std::move(req), std::move(settings), std::move(trailing));
         }
-        if (recv_res.bytes <= 0) {
-            break;
-        }
-
-        auto buf_slice = loop.buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
-        req_accum.append(reinterpret_cast<const char*>(buf_slice.data()), buf_slice.size());
-        loop.buffer_pool().return_buffer(recv_res.bid);
-
-        bool keep_alive = true;
-        size_t req_offset = 0;
-
-        while (req_offset < req_accum.size()) {
-            std::string_view unparsed(req_accum.data() + req_offset, req_accum.size() - req_offset);
-            if (first_packet) {
-                if (unparsed.starts_with(v2::CLIENT_PREFACE)) {
-                    first_packet = false;
-                    if (req_offset > 0) {
-                        req_accum.erase(0, req_offset);
-                    }
-                    co_await handle_http2_connection(loop, client_fd, std::move(req_accum));
-                    co_return;
-                }
-                if (v2::CLIENT_PREFACE.starts_with(unparsed)) {
-                    // Incomplete preface chunk, wait for subsequent bytes
-                    break;
-                }
-                if (unparsed.starts_with("PRI ") || unparsed.starts_with("INVALID CONNECTION PREFACE")) {
-                    // RFC 9113 §3.5: Invalid connection preface. Send GOAWAY and terminate TCP.
-                    auto goaway = v2::make_goaway_frame(0, 0x1 /* NGHTTP2_PROTOCOL_ERROR */);
-                    (void)co_await loop.ring().send_all(client_fd, std::string_view(reinterpret_cast<const char*>(goaway.data()), goaway.size()));
-                    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
-                    (void)(co_await loop.ring().close(client_fd));
-                    co_return;
-                }
-                first_packet = false;
-            }
-
-            Request req;
-            size_t bytes_consumed = 0;
-            auto status = v1::Http1Parser::parse(unparsed, req, bytes_consumed);
-
-            if (status == v1::ParseStatus::NeedMoreData) {
-                if (req.expect_continue()) {
-                    req.set_expect_continue(false);
-                    (void)(co_await loop.ring().send_all(client_fd, "HTTP/1.1 100 Continue\r\n\r\n"));
-                }
-                break;
-            }
-
-            if (auto err_res = make_http1_parse_error_response(status)) {
-                std::string out;
-                err_res->serialize_http1(out);
-                (void)(co_await loop.ring().send_all(client_fd, out));
-                keep_alive = false;
-                break;
-            }
-
-            // RFC 9113 §3.2 HTTP/1.1 to HTTP/2 Cleartext Upgrade
-            if (req.is_upgrade_h2c()) {
-                if (!resp_batch.empty()) {
-                    int sent = co_await loop.ring().send(client_fd, resp_batch);
-                    if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
-                        if (sent > 0) {
-                            (void)(co_await loop.ring().send_all(client_fd, std::string_view(resp_batch).substr(sent)));
-                        }
-                    }
-                    resp_batch.clear();
-                }
-                std::string upgrade_res =
-                    "HTTP/1.1 101 Switching Protocols\r\n"
-                    "Connection: Upgrade\r\n"
-                    "Upgrade: h2c\r\n\r\n";
-                (void)(co_await loop.ring().send_all(client_fd, upgrade_res));
-                req_offset += bytes_consumed;
-                std::string trailing;
-                if (req_offset < req_accum.size()) {
-                    trailing = req_accum.substr(req_offset);
-                }
-                std::string h2_settings = std::string(req.headers().get("HTTP2-Settings").value_or(""));
-                co_await handle_http2_upgrade(loop, client_fd, std::move(req), std::move(h2_settings), std::move(trailing));
-                co_return;
-            }
-
-            // RFC 6455 WebSocket Upgrade
-            if (req.is_websocket_upgrade()) {
-                auto ws_ver = req.headers().get("Sec-WebSocket-Version");
-                if (!ws_ver || *ws_ver != "13") {
-                    Response ver_res;
-                    ver_res.status(StatusCode::UpgradeRequired)
-                           .header("Sec-WebSocket-Version", "13")
-                           .text("Upgrade Required: Sec-WebSocket-Version 13 required");
-                    std::string out;
-                    ver_res.serialize_http1(out);
-                    (void)(co_await loop.ring().send_all(client_fd, out));
-                    keep_alive = false;
-                    break;
-                }
-
-                const auto* ws_entry = router_.find_ws(req.path());
-                if (!ws_entry) {
-                    Response not_found;
-                    not_found.status(StatusCode::NotFound).text("WebSocket endpoint not found");
-                    std::string out;
-                    not_found.serialize_http1(out);
-                    (void)(co_await loop.ring().send_all(client_fd, out));
-                    keep_alive = false;
-                    break;
-                }
-                std::string_view key = req.sec_websocket_key();
-                if (key.empty()) {
-                    if (auto k = req.headers().get("Sec-WebSocket-Key")) {
-                        key = *k;
-                    }
-                }
-
-                if (key.empty()) {
-                    Response bad_res;
-                    bad_res.status(StatusCode::BadRequest).text("Missing Sec-WebSocket-Key");
-                    std::string out;
-                    bad_res.serialize_http1(out);
-                    (void)(co_await loop.ring().send_all(client_fd, out));
-                    keep_alive = false;
-                    break;
-                }
-
-                if (!resp_batch.empty()) {
-                    int sent = co_await loop.ring().send(client_fd, resp_batch);
-                    if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
-                        if (sent > 0) {
-                            (void)(co_await loop.ring().send_all(client_fd, std::string_view(resp_batch).substr(sent)));
-                        }
-                    }
-                    resp_batch.clear();
-                }
-
-                std::string accept_val = websocket::compute_accept_key(key);
-                std::string upgrade_res = websocket::build_handshake_response(accept_val);
-                (void)(co_await loop.ring().send_all(client_fd, upgrade_res));
-
-                std::string trailing;
-                if (req_offset + bytes_consumed < req_accum.size()) {
-                    trailing = req_accum.substr(req_offset + bytes_consumed);
-                }
-
-                websocket::WebSocketConnection ws_conn(loop, client_fd, std::string(req.path()),
-                                                      ws_entry->handler, ws_entry->echo_handler);
-                co_await ws_conn.run(std::move(trailing));
-                co_return;
-            }
-
-            Response res;
-            co_await router_.dispatch(req, res, services_.get());
-
-            keep_alive = evaluate_http1_keep_alive(req, res);
-
-            if (res.has_file()) {
-                if (!resp_batch.empty()) {
-                    int sent = co_await loop.ring().send(client_fd, resp_batch);
-                    if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
-                        if (sent <= 0) { keep_alive = false; break; }
-                        int rem = co_await loop.ring().send_all(client_fd, std::string_view(resp_batch).substr(sent));
-                        if (rem != static_cast<int>(resp_batch.size() - sent)) { keep_alive = false; break; }
-                    }
-                    resp_batch.clear();
-                }
-                std::string header_out;
-                res.serialize_http1_headers(header_out);
-                (void)(co_await loop.ring().send_all(client_fd, header_out));
-                if (req.method() != Method::HEAD) {
-                    co_await stream_file_zero_copy(loop, client_fd, res.file_path(), res.file_size());
-                }
-            } else {
-                if (req.method() == Method::HEAD) {
-                    res.append_http1_headers(resp_batch);
-                } else {
-                    res.append_http1(resp_batch);
-                }
-            }
-
-            req_offset += bytes_consumed;
-
-            if (!keep_alive) {
-                break;
-            }
-        }
-
-        if (req_offset >= req_accum.size()) {
-            req_accum.clear();
-        } else if (req_offset > 0) {
-            req_accum.erase(0, req_offset);
-        }
-
-        if (!resp_batch.empty()) {
-            int sent = co_await loop.ring().send(client_fd, resp_batch);
-            if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
-                if (sent <= 0) {
-                    break;
-                }
-                int rem = co_await loop.ring().send_all(client_fd, std::string_view(resp_batch).substr(sent));
-                if (rem != static_cast<int>(resp_batch.size() - sent)) {
-                    break;
-                }
-            }
-            resp_batch.clear();
-        }
-
-        if (!keep_alive) {
-            break;
-        }
-    }
-
-    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
-    (void)(co_await loop.ring().close(client_fd));
+    );
 }
 
-core::Task<bool> Server::stream_file_zero_copy(core::EventLoop& loop, int client_fd, const std::string& file_path, size_t file_size) {
-    if (file_size == 0) co_return true;
-
-    int file_fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (file_fd < 0) co_return false;
-
-    int pipefd[2];
-    if (::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) < 0) {
-        (void)(co_await loop.ring().close(file_fd));
-        co_return false;
-    }
-
-    int64_t in_off = 0;
-    size_t remaining = file_size;
-    constexpr unsigned int CHUNK_SIZE = 32768;
-    bool ok = true;
-
-    while (remaining > 0) {
-        unsigned int to_splice = static_cast<unsigned int>(std::min<size_t>(remaining, CHUNK_SIZE));
-        // 1. Splice file -> pipe[1] (disk page cache to kernel pipe buffer)
-        int n1 = co_await loop.ring().splice(file_fd, in_off, pipefd[1], -1, to_splice, 0);
-        if (n1 <= 0) {
-            ok = false;
-            break;
-        }
-        in_off += n1;
-
-        // 2. Splice pipe[0] -> socket_fd (kernel pipe buffer to network socket buffer)
-        int n2 = co_await loop.ring().splice(pipefd[0], -1, client_fd, -1, static_cast<unsigned int>(n1), 0);
-        if (n2 <= 0) {
-            ok = false;
-            break;
-        }
-        remaining -= static_cast<size_t>(n2);
-    }
-
-    ::close(pipefd[0]);
-    ::close(pipefd[1]);
-    (void)(co_await loop.ring().close(file_fd));
-    co_return ok;
-}
 
 core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, uint16_t port, bool is_tls) {
     while (running_) {
@@ -687,6 +271,65 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, uint1
     }
 }
 
+void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
+                            std::optional<int> cpu_core,
+                            bool spawn_background) {
+    struct ActiveListener {
+        int fd;
+        uint16_t port;
+        bool is_tls;
+    };
+    std::vector<ActiveListener> thread_listeners;
+    for (const auto& l : active_listeners) {
+        int fd = create_listen_socket(l.port, l.host);
+        thread_listeners.push_back({fd, l.port, l.tls});
+    }
+
+    core::IoUringConfig ring_cfg;
+    ring_cfg.entries = ring_entries_;
+
+    core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
+    if (cpu_core) {
+        loop.pin_to_core(*cpu_core);
+    }
+    for (const auto& al : thread_listeners) {
+        loop.spawn(accept_loop(loop, al.fd, al.port, al.is_tls));
+    }
+
+    if (spawn_background) {
+        for (const auto& worker : background_workers_) {
+            loop.spawn(worker(*this, loop));
+        }
+    }
+
+    std::vector<std::unique_ptr<v3::Http3Server>> local_h3_servers;
+    auto& h3_dest = cpu_core.has_value() ? local_h3_servers : h3_servers_;
+    if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
+        for (const auto& l : active_listeners) {
+            if (l.tls) {
+                auto h3 = std::make_unique<v3::Http3Server>(loop, l.port, router_, tls_ctx_->native_handle(), services_.get());
+                if (h3->start()) {
+                    loop.spawn(h3->run_receive_loop());
+                    loop.spawn(h3->run_timer_loop());
+                    h3_dest.push_back(std::move(h3));
+                }
+            }
+        }
+    }
+
+    loop.run();
+
+    for (auto& h3 : h3_dest) {
+        if (h3) h3->stop();
+    }
+    if (!cpu_core.has_value()) {
+        h3_servers_.clear();
+    }
+    for (const auto& al : thread_listeners) {
+        close(al.fd);
+    }
+}
+
 void Server::run() {
     ::signal(SIGPIPE, SIG_IGN);
     running_ = true;
@@ -708,52 +351,7 @@ void Server::run() {
         active_listeners[0].tls = true;
     }
 
-    struct ActiveListener {
-        int fd;
-        uint16_t port;
-        bool is_tls;
-    };
-    std::vector<ActiveListener> thread_listeners;
-    for (const auto& l : active_listeners) {
-        int fd = create_listen_socket(l.port, l.host);
-        thread_listeners.push_back({fd, l.port, l.tls});
-    }
-
-    core::IoUringConfig ring_cfg;
-    ring_cfg.entries = ring_entries_;
-
-    core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
-    for (const auto& al : thread_listeners) {
-        loop.spawn(accept_loop(loop, al.fd, al.port, al.is_tls));
-    }
-
-    // Spawn long-running background workers on the server event loop
-    for (const auto& worker : background_workers_) {
-        loop.spawn(worker(*this, loop));
-    }
-
-    if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
-        for (const auto& l : active_listeners) {
-            if (l.tls) {
-                auto h3 = std::make_unique<v3::Http3Server>(loop, l.port, router_, tls_ctx_->native_handle(), services_.get());
-                if (h3->start()) {
-                    loop.spawn(h3->run_receive_loop());
-                    loop.spawn(h3->run_timer_loop());
-                    h3_servers_.push_back(std::move(h3));
-                }
-            }
-        }
-    }
-
-    loop.run();
-
-    for (auto& h3 : h3_servers_) {
-        if (h3) h3->stop();
-    }
-    h3_servers_.clear();
-    for (const auto& al : thread_listeners) {
-        close(al.fd);
-    }
+    run_event_loop(active_listeners, std::nullopt, true);
 }
 
 void Server::run(size_t threads) {
@@ -781,21 +379,7 @@ void Server::run(size_t threads) {
     for (size_t i = 0; i < threads; ++i) {
         workers_.emplace_back([this, i, active_listeners]() {
             try {
-                struct ActiveListener {
-                    int fd;
-                    uint16_t port;
-                    bool is_tls;
-                };
-                std::vector<ActiveListener> thread_listeners;
-                for (const auto& l : active_listeners) {
-                    int fd = create_listen_socket(l.port, l.host);
-                    thread_listeners.push_back({fd, l.port, l.tls});
-                }
-
-                core::IoUringConfig ring_cfg;
-                ring_cfg.entries = ring_entries_;
-
-                core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
+                std::optional<int> core_id;
                 cpu_set_t current_mask;
                 if (pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &current_mask) == 0) {
                     std::vector<int> allowed;
@@ -803,42 +387,11 @@ void Server::run(size_t threads) {
                         if (CPU_ISSET(c, &current_mask)) allowed.push_back(c);
                     }
                     if (i < allowed.size()) {
-                        loop.pin_to_core(allowed[i]);
-                    }
-                }
-                for (const auto& al : thread_listeners) {
-                    loop.spawn(accept_loop(loop, al.fd, al.port, al.is_tls));
-                }
-
-                // Spawn background workers on core 0
-                if (i == 0) {
-                    for (const auto& worker : background_workers_) {
-                        loop.spawn(worker(*this, loop));
+                        core_id = allowed[i];
                     }
                 }
 
-                std::vector<std::unique_ptr<v3::Http3Server>> h3_workers;
-                if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
-                    for (const auto& l : active_listeners) {
-                        if (l.tls) {
-                            auto h3 = std::make_unique<v3::Http3Server>(loop, l.port, router_, tls_ctx_->native_handle(), services_.get());
-                            if (h3->start()) {
-                                loop.spawn(h3->run_receive_loop());
-                                loop.spawn(h3->run_timer_loop());
-                                h3_workers.push_back(std::move(h3));
-                            }
-                        }
-                    }
-                }
-
-                loop.run();
-
-                for (auto& h3 : h3_workers) {
-                    if (h3) h3->stop();
-                }
-                for (const auto& al : thread_listeners) {
-                    close(al.fd);
-                }
+                run_event_loop(active_listeners, core_id, i == 0);
             } catch (const std::exception& e) {
                 std::cerr << "Worker thread " << i << " error: " << e.what() << "\n";
             }

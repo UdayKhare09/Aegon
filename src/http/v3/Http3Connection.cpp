@@ -383,27 +383,14 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
     } else if (n == ":path") {
         if (stream->seen_path) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         stream->seen_path = true;
-        if (!is_valid_request_target(v)) {
+        std::string_view p, q;
+        if (!parse_path_header(v, stream->req.method(), p, q, stream->error_status)) {
             return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         }
-        if (v == "*" && stream->req.method() != Method::OPTIONS && stream->seen_method) {
-            return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
-        }
-        if (v.size() > MAX_URI_LENGTH && stream->error_status == StatusCode::Ok) {
-            stream->error_status = StatusCode::UriTooLong;
-        }
-        size_t qmark = core::simd::SimdString::find_char(v, '?');
-        if (qmark != std::string_view::npos) {
-            stream->path_storage.assign(v.data(), qmark);
-            stream->query_storage.assign(v.data() + qmark + 1, v.size() - qmark - 1);
-            stream->req.set_path(stream->path_storage);
-            stream->req.set_query(stream->query_storage);
-        } else {
-            stream->path_storage.assign(v.data(), v.size());
-            stream->query_storage.clear();
-            stream->req.set_path(stream->path_storage);
-            stream->req.set_query("");
-        }
+        stream->path_storage.assign(p.data(), p.size());
+        stream->query_storage.assign(q.data(), q.size());
+        stream->req.set_path(stream->path_storage);
+        stream->req.set_query(stream->query_storage);
     } else if (n == ":scheme") {
         if (stream->seen_scheme) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         stream->seen_scheme = true;
@@ -420,19 +407,8 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     } else {
         stream->seen_regular_headers = true;
-        if (core::simd::SimdString::iequals(n, "content-length")) {
-            auto cl_opt = parse_valid_content_length(v);
-            if (!cl_opt) {
-                return NGHTTP3_ERR_MALFORMED_HTTP_HEADER; // RFC 9114 §4.2 malformed content-length -> H3_MESSAGE_ERROR
-            }
-            if (*cl_opt > MAX_BODY_SIZE && stream->error_status == StatusCode::Ok) {
-                stream->error_status = StatusCode::PayloadTooLarge;
-            }
-        }
-        if (core::simd::SimdString::iequals(n, "expect")) {
-            if (!core::simd::SimdString::iequals(v, "100-continue") && stream->error_status == StatusCode::Ok) {
-                stream->error_status = StatusCode::ExpectationFailed;
-            }
+        if (!validate_request_header(n, v, stream->error_status)) {
+            return NGHTTP3_ERR_MALFORMED_HTTP_HEADER; // RFC 9114 §4.2 malformed content-length -> H3_MESSAGE_ERROR
         }
         stream->header_storage.emplace_back(std::string(n), std::string(v));
         const auto& back = stream->header_storage.back();
@@ -573,18 +549,9 @@ void Http3Connection::submit_response(Http3Stream* stream) {
     }
 
     if (!stream->res.headers().contains("date") && static_cast<uint16_t>(stream->res.status()) >= 200) {
-        static thread_local time_t last_time = 0;
-        static thread_local char date_buf[64];
-        static thread_local size_t date_len = 0;
-        time_t now = time(nullptr);
-        if (now != last_time) {
-            last_time = now;
-            struct tm gmt;
-            gmtime_r(&now, &gmt);
-            date_len = strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
-        }
+        auto d = get_http_date();
         push_nv(reinterpret_cast<const uint8_t*>("date"), 4,
-                reinterpret_cast<const uint8_t*>(date_buf), date_len);
+                reinterpret_cast<const uint8_t*>(d.data()), d.size());
     }
 
     std::vector<std::string> lower_names;

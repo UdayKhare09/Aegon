@@ -7,9 +7,7 @@
 #include <string>
 #include <string_view>
 #include <deque>
-#include <charconv>
 #include <type_traits>
-#include <ctime>
 #include <sys/stat.h>
 
 namespace aegon::http {
@@ -178,127 +176,6 @@ public:
             return std::unexpected(ec);
         }
         return val;
-    }
-
-    /**
-     * @brief Serialize a single chunk per RFC 9112 §7.1 (<hex-len>\r\n<data>\r\n)
-     */
-    static void serialize_chunk(std::string_view data, std::string& out) {
-        if (data.empty()) return;
-        char hex_buf[24];
-        auto [ptr, _] = std::to_chars(hex_buf, hex_buf + 24, data.size(), 16);
-        out.append(hex_buf, ptr - hex_buf);
-        out.append("\r\n");
-        out.append(data);
-        out.append("\r\n");
-    }
-
-    /**
-     * @brief Serialize terminating chunk per RFC 9112 §7.1 (0\r\n\r\n)
-     */
-    static void serialize_chunk_end(std::string& out) {
-        out.append("0\r\n\r\n");
-    }
-
-    /**
-     * @brief Append only the status line and headers (ending in \r\n\r\n) to existing buffer.
-     */
-    void append_http1_headers(std::string& out) const {
-        out.reserve(out.size() + 256);
-
-        // Fast status line
-        if (status_ == StatusCode::Ok) {
-            out.append("HTTP/1.1 200 OK\r\n");
-        } else if (status_ == StatusCode::NotFound) {
-            out.append("HTTP/1.1 404 Not Found\r\n");
-        } else if (status_ == StatusCode::InternalServerError) {
-            out.append("HTTP/1.1 500 Internal Server Error\r\n");
-        } else {
-            out.append("HTTP/1.1 ");
-            char code_buf[8];
-            auto [ptr, _] = std::to_chars(code_buf, code_buf + 8, static_cast<uint16_t>(status_));
-            out.append(code_buf, ptr - code_buf);
-            out.push_back(' ');
-            out.append(status_phrase(status_));
-            out.append("\r\n");
-        }
-
-        uint16_t sc = static_cast<uint16_t>(status_);
-        bool no_content_body = (sc >= 100 && sc < 200) || sc == 204 || sc == 304;
-
-        if (is_chunked_) {
-            if (!headers_.contains("Transfer-Encoding")) {
-                out.append("Transfer-Encoding: chunked\r\n");
-            }
-        } else if (!no_content_body && !headers_.contains("Content-Length")) {
-            out.append("Content-Length: ");
-            size_t len = is_file_ ? file_size_ : body_.size();
-            if (len < 10) {
-                out.push_back(static_cast<char>('0' + len));
-                out.append("\r\n");
-            } else {
-                char len_buf[24];
-                auto [lptr, unused] = std::to_chars(len_buf, len_buf + 24, len);
-                (void)unused;
-                out.append(len_buf, lptr - len_buf);
-                out.append("\r\n");
-            }
-        }
-
-        if (!headers_.contains("Date") && sc >= 200) {
-            static thread_local time_t last_time = 0;
-            static thread_local char date_buf[64];
-            static thread_local size_t date_len = 0;
-            time_t now = time(nullptr);
-            if (now != last_time) {
-                last_time = now;
-                struct tm gmt;
-                gmtime_r(&now, &gmt);
-                date_len = strftime(date_buf, sizeof(date_buf), "Date: %a, %d %b %Y %H:%M:%S GMT\r\n", &gmt);
-            }
-            out.append(date_buf, date_len);
-        }
-
-        for (const auto& h : headers_) {
-            out.append(h.name);
-            out.append(": ");
-            out.append(h.value);
-            out.append("\r\n");
-        }
-
-        out.append("\r\n");
-    }
-
-    /**
-     * @brief Serialize only the status line and headers (ending in \r\n\r\n).
-     */
-    void serialize_http1_headers(std::string& out) const {
-        out.clear();
-        append_http1_headers(out);
-    }
-
-    /**
-     * @brief Append complete HTTP/1.1 response into output string buffer without clearing.
-     */
-    void append_http1(std::string& out) const {
-        append_http1_headers(out);
-
-        if (is_chunked_) {
-            if (!body_.empty()) {
-                serialize_chunk(body_, out);
-            }
-            serialize_chunk_end(out);
-        } else if (!is_file_) {
-            out.append(body_);
-        }
-    }
-
-    /**
-     * @brief Serialize complete HTTP/1.1 response into output string buffer.
-     */
-    void serialize_http1(std::string& out) const {
-        out.clear();
-        append_http1(out);
     }
 
 private:

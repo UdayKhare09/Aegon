@@ -5,6 +5,7 @@
 #include "http/Request.h"
 #include "http/Response.h"
 #include "http/Cookie.h"
+#include "http/v1/Http1Serializer.h"
 
 using namespace aegon::http;
 
@@ -84,7 +85,7 @@ void test_response_set_cookie() {
 
     // Verify serialized HTTP response
     std::string serialized;
-    res.serialize_http1(serialized);
+    v1::Http1Serializer::serialize_response(res, serialized);
     assert(serialized.find("Set-Cookie: session_id=token_abc_123; Path=/; Max-Age=7200; SameSite=Strict; Secure; HttpOnly\r\n") != std::string::npos);
     assert(serialized.find("Set-Cookie: user_pref=dark_mode; Path=/app; SameSite=Lax\r\n") != std::string::npos);
 

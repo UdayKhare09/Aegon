@@ -220,7 +220,9 @@ ctx.res().chunked();
 You can format individual chunks according to RFC 9112 §7.1 using static helpers:
 
 ```cpp
+#include "http/v1/Http1Serializer.h"
+
 std::string buffer;
-Response::serialize_chunk("data: {\"event\":\"tick\"}\n\n", buffer);
-Response::serialize_chunk_end(buffer); // Appends final 0\r\n\r\n
+v1::Http1Serializer::serialize_chunk("data: {\"event\":\"tick\"}\n\n", buffer);
+v1::Http1Serializer::serialize_chunk_end(buffer); // Appends final 0\r\n\r\n
 ```

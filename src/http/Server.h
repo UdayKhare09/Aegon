@@ -16,6 +16,10 @@
 
 namespace aegon::http {
 
+namespace v2 {
+class Http2Connection;
+}
+
 namespace v3 {
 class Http3Server;
 }
@@ -265,10 +269,15 @@ private:
     core::Task<void> handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings,
                                           std::string initial_data,
                                           std::optional<core::MultishotRecvStream> existing_stream = std::nullopt);
+    core::Task<void> run_h2_loop(core::EventLoop& loop, int client_fd, v2::Http2Connection& h2,
+                                 std::string initial_data,
+                                 std::optional<core::MultishotRecvStream> existing_stream);
     core::Task<void> handle_tls_connection(core::EventLoop& loop, int client_fd, uint16_t port);
     core::Task<void> accept_loop(core::EventLoop& loop, int listen_fd, uint16_t port, bool is_tls);
-    core::Task<bool> stream_file_zero_copy(core::EventLoop& loop, int client_fd, const std::string& file_path, size_t file_size);
     int create_listen_socket(uint16_t port, const std::string& host);
+    void run_event_loop(const std::vector<ListenerConfig>& active_listeners,
+                        std::optional<int> cpu_core,
+                        bool spawn_background);
 
     Router router_;
     std::string host_{"0.0.0.0"};

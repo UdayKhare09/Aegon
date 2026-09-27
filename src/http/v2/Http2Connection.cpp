@@ -144,27 +144,14 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
     if (n == ":method") {
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
-        if (!is_valid_request_target(v)) {
+        std::string_view p, q;
+        if (!parse_path_header(v, stream->req.method(), p, q, stream->error_status)) {
             return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
         }
-        if (v == "*" && stream->req.method() != Method::OPTIONS && stream->req.method() != Method::UNKNOWN) {
-            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
-        }
-        if (v.size() > MAX_URI_LENGTH && stream->error_status == StatusCode::Ok) {
-            stream->error_status = StatusCode::UriTooLong;
-        }
-        size_t qmark = core::simd::SimdString::find_char(v, '?');
-        if (qmark != std::string_view::npos) {
-            stream->path_storage.assign(v.data(), qmark);
-            stream->query_storage.assign(v.data() + qmark + 1, v.size() - qmark - 1);
-            stream->req.set_path(stream->path_storage);
-            stream->req.set_query(stream->query_storage);
-        } else {
-            stream->path_storage.assign(v.data(), v.size());
-            stream->query_storage.clear();
-            stream->req.set_path(stream->path_storage);
-            stream->req.set_query("");
-        }
+        stream->path_storage.assign(p.data(), p.size());
+        stream->query_storage.assign(q.data(), q.size());
+        stream->req.set_path(stream->path_storage);
+        stream->req.set_query(stream->query_storage);
     } else if (n == ":authority") {
         if (v.find('@') != std::string_view::npos) {
             return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
@@ -175,19 +162,8 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
     } else if (n.starts_with(':')) {
         // Other pseudo headers (:scheme, etc.)
     } else {
-        if (core::simd::SimdString::iequals(n, "content-length")) {
-            auto cl_opt = parse_valid_content_length(v);
-            if (!cl_opt) {
-                return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE; // RFC 9113 §8.2.1 malformed content-length -> PROTOCOL_ERROR
-            }
-            if (*cl_opt > MAX_BODY_SIZE && stream->error_status == StatusCode::Ok) {
-                stream->error_status = StatusCode::PayloadTooLarge;
-            }
-        }
-        if (core::simd::SimdString::iequals(n, "expect")) {
-            if (!core::simd::SimdString::iequals(v, "100-continue") && stream->error_status == StatusCode::Ok) {
-                stream->error_status = StatusCode::ExpectationFailed;
-            }
+        if (!validate_request_header(n, v, stream->error_status)) {
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE; // RFC 9113 §8.2.1 malformed content-length -> PROTOCOL_ERROR
         }
         stream->header_storage.emplace_back(std::string(n), std::string(v));
         const auto& back = stream->header_storage.back();
@@ -395,18 +371,9 @@ void Http2Connection::submit_response(Http2Stream* stream) {
     }
 
     if (!stream->res.headers().contains("date") && static_cast<uint16_t>(stream->res.status()) >= 200) {
-        static thread_local time_t last_time = 0;
-        static thread_local char date_buf[64];
-        static thread_local size_t date_len = 0;
-        time_t now = time(nullptr);
-        if (now != last_time) {
-            last_time = now;
-            struct tm gmt;
-            gmtime_r(&now, &gmt);
-            date_len = strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
-        }
+        auto d = get_http_date();
         push_nv(reinterpret_cast<const uint8_t*>("date"), 4,
-                reinterpret_cast<const uint8_t*>(date_buf), date_len);
+                reinterpret_cast<const uint8_t*>(d.data()), d.size());
     }
 
     // Keep lowercased header names alive for nghttp2_nv pointers

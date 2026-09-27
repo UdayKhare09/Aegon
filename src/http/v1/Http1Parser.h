@@ -298,7 +298,7 @@ public:
                 if (iequals(final_coding, "chunked") || final_coding.starts_with("chunked;")) {
                     is_chunked = true;
                 } else {
-                    return ParseStatus::Error;
+                    return ParseStatus::NotImplemented;
                 }
             } else if (iequals(name, "Expect")) {
                 if (iequals(value, "100-continue")) {

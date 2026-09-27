@@ -1,5 +1,6 @@
 #include "http/Server.h"
 #include "http/v1/Http1Parser.h"
+#include "http/v1/Http1Serializer.h"
 #include "data/types/UUIDGenerator.h"
 #include <iostream>
 #include <cassert>
@@ -59,7 +60,7 @@ void test_http_parser_and_router() {
     assert(captured_uuid == UUID::from_string("550e8400-e29b-41d4-a716-446655440000"));
 
     std::string out;
-    res.serialize_http1(out);
+    v1::Http1Serializer::serialize_response(res, out);
     assert(out.find("200 OK") != std::string_view::npos);
     assert(out.find("550e8400-e29b-41d4-a716-446655440000") != std::string_view::npos);
 

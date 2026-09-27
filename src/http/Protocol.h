@@ -1,10 +1,12 @@
 #pragma once
 
+#include "core/simd/SimdString.h"
 #include <cstdint>
 #include <string_view>
 #include <string>
 #include <optional>
 #include <cctype>
+#include <ctime>
 
 namespace aegon::http {
 
@@ -172,21 +174,28 @@ inline constexpr size_t MAX_BODY_SIZE = 16 * 1024 * 1024; // 16 MB maximum paylo
  * @brief Checks if a header is hop-by-hop (prohibited in HTTP/2 RFC 9113 §8.2.2 and HTTP/3 RFC 9114 §4.2)
  */
 inline bool is_hop_by_hop_header(std::string_view name) noexcept {
-    auto iequals = [](std::string_view a, std::string_view b) noexcept {
-        if (a.size() != b.size()) return false;
-        for (size_t i = 0; i < a.size(); ++i) {
-            char ca = a[i];
-            char cb = b[i];
-            if (ca >= 'A' && ca <= 'Z') ca += 32;
-            if (cb >= 'A' && cb <= 'Z') cb += 32;
-            if (ca != cb) return false;
-        }
-        return true;
-    };
-    return iequals(name, "connection") ||
-           iequals(name, "keep-alive") ||
-           iequals(name, "transfer-encoding") ||
-           iequals(name, "upgrade");
+    return core::simd::SimdString::iequals(name, "connection") ||
+           core::simd::SimdString::iequals(name, "keep-alive") ||
+           core::simd::SimdString::iequals(name, "transfer-encoding") ||
+           core::simd::SimdString::iequals(name, "upgrade");
+}
+
+/**
+ * @brief Returns the current HTTP-date formatted string per RFC 9110 §5.6.7 (e.g. "Sun, 06 Nov 1994 08:49:37 GMT").
+ * Cached per thread per second to avoid repeated strftime calls across H1, H2, and H3.
+ */
+inline std::string_view get_http_date() noexcept {
+    static thread_local time_t last_time = 0;
+    static thread_local char date_buf[64];
+    static thread_local size_t date_len = 0;
+    time_t now = time(nullptr);
+    if (now != last_time) {
+        last_time = now;
+        struct tm gmt;
+        gmtime_r(&now, &gmt);
+        date_len = strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
+    }
+    return {date_buf, date_len};
 }
 
 /**
@@ -245,6 +254,57 @@ inline std::optional<size_t> parse_valid_content_length(std::string_view value) 
         len = next;
     }
     return len;
+}
+
+/**
+ * @brief Validates and splits :path header target into path and query components.
+ * Returns false if target is invalid per RFC 9112/9113/9114 or asterisk-form is used for non-OPTIONS method.
+ * Updates error_status to UriTooLong if target length exceeds MAX_URI_LENGTH.
+ */
+inline bool parse_path_header(std::string_view target, Method method,
+                              std::string_view& path, std::string_view& query,
+                              StatusCode& error_status) noexcept {
+    if (!is_valid_request_target(target)) {
+        return false;
+    }
+    if (target == "*" && method != Method::OPTIONS && method != Method::UNKNOWN) {
+        return false;
+    }
+    if (target.size() > MAX_URI_LENGTH && error_status == StatusCode::Ok) {
+        error_status = StatusCode::UriTooLong;
+    }
+    size_t qmark = core::simd::SimdString::find_char(target, '?');
+    if (qmark != std::string_view::npos) {
+        path = target.substr(0, qmark);
+        query = target.substr(qmark + 1);
+    } else {
+        path = target;
+        query = {};
+    }
+    return true;
+}
+
+/**
+ * @brief Validates common HTTP request headers across protocols (H1, H2, H3).
+ * Returns false if a malformed content-length header is present (RFC 9113 §8.2.1 / RFC 9114 §4.2).
+ * Flags PayloadTooLarge or ExpectationFailed on error_status if appropriate.
+ */
+inline bool validate_request_header(std::string_view name, std::string_view value,
+                                    StatusCode& error_status) noexcept {
+    if (core::simd::SimdString::iequals(name, "content-length")) {
+        auto cl_opt = parse_valid_content_length(value);
+        if (!cl_opt) {
+            return false;
+        }
+        if (*cl_opt > MAX_BODY_SIZE && error_status == StatusCode::Ok) {
+            error_status = StatusCode::PayloadTooLarge;
+        }
+    } else if (core::simd::SimdString::iequals(name, "expect")) {
+        if (!core::simd::SimdString::iequals(value, "100-continue") && error_status == StatusCode::Ok) {
+            error_status = StatusCode::ExpectationFailed;
+        }
+    }
+    return true;
 }
 
 } // namespace aegon::http

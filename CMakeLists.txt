@@ -135,6 +135,8 @@ add_library(aegon_http
     src/http/RadixTree.cpp
     src/http/Router.cpp
     src/http/Server.cpp
+    src/http/v1/Http1Connection.cpp
+    src/http/v1/Http1Serializer.cpp
     src/http/v2/Http2Connection.cpp
     src/http/tls/TlsContext.cpp
     src/http/tls/TlsStream.cpp

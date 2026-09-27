@@ -3,6 +3,7 @@
 #include "http/Response.h"
 #include "http/Context.h"
 #include "http/v1/Http1Parser.h"
+#include "http/v1/Http1Serializer.h"
 #include "data/types/UUIDGenerator.h"
 #include <iostream>
 #include <cassert>
@@ -526,7 +527,7 @@ void test_http_subsystem_fixes() {
         Response res;
         res.status(StatusCode::NoContent);
         std::string raw;
-        res.serialize_http1(raw);
+        v1::Http1Serializer::serialize_response(res, raw);
         TEST_CHECK(raw.find("204 No Content") != std::string::npos);
         TEST_CHECK(raw.find("Content-Length") == std::string::npos);
     }
