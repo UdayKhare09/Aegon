@@ -13,8 +13,9 @@
 namespace aegon::http::v3 {
 
 Http3Server::Http3Server(core::EventLoop& loop, uint16_t port, const Router& router,
-                         SSL_CTX* ssl_ctx, const ServiceRegistry* services)
-    : loop_(loop), port_(port), router_(router), ssl_ctx_(ssl_ctx), services_(services) {}
+                         SSL_CTX* ssl_ctx, const ServiceRegistry* services,
+                         const ServerConfig& config)
+    : loop_(loop), port_(port), router_(router), ssl_ctx_(ssl_ctx), services_(services), config_(config) {}
 
 Http3Server::~Http3Server() {
     stop();
@@ -192,7 +193,7 @@ core::Task<void> Http3Server::dispatch_datagram(std::span<const uint8_t> pkt,
     } else if (vc.version != 0) {
         // New connection triggered by client Initial packet
         auto new_conn = std::make_shared<Http3Connection>(
-            loop_, udp_fd_, from_addr, from_len, router_, ssl_ctx_, services_);
+            loop_, udp_fd_, from_addr, from_len, router_, ssl_ctx_, services_, config_);
 
         if (new_conn->init(vc.dcid, vc.dcidlen, vc.scid, vc.scidlen, vc.version)) {
             conn = new_conn;

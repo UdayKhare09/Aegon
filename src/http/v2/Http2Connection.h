@@ -12,6 +12,7 @@
 #include <string_view>
 #include <deque>
 #include "http/ServiceRegistry.h"
+#include "http/ServerConfig.h"
 
 namespace aegon::http::v2 {
 
@@ -36,7 +37,8 @@ using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
 class Http2Connection {
 public:
     Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
-                    const ServiceRegistry* services = nullptr, OutputSender sender = nullptr);
+                    const ServiceRegistry* services = nullptr, OutputSender sender = nullptr,
+                    const ServerConfig& config = {});
     ~Http2Connection();
 
     Http2Connection(const Http2Connection&) = delete;
@@ -104,6 +106,7 @@ private:
     int32_t max_remote_stream_id_{0};
     uint32_t last_error_code_{0};
     std::unordered_set<int32_t> closed_stream_ids_;
+    ServerConfig config_{};
 };
 
 } // namespace aegon::http::v2

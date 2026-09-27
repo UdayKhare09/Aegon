@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/simd/SimdString.h"
+#include "http/ServerConfig.h"
 #include <cstdint>
 #include <string_view>
 #include <string>
@@ -165,10 +166,8 @@ constexpr std::string_view status_phrase(StatusCode code) noexcept {
     return "Unknown";
 }
 
-// Aegon Protocol Constraints & Limits across H1, H2, and H3
-inline constexpr size_t MAX_URI_LENGTH = 8192;            // 8 KB limit -> 414 URI Too Long
-inline constexpr size_t MAX_HEADERS_SIZE = 65536;         // 64 KB total header section limit -> 431 Request Header Fields Too Large
-inline constexpr size_t MAX_BODY_SIZE = 16 * 1024 * 1024; // 16 MB maximum payload size -> 413 Payload Too Large
+// Aegon Default Protocol Limits
+inline constexpr ProtocolLimits DEFAULT_LIMITS{};
 
 /**
  * @brief Checks if a header is hop-by-hop (prohibited in HTTP/2 RFC 9113 §8.2.2 and HTTP/3 RFC 9114 §4.2)
@@ -263,14 +262,15 @@ inline std::optional<size_t> parse_valid_content_length(std::string_view value) 
  */
 inline bool parse_path_header(std::string_view target, Method method,
                               std::string_view& path, std::string_view& query,
-                              StatusCode& error_status) noexcept {
+                              StatusCode& error_status,
+                              size_t max_uri_length = DEFAULT_LIMITS.max_uri_length) noexcept {
     if (!is_valid_request_target(target)) {
         return false;
     }
     if (target == "*" && method != Method::OPTIONS && method != Method::UNKNOWN) {
         return false;
     }
-    if (target.size() > MAX_URI_LENGTH && error_status == StatusCode::Ok) {
+    if (target.size() > max_uri_length && error_status == StatusCode::Ok) {
         error_status = StatusCode::UriTooLong;
     }
     size_t qmark = core::simd::SimdString::find_char(target, '?');
@@ -290,13 +290,14 @@ inline bool parse_path_header(std::string_view target, Method method,
  * Flags PayloadTooLarge or ExpectationFailed on error_status if appropriate.
  */
 inline bool validate_request_header(std::string_view name, std::string_view value,
-                                    StatusCode& error_status) noexcept {
+                                    StatusCode& error_status,
+                                    size_t max_body_size = DEFAULT_LIMITS.max_body_size) noexcept {
     if (core::simd::SimdString::iequals(name, "content-length")) {
         auto cl_opt = parse_valid_content_length(value);
         if (!cl_opt) {
             return false;
         }
-        if (*cl_opt > MAX_BODY_SIZE && error_status == StatusCode::Ok) {
+        if (*cl_opt > max_body_size && error_status == StatusCode::Ok) {
             error_status = StatusCode::PayloadTooLarge;
         }
     } else if (core::simd::SimdString::iequals(name, "expect")) {

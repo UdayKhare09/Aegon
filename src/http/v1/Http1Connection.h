@@ -14,6 +14,8 @@
 #include <string>
 #include <string_view>
 
+#include "http/ServerConfig.h"
+
 namespace aegon::http::v1 {
 
 using H2DirectCallback = std::function<core::Task<void>(int client_fd, std::string preface_data)>;
@@ -27,7 +29,8 @@ using H2UpgradeCallback = std::function<core::Task<void>(int client_fd, Request 
 class Http1Connection {
 public:
     Http1Connection(core::EventLoop& loop, int client_fd, const Router& router,
-                    const ServiceRegistry* services = nullptr);
+                    const ServiceRegistry* services = nullptr,
+                    const ServerConfig& config = {});
     ~Http1Connection() = default;
 
     Http1Connection(const Http1Connection&) = delete;
@@ -75,6 +78,7 @@ private:
     int client_fd_;
     const Router& router_;
     const ServiceRegistry* services_;
+    ServerConfig config_{};
 };
 
 } // namespace aegon::http::v1

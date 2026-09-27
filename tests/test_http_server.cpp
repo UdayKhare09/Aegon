@@ -345,6 +345,58 @@ void test_http2_and_http3_structures() {
     std::cout << "  -> PASS: HTTP/2 and HTTP/3 protocol structures verified.\n";
 }
 
+void test_server_config_multi_instance_isolation() {
+    std::cout << "[TEST 4] Testing multi-server instance configuration isolation...\n";
+
+    Server server_a;
+    server_a.max_body_size(1024)
+            .max_uri_length(512)
+            .ring_entries(1024)
+            .buffer_pool_entries(2048)
+            .tcp_nodelay(false);
+
+    Server server_b;
+    server_b.max_body_size(64 * 1024 * 1024)
+            .max_uri_length(16384)
+            .ring_entries(8192)
+            .buffer_pool_entries(16384)
+            .tcp_nodelay(true);
+
+    // Verify Server A
+    assert(server_a.limits().max_body_size == 1024);
+    assert(server_a.limits().max_uri_length == 512);
+    assert(server_a.ring_entries() == 1024);
+    assert(server_a.buffer_pool_entries() == 2048);
+    assert(server_a.tcp().nodelay == false);
+
+    // Verify Server B
+    assert(server_b.limits().max_body_size == 64 * 1024 * 1024);
+    assert(server_b.limits().max_uri_length == 16384);
+    assert(server_b.ring_entries() == 8192);
+    assert(server_b.buffer_pool_entries() == 16384);
+    assert(server_b.tcp().nodelay == true);
+
+    // Verify parsing with Server A's limits rejects 2000-byte body
+    std::string large_body(2000, 'x');
+    std::string raw_req = "POST /upload HTTP/1.1\r\n"
+                          "Host: aegon.dev\r\n"
+                          "Content-Length: 2000\r\n\r\n" + large_body;
+
+    Request req_a;
+    size_t consumed_a = 0;
+    auto status_a = v1::Http1Parser::parse(raw_req, req_a, consumed_a, server_a.limits());
+    assert(status_a == v1::ParseStatus::PayloadTooLarge);
+
+    // Verify parsing with Server B's limits accepts the same 2000-byte body
+    Request req_b;
+    size_t consumed_b = 0;
+    auto status_b = v1::Http1Parser::parse(raw_req, req_b, consumed_b, server_b.limits());
+    assert(status_b == v1::ParseStatus::Complete);
+    assert(req_b.body() == large_body);
+
+    std::cout << "  -> PASS: Multi-server configuration isolation verified.\n";
+}
+
 int main() {
     std::cout << "=======================================================\n";
     std::cout << "       AEGON HTTP CORE & SERVER TEST SUITE             \n";
@@ -353,6 +405,7 @@ int main() {
     test_http_parser_and_router();
     test_live_server_loopback();
     test_http2_and_http3_structures();
+    test_server_config_multi_instance_isolation();
 
     std::cout << "\n=======================================================\n";
     std::cout << "ALL HTTP CORE TESTS PASSED SUCCESSFULLY!\n";

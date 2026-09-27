@@ -2,6 +2,7 @@
 
 #include "http/Router.h"
 #include "http/ServiceRegistry.h"
+#include "http/ServerConfig.h"
 #include "http/tls/TlsContext.h"
 #include "http/v3/Http3Server.h"
 #include "core/EventLoop.h"
@@ -229,21 +230,75 @@ public:
         return listen(port, host, true);
     }
 
-    Server& ring_entries(uint32_t entries) noexcept {
-        ring_entries_ = entries;
+    // Full server configuration
+    Server& config(const ServerConfig& cfg) noexcept {
+        config_ = cfg;
         return *this;
     }
+    [[nodiscard]] const ServerConfig& config() const noexcept { return config_; }
+    [[nodiscard]] ServerConfig& config() noexcept { return config_; }
+
+    Server& ring_entries(uint32_t entries) noexcept {
+        config_.ring_entries = entries;
+        return *this;
+    }
+    [[nodiscard]] uint32_t ring_entries() const noexcept { return config_.ring_entries; }
 
     Server& buffer_pool_entries(uint16_t entries) noexcept {
-        buffer_pool_entries_ = entries;
+        config_.buffer_pool_entries = entries;
         return *this;
     }
+    [[nodiscard]] uint16_t buffer_pool_entries() const noexcept { return config_.buffer_pool_entries; }
 
-    [[nodiscard]] uint16_t buffer_pool_entries() const noexcept { return buffer_pool_entries_; }
+    Server& buffer_size(uint32_t size) noexcept {
+        config_.buffer_size = size;
+        return *this;
+    }
+    [[nodiscard]] uint32_t buffer_size() const noexcept { return config_.buffer_size; }
 
     // Enable/disable HTTP/3 over QUIC
     Server& enable_http3(bool enable = true) noexcept {
-        http3_enabled_ = enable;
+        config_.enable_http3 = enable;
+        return *this;
+    }
+    [[nodiscard]] bool is_http3_enabled() const noexcept { return config_.enable_http3; }
+
+    // Protocol Limits across H1, H2, and H3
+    Server& max_body_size(size_t bytes) noexcept { config_.limits.max_body_size = bytes; return *this; }
+    Server& max_headers_size(size_t bytes) noexcept { config_.limits.max_headers_size = bytes; return *this; }
+    Server& max_uri_length(size_t bytes) noexcept { config_.limits.max_uri_length = bytes; return *this; }
+    Server& limits(const ProtocolLimits& l) noexcept { config_.limits = l; return *this; }
+    [[nodiscard]] const ProtocolLimits& limits() const noexcept { return config_.limits; }
+
+    // TCP configuration
+    Server& tcp(const TcpConfig& tcp_cfg) noexcept {
+        config_.tcp = tcp_cfg;
+        return *this;
+    }
+    [[nodiscard]] const TcpConfig& tcp() const noexcept { return config_.tcp; }
+    Server& tcp_nodelay(bool enable = true) noexcept {
+        config_.tcp.nodelay = enable;
+        return *this;
+    }
+    Server& tcp_keepalive(bool enable, int idle = 60, int intvl = 10, int cnt = 3) noexcept {
+        config_.tcp.keepalive = enable;
+        config_.tcp.keepidle = idle;
+        config_.tcp.keepintvl = intvl;
+        config_.tcp.keepcnt = cnt;
+        return *this;
+    }
+
+    // HTTP/2 & HTTP/3 tuning
+    Server& h2_max_concurrent_streams(uint32_t n) noexcept {
+        config_.h2_max_concurrent_streams = n;
+        return *this;
+    }
+    Server& h2_initial_window_size(uint32_t n) noexcept {
+        config_.h2_initial_window_size = n;
+        return *this;
+    }
+    Server& rst_burst_limit(uint32_t n) noexcept {
+        config_.rst_burst_limit = n;
         return *this;
     }
 
@@ -260,7 +315,6 @@ public:
     [[nodiscard]] std::string_view host() const noexcept { return host_; }
     [[nodiscard]] const std::vector<ListenerConfig>& listeners() const noexcept { return listeners_; }
     [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
-    [[nodiscard]] bool is_http3_enabled() const noexcept { return http3_enabled_; }
 
 private:
     core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
@@ -290,11 +344,8 @@ private:
     std::atomic<bool> running_{false};
     std::vector<std::thread> workers_;
 
-    uint32_t ring_entries_{4096};
-    uint16_t buffer_pool_entries_{8192};
-
+    ServerConfig config_{};
     bool tls_enabled_{false};
-    bool http3_enabled_{true}; // Default to enabled when TLS is used
     std::unique_ptr<tls::TlsContext> tls_ctx_;
     std::vector<std::unique_ptr<v3::Http3Server>> h3_servers_;
 };

@@ -33,10 +33,8 @@ Server::Server(Server&& other) noexcept
       background_workers_(std::move(other.background_workers_)),
       running_(other.running_.load()),
       workers_(std::move(other.workers_)),
-      ring_entries_(other.ring_entries_),
-      buffer_pool_entries_(other.buffer_pool_entries_),
+      config_(other.config_),
       tls_enabled_(other.tls_enabled_),
-      http3_enabled_(other.http3_enabled_),
       tls_ctx_(std::move(other.tls_ctx_)),
       h3_servers_(std::move(other.h3_servers_))
 {
@@ -54,10 +52,8 @@ Server& Server::operator=(Server&& other) noexcept {
         background_workers_ = std::move(other.background_workers_);
         running_.store(other.running_.load());
         workers_ = std::move(other.workers_);
-        ring_entries_ = other.ring_entries_;
-        buffer_pool_entries_ = other.buffer_pool_entries_;
+        config_ = other.config_;
         tls_enabled_ = other.tls_enabled_;
-        http3_enabled_ = other.http3_enabled_;
         tls_ctx_ = std::move(other.tls_ctx_);
         h3_servers_ = std::move(other.h3_servers_);
     }
@@ -98,7 +94,9 @@ int Server::create_listen_socket(uint16_t port, const std::string& host) {
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+    if (config_.tcp.nodelay) {
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+    }
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -155,7 +153,7 @@ core::Task<void> Server::run_h2_loop(core::EventLoop& loop, int client_fd, v2::H
 
 core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data,
                                                   std::optional<core::MultishotRecvStream> existing_stream) {
-    v2::Http2Connection h2(loop, client_fd, router_, services_.get());
+    v2::Http2Connection h2(loop, client_fd, router_, services_.get(), nullptr, config_);
     bool ok = co_await h2.init();
     if (!ok) {
         (void)(co_await loop.ring().close(client_fd));
@@ -168,7 +166,7 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
 core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings,
                                               std::string initial_data,
                                               std::optional<core::MultishotRecvStream> existing_stream) {
-    v2::Http2Connection h2(loop, client_fd, router_, services_.get());
+    v2::Http2Connection h2(loop, client_fd, router_, services_.get(), nullptr, config_);
     bool ok = co_await h2.init();
     if (!ok) {
         (void)(co_await loop.ring().close(client_fd));
@@ -200,8 +198,8 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
             co_return co_await tls_stream.write_plaintext(data.data(), data.size());
         };
 
-        v2::Http2Connection h2(loop, client_fd, router_, services_.get(), std::move(sender));
-        if (http3_enabled_) {
+        v2::Http2Connection h2(loop, client_fd, router_, services_.get(), std::move(sender), config_);
+        if (config_.enable_http3) {
             h2.set_alt_svc("h3=\":" + std::to_string(port) + "\"; ma=86400");
         }
         ok = co_await h2.init();
@@ -220,8 +218,8 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
         }
     } else {
         // HTTP/1.1 over TLS (ALPN "http/1.1" or fallback)
-        const std::string alt_svc_hdr = v1::Http1Connection::build_alt_svc_header(port, http3_enabled_);
-        v1::Http1Connection h1(loop, client_fd, router_, services_.get());
+        const std::string alt_svc_hdr = v1::Http1Connection::build_alt_svc_header(port, config_.enable_http3);
+        v1::Http1Connection h1(loop, client_fd, router_, services_.get(), config_);
         co_await h1.run_tls(tls_stream, alt_svc_hdr);
     }
 
@@ -230,7 +228,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
 }
 
 core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd) {
-    v1::Http1Connection h1(loop, client_fd, router_, services_.get());
+    v1::Http1Connection h1(loop, client_fd, router_, services_.get(), config_);
     co_await h1.run(
         [this, &loop](int fd, std::string preface_data) -> core::Task<void> {
             co_await handle_http2_connection(loop, fd, std::move(preface_data));
@@ -252,16 +250,26 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, uint1
                 // Break inner loop to re-arm multishot accept stream.
                 break;
             }
-            int nodelay = 1;
-            ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
-            int keepalive = 1;
-            ::setsockopt(accept_res.fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
-            int keepidle = 30;  // 30s before sending keepalive probes
-            ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
-            int keepintvl = 10; // 10s between keepalive probes
-            ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
-            int keepcnt = 3;    // Drop dead connection after 3 missed probes
-            ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+            if (config_.tcp.nodelay) {
+                int nodelay = 1;
+                ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+            }
+            if (config_.tcp.keepalive) {
+                int keepalive = 1;
+                ::setsockopt(accept_res.fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+                if (config_.tcp.keepidle > 0) {
+                    int keepidle = config_.tcp.keepidle;
+                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
+                }
+                if (config_.tcp.keepintvl > 0) {
+                    int keepintvl = config_.tcp.keepintvl;
+                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+                }
+                if (config_.tcp.keepcnt > 0) {
+                    int keepcnt = config_.tcp.keepcnt;
+                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+                }
+            }
             if (is_tls && tls_ctx_) {
                 loop.spawn(handle_tls_connection(loop, accept_res.fd, port));
             } else {
@@ -286,9 +294,9 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
     }
 
     core::IoUringConfig ring_cfg;
-    ring_cfg.entries = ring_entries_;
+    ring_cfg.entries = config_.ring_entries;
 
-    core::EventLoop loop(ring_cfg, buffer_pool_entries_, 4096);
+    core::EventLoop loop(ring_cfg, config_.buffer_pool_entries, config_.buffer_size);
     if (cpu_core) {
         loop.pin_to_core(*cpu_core);
     }
@@ -304,10 +312,10 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
 
     std::vector<std::unique_ptr<v3::Http3Server>> local_h3_servers;
     auto& h3_dest = cpu_core.has_value() ? local_h3_servers : h3_servers_;
-    if (tls_enabled_ && http3_enabled_ && tls_ctx_) {
+    if (tls_enabled_ && config_.enable_http3 && tls_ctx_) {
         for (const auto& l : active_listeners) {
             if (l.tls) {
-                auto h3 = std::make_unique<v3::Http3Server>(loop, l.port, router_, tls_ctx_->native_handle(), services_.get());
+                auto h3 = std::make_unique<v3::Http3Server>(loop, l.port, router_, tls_ctx_->native_handle(), services_.get(), config_);
                 if (h3->start()) {
                     loop.spawn(h3->run_receive_loop());
                     loop.spawn(h3->run_timer_loop());

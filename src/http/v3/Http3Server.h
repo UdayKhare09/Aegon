@@ -11,12 +11,15 @@
 #include <memory>
 #include <string>
 
+#include "http/ServerConfig.h"
+
 namespace aegon::http::v3 {
 
 class Http3Server {
 public:
     Http3Server(core::EventLoop& loop, uint16_t port, const Router& router,
-                SSL_CTX* ssl_ctx, const ServiceRegistry* services = nullptr);
+                SSL_CTX* ssl_ctx, const ServiceRegistry* services = nullptr,
+                const ServerConfig& config = {});
     ~Http3Server();
 
     Http3Server(const Http3Server&) = delete;
@@ -85,6 +88,7 @@ private:
 
     // Map DCID string -> Http3Connection with transparent hashing for zero-allocation lookup
     std::unordered_map<std::string, std::shared_ptr<Http3Connection>, CidHash, CidEqual> connections_;
+    ServerConfig config_{};
 };
 
 } // namespace aegon::http::v3

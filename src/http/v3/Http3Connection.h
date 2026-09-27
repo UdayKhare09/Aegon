@@ -21,6 +21,7 @@
 #include <functional>
 
 #include "http/ServiceRegistry.h"
+#include "http/ServerConfig.h"
 
 namespace aegon::http::v3 {
 
@@ -54,7 +55,8 @@ class Http3Connection {
 public:
     Http3Connection(core::EventLoop& loop, int udp_fd, const sockaddr_storage& remote_addr,
                     socklen_t remote_addr_len, const Router& router, SSL_CTX* ssl_ctx,
-                    const ServiceRegistry* services = nullptr);
+                    const ServiceRegistry* services = nullptr,
+                    const ServerConfig& config = {});
     ~Http3Connection();
 
     Http3Connection(const Http3Connection&) = delete;
@@ -150,6 +152,7 @@ private:
     ngtcp2_cid client_scid_{};
     CidCallback on_cid_added_{nullptr};
     CidCallback on_cid_removed_{nullptr};
+    ServerConfig config_{};
 };
 
 } // namespace aegon::http::v3

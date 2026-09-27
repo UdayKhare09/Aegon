@@ -54,8 +54,10 @@ ssize_t data_source_read_cb(nghttp2_session*, int32_t stream_id,
 } // anonymous namespace
 
 Http2Connection::Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
-                                 const ServiceRegistry* services, OutputSender sender)
-    : loop_(loop), client_fd_(client_fd), router_(router), services_(services), sender_(std::move(sender)) {
+                                 const ServiceRegistry* services, OutputSender sender,
+                                 const ServerConfig& config)
+    : loop_(loop), client_fd_(client_fd), router_(router), services_(services), sender_(std::move(sender)),
+      rst_burst_limit_(config.rst_burst_limit), config_(config) {
     nghttp2_session_callbacks* callbacks;
     nghttp2_session_callbacks_new(&callbacks);
 
@@ -130,7 +132,7 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
     std::string_view v(reinterpret_cast<const char*>(value), valuelen);
 
     stream->headers_total_size += namelen + valuelen;
-    if (stream->headers_total_size > MAX_HEADERS_SIZE && stream->error_status == StatusCode::Ok) {
+    if (stream->headers_total_size > config_.limits.max_headers_size && stream->error_status == StatusCode::Ok) {
         stream->error_status = StatusCode::RequestHeaderFieldsTooLarge;
     }
 
@@ -145,7 +147,7 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
         std::string_view p, q;
-        if (!parse_path_header(v, stream->req.method(), p, q, stream->error_status)) {
+        if (!parse_path_header(v, stream->req.method(), p, q, stream->error_status, config_.limits.max_uri_length)) {
             return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
         }
         stream->path_storage.assign(p.data(), p.size());
@@ -162,7 +164,7 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
     } else if (n.starts_with(':')) {
         // Other pseudo headers (:scheme, etc.)
     } else {
-        if (!validate_request_header(n, v, stream->error_status)) {
+        if (!validate_request_header(n, v, stream->error_status, config_.limits.max_body_size)) {
             return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE; // RFC 9113 §8.2.1 malformed content-length -> PROTOCOL_ERROR
         }
         stream->header_storage.emplace_back(std::string(n), std::string(v));
@@ -184,7 +186,7 @@ int Http2Connection::on_data_chunk_recv(uint8_t, int32_t stream_id, const uint8_
         nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_STREAM_CLOSED);
         return 0;
     }
-    if (stream->body_accum.size() + len > MAX_BODY_SIZE) {
+    if (stream->body_accum.size() + len > config_.limits.max_body_size) {
         if (stream->error_status == StatusCode::Ok) {
             stream->error_status = StatusCode::PayloadTooLarge;
         }
@@ -405,8 +407,8 @@ void Http2Connection::submit_response(Http2Stream* stream) {
 
 core::Task<bool> Http2Connection::init() {
     nghttp2_settings_entry iv[] = {
-        {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, 256},
-        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, 1048576}
+        {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, config_.h2_max_concurrent_streams},
+        {NGHTTP2_SETTINGS_INITIAL_WINDOW_SIZE, config_.h2_initial_window_size}
     };
     int rv = nghttp2_submit_settings(session_, NGHTTP2_FLAG_NONE, iv, 2);
     if (rv != 0) {

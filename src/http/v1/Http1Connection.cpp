@@ -11,8 +11,8 @@
 namespace aegon::http::v1 {
 
 Http1Connection::Http1Connection(core::EventLoop& loop, int client_fd, const Router& router,
-                                 const ServiceRegistry* services)
-    : loop_(loop), client_fd_(client_fd), router_(router), services_(services) {}
+                                 const ServiceRegistry* services, const ServerConfig& config)
+    : loop_(loop), client_fd_(client_fd), router_(router), services_(services), config_(config) {}
 
 std::optional<Response> Http1Connection::make_parse_error_response(ParseStatus status) {
     Response res;
@@ -160,7 +160,7 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
 
             Request req;
             size_t bytes_consumed = 0;
-            auto status = Http1Parser::parse(unparsed, req, bytes_consumed);
+            auto status = Http1Parser::parse(unparsed, req, bytes_consumed, config_.limits);
 
             if (status == ParseStatus::NeedMoreData) {
                 if (req.expect_continue()) {
@@ -348,7 +348,7 @@ core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::strin
             std::string_view unparsed(req_accum.data() + req_offset, req_accum.size() - req_offset);
             Request req;
             size_t bytes_consumed = 0;
-            auto status = Http1Parser::parse(unparsed, req, bytes_consumed);
+            auto status = Http1Parser::parse(unparsed, req, bytes_consumed, config_.limits);
 
             if (status == ParseStatus::NeedMoreData) {
                 if (req.expect_continue()) {

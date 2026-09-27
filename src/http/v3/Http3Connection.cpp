@@ -60,9 +60,10 @@ nghttp3_ssize h3_read_data(nghttp3_conn*, int64_t stream_id, nghttp3_vec* vec, s
 
 Http3Connection::Http3Connection(core::EventLoop& loop, int udp_fd, const sockaddr_storage& remote_addr,
                                  socklen_t remote_addr_len, const Router& router, SSL_CTX* ssl_ctx,
-                                 const ServiceRegistry* services)
+                                 const ServiceRegistry* services, const ServerConfig& config)
     : loop_(loop), udp_fd_(udp_fd), remote_addr_(remote_addr), remote_addr_len_(remote_addr_len),
-      router_(router), ssl_ctx_(ssl_ctx), services_(services) {}
+      router_(router), ssl_ctx_(ssl_ctx), services_(services),
+      rst_burst_limit_(config.rst_burst_limit), config_(config) {}
 
 Http3Connection::~Http3Connection() {
     if (h3conn_) {
@@ -360,7 +361,7 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
     }
 
     stream->headers_total_size += name_buf.len + val_buf.len;
-    if (stream->headers_total_size > MAX_HEADERS_SIZE && stream->error_status == StatusCode::Ok) {
+    if (stream->headers_total_size > config_.limits.max_headers_size && stream->error_status == StatusCode::Ok) {
         stream->error_status = StatusCode::RequestHeaderFieldsTooLarge;
     }
 
@@ -384,7 +385,7 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         if (stream->seen_path) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         stream->seen_path = true;
         std::string_view p, q;
-        if (!parse_path_header(v, stream->req.method(), p, q, stream->error_status)) {
+        if (!parse_path_header(v, stream->req.method(), p, q, stream->error_status, config_.limits.max_uri_length)) {
             return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         }
         stream->path_storage.assign(p.data(), p.size());
@@ -407,7 +408,7 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     } else {
         stream->seen_regular_headers = true;
-        if (!validate_request_header(n, v, stream->error_status)) {
+        if (!validate_request_header(n, v, stream->error_status, config_.limits.max_body_size)) {
             return NGHTTP3_ERR_MALFORMED_HTTP_HEADER; // RFC 9114 §4.2 malformed content-length -> H3_MESSAGE_ERROR
         }
         stream->header_storage.emplace_back(std::string(n), std::string(v));
@@ -455,7 +456,7 @@ int Http3Connection::on_stream_data(int64_t stream_id, const uint8_t* data, size
     if (!stream->headers_received) {
         return NGHTTP3_ERR_H3_FRAME_UNEXPECTED;
     }
-    if (stream->body_accum.size() + datalen > MAX_BODY_SIZE) {
+    if (stream->body_accum.size() + datalen > config_.limits.max_body_size) {
         if (stream->error_status == StatusCode::Ok) {
             stream->error_status = StatusCode::PayloadTooLarge;
         }

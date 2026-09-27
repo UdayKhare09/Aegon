@@ -2,6 +2,7 @@
 
 #include "http/Request.h"
 #include "core/simd/SimdString.h"
+#include "http/Protocol.h"
 #include <string_view>
 #include <cstdint>
 #include <cstring>
@@ -23,8 +24,6 @@ enum class ParseStatus {
 
 class Http1Parser {
 public:
-    static constexpr size_t MAX_URI_LENGTH = aegon::http::MAX_URI_LENGTH;
-    static constexpr size_t MAX_HEADERS_SIZE = aegon::http::MAX_HEADERS_SIZE;
     static constexpr bool is_tchar(char c) noexcept {
         unsigned char uc = static_cast<unsigned char>(c);
         if ((uc >= 'a' && uc <= 'z') || (uc >= 'A' && uc <= 'Z') || (uc >= '0' && uc <= '9')) {
@@ -67,7 +66,8 @@ public:
      * @param req Target Request object to populate
      * @param bytes_consumed Output number of bytes processed
      */
-    static ParseStatus parse(std::string_view buffer, Request& req, size_t& bytes_consumed) noexcept {
+    static ParseStatus parse(std::string_view buffer, Request& req, size_t& bytes_consumed,
+                             const ProtocolLimits& limits = DEFAULT_LIMITS) noexcept {
         bytes_consumed = 0;
 
         // 1. Locate Request Line (\r\n)
@@ -90,7 +90,7 @@ public:
         size_t sp2 = aegon::core::simd::SimdString::find_char(req_line, ' ', sp1 + 1);
         if (sp2 == std::string_view::npos) return ParseStatus::Error;
         std::string_view full_path = req_line.substr(sp1 + 1, sp2 - (sp1 + 1));
-        if (full_path.size() > MAX_URI_LENGTH) {
+        if (full_path.size() > limits.max_uri_length) {
             return ParseStatus::UriTooLong;
         }
         if (full_path.empty() || full_path[0] != '/') [[unlikely]] {
@@ -170,7 +170,7 @@ public:
         bool headers_complete = false;
 
         while (cursor < buffer.size()) {
-            if (cursor - req_line_end > MAX_HEADERS_SIZE) {
+            if (cursor - req_line_end > limits.max_headers_size) {
                 return ParseStatus::HeadersTooLarge;
             }
             // Check for end of headers (\r\n)
@@ -185,7 +185,7 @@ public:
 
             size_t header_end = aegon::core::simd::SimdString::find_crlf(buffer, cursor);
             if (header_end == std::string_view::npos) {
-                if (buffer.size() - req_line_end > MAX_HEADERS_SIZE) {
+                if (buffer.size() - req_line_end > limits.max_headers_size) {
                     return ParseStatus::HeadersTooLarge;
                 }
                 return ParseStatus::NeedMoreData;
@@ -252,7 +252,7 @@ public:
                     return ParseStatus::Error;
                 }
                 content_length = *cl_opt;
-                if (content_length > MAX_BODY_SIZE) {
+                if (content_length > limits.max_body_size) {
                     return ParseStatus::PayloadTooLarge;
                 }
             } else if (iequals(name, "Transfer-Encoding")) {
@@ -434,7 +434,7 @@ public:
                     return ParseStatus::Error;
                 }
 
-                if (decoded_body.size() + chunk_size > MAX_BODY_SIZE) {
+                if (decoded_body.size() + chunk_size > limits.max_body_size) {
                     return ParseStatus::PayloadTooLarge;
                 }
 
