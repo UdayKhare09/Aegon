@@ -286,3 +286,43 @@ std::string accept = compute_accept_key(client_key);
 // Builds the full HTTP/1.1 101 Switching Protocols response string
 std::string handshake_res = build_handshake_response(accept);
 ```
+
+---
+
+## WebSocket Configuration & Resource Tuning (`WebSocketConfig`)
+
+Aegon provides a granular configuration object `WebSocketConfig` defined in `<aegon/http/ServerConfig.h>` to defend against memory exhaustion DoS attacks and configure connection lifetimes:
+
+```cpp
+#include <aegon/http/ServerConfig.h>
+
+WebSocketConfig ws_cfg;
+ws_cfg.max_message_size = 8 * 1024 * 1024;  // 8 MB max message size -> 1009 MessageTooBig
+ws_cfg.max_frame_size = 4 * 1024 * 1024;    // 4 MB max single frame limit
+ws_cfg.require_masked_frames = true;        // RFC 6455 §5.1 client-to-server masking
+ws_cfg.auto_ping_interval_sec = 30;         // Heartbeat every 30s (0 = disabled)
+ws_cfg.ping_timeout_sec = 10;               // Reaps connection if no pong within 10s
+ws_cfg.initial_buffer_capacity = 4096;      // Ingest/batch buffer pre-allocation in bytes
+
+// Apply via Server:
+server.websocket(ws_cfg);
+
+// Or fluently:
+server.ws_max_message_size(8 * 1024 * 1024)
+      .ws_max_frame_size(4 * 1024 * 1024)
+      .ws_require_masked_frames(true)
+      .ws_auto_ping_interval(30);
+```
+
+### Protection Against Memory Exhaustion (RFC 6455 §7.4.1)
+
+If a malicious client streams an oversized frame or sends a frame whose header specifies a `payload_len` greater than `max_frame_size` or `max_message_size`, Aegon immediately:
+1. Rejects the payload without buffering it into memory.
+2. Sends a graceful Close control frame with status code `CloseCode::MessageTooBig` (`1009`).
+3. Closes the underlying socket, defending the server against memory exhaustion and OOM crashes.
+
+### Masking Toggle for Reverse Proxies
+
+By default, `require_masked_frames = true` per RFC 6455 §5.1. Unmasked frames on TCP/HTTP1 are closed with `CloseCode::ProtocolError` (`1002`).
+
+When Aegon is deployed behind an API gateway or internal reverse proxy that terminates TLS and unmasks WebSocket client traffic, set `ws_require_masked_frames(false)` to seamlessly accept unmasked client frames.

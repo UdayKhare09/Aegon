@@ -95,17 +95,99 @@ Aegon performs fail-fast validation before binding sockets or spawning worker ev
 
 ---
 
-## Linux `io_uring` Tuning
+## Unified Server Configuration (`ServerConfig`)
 
-Aegon exposes direct knobs for kernel I/O submission ring tuning:
+Aegon centralizes all protocol constraints, kernel parameters, TCP socket options, HTTP/2 & HTTP/3 flow control, flood mitigations, and WebSocket tuning into the `ServerConfig` structure (`<aegon/http/ServerConfig.h>`).
+
+Each `Server` instance maintains an isolated configuration, allowing multiple servers with completely independent limits (e.g. an IoT telemetry endpoint with 1 KB payload limits vs. a media service with 64 MB limits) to run concurrently in the same process without global state collision.
 
 ```cpp
-// Configure ring capacity (default: 4096 SQEs)
-server.ring_entries(8192);
+#include <aegon/http/Server.h>
+#include <aegon/http/ServerConfig.h>
 
-// Configure provided buffer pool entries (default: 8192)
-server.buffer_pool_entries(16384);
+using namespace aegon::http;
+
+ServerConfig cfg;
+
+// 1. Protocol compliance and payload limits
+cfg.limits.max_body_size = 32 * 1024 * 1024; // 32 MB -> 413 Payload Too Large
+cfg.limits.max_headers_size = 128 * 1024;    // 128 KB -> 431 Header Fields Too Large
+cfg.limits.max_uri_length = 16384;           // 16 KB -> 414 URI Too Long
+
+// 2. Linux io_uring & Provided Buffer Pool
+cfg.ring_entries = 8192;                     // Submission queue capacity
+cfg.buffer_pool_entries = 16384;             // Multishot provided buffer pool count
+cfg.buffer_size = 4096;                      // Buffer slice size in bytes
+
+// 3. TCP socket options
+cfg.tcp.nodelay = true;                      // TCP_NODELAY (disable Nagle's algorithm)
+cfg.tcp.keepalive = true;                    // SO_KEEPALIVE
+cfg.tcp.keepidle = 60;                       // Probes after 60s idle
+cfg.tcp.keepintvl = 10;                      // 10s between keepalive probes
+cfg.tcp.keepcnt = 3;                         // Drop after 3 unanswered probes
+
+// 4. HTTP/2 and HTTP/3 tuning
+cfg.h2_max_concurrent_streams = 256;         // Concurrent streams per client
+cfg.h2_initial_window_size = 2 * 1024 * 1024;// 2 MB initial flow control window
+cfg.rst_burst_limit = 1000;                  // HTTP/2 & HTTP/3 Rapid Reset flood threshold
+
+// 5. WebSocket tuning
+cfg.websocket.max_message_size = 16 * 1024 * 1024; // 16 MB -> CloseCode::MessageTooBig (1009)
+cfg.websocket.max_frame_size = 16 * 1024 * 1024;   // 16 MB per frame limit
+cfg.websocket.require_masked_frames = true;        // RFC 6455 §5.1 masking enforcement
+cfg.websocket.auto_ping_interval_sec = 30;         // Heartbeat ping every 30s (0 = disabled)
+cfg.websocket.ping_timeout_sec = 10;               // Close after 10s missing pong
+cfg.websocket.initial_buffer_capacity = 4096;      // Buffer pre-allocation per session
+
+// 6. Protocol feature toggles
+cfg.enable_http3 = true;                     // Enable HTTP/3 over QUIC on TLS listeners
+
+// Apply full config to server
+server.config(cfg);
 ```
+
+### Fluent Configuration API
+
+You can also configure any setting fluently directly on the `Server` instance:
+
+```cpp
+server.max_body_size(32 * 1024 * 1024)
+      .max_headers_size(128 * 1024)
+      .max_uri_length(16384)
+      .ring_entries(8192)
+      .buffer_pool_entries(16384)
+      .buffer_size(4096)
+      .tcp_nodelay(true)
+      .tcp_keepalive(true, /*idle=*/60, /*intvl=*/10, /*cnt=*/3)
+      .h2_max_concurrent_streams(512)
+      .h2_initial_window_size(2 * 1024 * 1024)
+      .rst_burst_limit(2000)
+      .ws_max_message_size(16 * 1024 * 1024)
+      .ws_require_masked_frames(true)
+      .ws_auto_ping_interval(30)
+      .enable_http3(true);
+```
+
+### Configuration Reference
+
+| Option | Method / Field | Default | Description |
+|---|---|---|---|
+| Max Body Size | `.max_body_size(bytes)` / `limits.max_body_size` | `16 MB` | Inbound payload limit across H1, H2, and H3. Violations return `413 Payload Too Large`. |
+| Max Headers Size | `.max_headers_size(bytes)` / `limits.max_headers_size` | `64 KB` | Maximum total HTTP header section size. Violations return `431 Request Header Fields Too Large`. |
+| Max URI Length | `.max_uri_length(bytes)` / `limits.max_uri_length` | `8 KB` | Maximum request target length. Violations return `414 URI Too Long`. |
+| Ring Entries | `.ring_entries(n)` / `ring_entries` | `4096` | Kernel `io_uring` submission queue entries (SQEs) per worker event loop. |
+| Buffer Pool Entries | `.buffer_pool_entries(n)` / `buffer_pool_entries` | `8192` | Number of provided buffer slices registered with the kernel buffer pool group. |
+| Buffer Size | `.buffer_size(bytes)` / `buffer_size` | `4096` | Size in bytes of each provided buffer slice. |
+| TCP NoDelay | `.tcp_nodelay(bool)` / `tcp.nodelay` | `true` | Enables `TCP_NODELAY` to eliminate Nagle's algorithm delay. |
+| TCP KeepAlive | `.tcp_keepalive(bool, idle, intvl, cnt)` / `tcp.keepalive` | `true` | Enables `SO_KEEPALIVE` with idle timer (30s), probe interval (10s), and retry count (3). |
+| H2 Max Concurrent Streams | `.h2_max_concurrent_streams(n)` / `h2_max_concurrent_streams` | `256` | Maximum number of concurrent active HTTP/2 streams per client connection. |
+| H2 Initial Window Size | `.h2_initial_window_size(n)` / `h2_initial_window_size` | `1 MB` | Initial HTTP/2 stream and connection flow-control window size in bytes. |
+| Rapid Reset Burst Limit | `.rst_burst_limit(n)` / `rst_burst_limit` | `1000` | Flood mitigation: threshold of rapid stream resets allowed before terminating connection. |
+| Enable HTTP/3 | `.enable_http3(bool)` / `enable_http3` | `true` | Enables HTTP/3 (QUIC) over UDP for all TLS listener ports. |
+| WS Max Message Size | `.ws_max_message_size(bytes)` / `websocket.max_message_size` | `16 MB` | Maximum allowed WebSocket message size. Violations close with `1009 MessageTooBig`. |
+| WS Max Frame Size | `.ws_max_frame_size(bytes)` / `websocket.max_frame_size` | `16 MB` | Maximum single WebSocket frame payload limit. |
+| WS Require Masking | `.ws_require_masked_frames(bool)` / `websocket.require_masked_frames` | `true` | Enforces RFC 6455 §5.1 client frame masking. Can be disabled for internal reverse proxies. |
+| WS Auto Ping Interval | `.ws_auto_ping_interval(sec)` / `websocket.auto_ping_interval_sec` | `0` | Proactive heartbeat interval in seconds (`0` = disabled). |
 
 ---
 
