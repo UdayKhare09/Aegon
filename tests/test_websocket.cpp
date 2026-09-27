@@ -370,6 +370,120 @@ void test_pipelined_handshake_and_reconnection() {
     server.stop();
 }
 
+void test_websocket_config_limits_and_masking() {
+    std::cout << "[TEST 6] Testing WebSocketConfig limits and masking controls...\n";
+
+    // 1. Test MessageTooBig (1009) when payload > max_frame_size
+    {
+        MockTransport mock;
+        WebSocketConfig ws_cfg;
+        ws_cfg.max_frame_size = 100; // 100-byte frame limit
+        WebSocketSession session(mock, "/ws", nullptr, nullptr, ws_cfg);
+
+        // Feed a frame with 120 bytes payload (> 100 limit)
+        uint8_t mask[4] = {0x11, 0x22, 0x33, 0x44};
+        std::string large_payload(120, 'A');
+        std::string masked = large_payload;
+        for (size_t i = 0; i < masked.size(); ++i) {
+            masked[i] ^= mask[i % 4];
+        }
+
+        std::string wire;
+        wire.push_back(static_cast<char>(0x81)); // FIN + Text
+        wire.push_back(static_cast<char>(0x80 | 120)); // Masked + 120 bytes
+        wire.append(reinterpret_cast<const char*>(mask), 4);
+        wire.append(masked);
+
+        auto task = session.process_incoming_data(wire);
+        task.resume();
+
+        assert(session.is_closed());
+        // Verify mock received close frame with CloseCode::MessageTooBig (1009)
+        assert(!mock.written_frames_.empty());
+        FrameHeader resp_hdr{};
+        auto parse_res = parse_frame_header(mock.written_frames_, resp_hdr);
+        assert(parse_res == FrameParseResult::Complete);
+        assert(resp_hdr.opcode == Opcode::Close);
+        assert(resp_hdr.payload_len >= 2);
+        uint16_t code = 0;
+        std::memcpy(&code, mock.written_frames_.data() + resp_hdr.header_len, 2);
+        code = be16toh(code);
+        assert(code == static_cast<uint16_t>(CloseCode::MessageTooBig));
+        std::cout << "  -> Passed: Payload > max_frame_size triggered CloseCode::MessageTooBig (1009)\n";
+    }
+
+    // 2. Test require_masked_frames = false allows unmasked frames on HTTP/1
+    {
+        MockTransport mock;
+        WebSocketConfig ws_cfg;
+        ws_cfg.require_masked_frames = false;
+        WebSocketSession session(mock, "/ws", nullptr, nullptr, ws_cfg);
+
+        // Unmasked text frame: "UnmaskedOK" (len = 10)
+        std::string wire;
+        wire.push_back(static_cast<char>(0x81)); // FIN + Text
+        wire.push_back(static_cast<char>(10));   // Unmasked (mask bit = 0) + 10 bytes
+        wire.append("UnmaskedOK");
+
+        auto task = session.process_incoming_data(wire);
+        task.resume();
+
+        assert(!session.is_closed());
+        assert(!mock.written_frames_.empty());
+        FrameHeader resp_hdr{};
+        auto parse_res = parse_frame_header(mock.written_frames_, resp_hdr);
+        assert(parse_res == FrameParseResult::Complete);
+        assert(resp_hdr.opcode == Opcode::Text);
+        std::string_view echoed = mock.written_frames_.substr(resp_hdr.header_len, resp_hdr.payload_len);
+        assert(echoed == "UnmaskedOK");
+        std::cout << "  -> Passed: require_masked_frames = false successfully accepted unmasked frame\n";
+    }
+
+    // 3. Test require_masked_frames = true rejects unmasked frame with ProtocolError (1002)
+    {
+        MockTransport mock;
+        WebSocketConfig ws_cfg;
+        ws_cfg.require_masked_frames = true;
+        WebSocketSession session(mock, "/ws", nullptr, nullptr, ws_cfg);
+
+        // Unmasked text frame
+        std::string wire;
+        wire.push_back(static_cast<char>(0x81));
+        wire.push_back(static_cast<char>(5));
+        wire.append("Hello");
+
+        auto task = session.process_incoming_data(wire);
+        task.resume();
+
+        assert(session.is_closed());
+        assert(!mock.written_frames_.empty());
+        FrameHeader resp_hdr{};
+        auto parse_res = parse_frame_header(mock.written_frames_, resp_hdr);
+        assert(parse_res == FrameParseResult::Complete);
+        assert(resp_hdr.opcode == Opcode::Close);
+        uint16_t code = 0;
+        std::memcpy(&code, mock.written_frames_.data() + resp_hdr.header_len, 2);
+        code = be16toh(code);
+        assert(code == static_cast<uint16_t>(CloseCode::ProtocolError));
+        std::cout << "  -> Passed: require_masked_frames = true rejected unmasked frame with ProtocolError (1002)\n";
+    }
+
+    // 4. Test Server fluent WebSocket setters
+    {
+        Server server;
+        server.ws_max_message_size(1024 * 1024)
+              .ws_max_frame_size(512 * 1024)
+              .ws_require_masked_frames(false)
+              .ws_auto_ping_interval(45);
+
+        assert(server.websocket_config().max_message_size == 1024 * 1024);
+        assert(server.websocket_config().max_frame_size == 512 * 1024);
+        assert(server.websocket_config().require_masked_frames == false);
+        assert(server.websocket_config().auto_ping_interval_sec == 45);
+        std::cout << "  -> Passed: Server fluent WebSocket configuration validated\n";
+    }
+}
+
 int main() {
     std::signal(SIGPIPE, SIG_IGN);
     std::cout << "=== Running Aegon WebSocket Tests ===\n";
@@ -378,6 +492,7 @@ int main() {
     test_websocket_session_mock();
     test_live_websocket_server();
     test_pipelined_handshake_and_reconnection();
+    test_websocket_config_limits_and_masking();
     std::cout << "=== All WebSocket Tests Passed Successfully! ===\n";
     return 0;
 }

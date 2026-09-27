@@ -5,14 +5,16 @@ namespace aegon::http::websocket {
 
 WebSocketSession::WebSocketSession(IWebSocketTransport& transport, std::string path,
                                    WebSocketHandler handler,
-                                   WebSocketEchoHandler echo_handler)
+                                   WebSocketEchoHandler echo_handler,
+                                   const WebSocketConfig& config)
     : transport_(transport),
       ws_(transport, std::move(path)),
       handler_(std::move(handler)),
-      echo_handler_(std::move(echo_handler))
+      echo_handler_(std::move(echo_handler)),
+      config_(config)
 {
-    stream_buf_.reserve(4096);
-    batch_out_.reserve(4096);
+    stream_buf_.reserve(config_.initial_buffer_capacity);
+    batch_out_.reserve(config_.initial_buffer_capacity);
 }
 
 core::Task<bool> WebSocketSession::process_incoming_data(std::string_view data) {
@@ -60,8 +62,14 @@ core::Task<bool> WebSocketSession::process_incoming_data(std::string_view data) 
 
         if (res == FrameParseResult::ProtocolError) {
             is_closed_ = true;
-            ws_.mark_closed();
             co_await ws_.close(CloseCode::ProtocolError, "Protocol Error");
+            co_return false;
+        }
+
+        // RFC 6455 §7.4.1 / §5.2 Payload and Message Size Enforcement -> CloseCode::MessageTooBig (1009)
+        if (header.payload_len > config_.max_frame_size || header.payload_len > config_.max_message_size) {
+            is_closed_ = true;
+            co_await ws_.close(CloseCode::MessageTooBig, "Message Too Big");
             co_return false;
         }
 
@@ -75,10 +83,9 @@ core::Task<bool> WebSocketSession::process_incoming_data(std::string_view data) 
         uint8_t* payload_ptr = const_cast<uint8_t*>(reinterpret_cast<const uint8_t*>(input_source.data() + consumed + header.header_len));
         if (header.masked) {
             unmask_payload_inplace(payload_ptr, header.payload_len, header.mask_key);
-        } else if (transport_.protocol() == TransportProtocol::Http1) {
+        } else if (config_.require_masked_frames && transport_.protocol() == TransportProtocol::Http1) {
             // RFC 6455 §5.1: Client-to-server frames MUST be masked on TCP/HTTP1
             is_closed_ = true;
-            ws_.mark_closed();
             co_await ws_.close(CloseCode::ProtocolError, "Unmasked client frame");
             co_return false;
         }

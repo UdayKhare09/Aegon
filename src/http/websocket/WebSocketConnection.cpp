@@ -6,10 +6,11 @@ namespace aegon::http::websocket {
 
 WebSocketConnection::WebSocketConnection(core::EventLoop& loop, int client_fd, std::string path,
                                          WebSocketHandler handler,
-                                         WebSocketEchoHandler echo_handler)
+                                         WebSocketEchoHandler echo_handler,
+                                         const WebSocketConfig& config)
     : loop_(loop),
       client_fd_(client_fd),
-      session_(*this, std::move(path), std::move(handler), std::move(echo_handler))
+      session_(*this, std::move(path), std::move(handler), std::move(echo_handler), config)
 {
 }
 

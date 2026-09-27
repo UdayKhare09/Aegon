@@ -3,6 +3,7 @@
 #include "http/websocket/WebSocket.h"
 #include "http/websocket/WebSocketFrame.h"
 #include "http/websocket/WebSocketTransport.h"
+#include "http/ServerConfig.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -18,12 +19,14 @@ class WebSocketSession {
 public:
     WebSocketSession(IWebSocketTransport& transport, std::string path = "",
                      WebSocketHandler handler = nullptr,
-                     WebSocketEchoHandler echo_handler = nullptr);
+                     WebSocketEchoHandler echo_handler = nullptr,
+                     const WebSocketConfig& config = {});
 
     WebSocket& websocket() noexcept { return ws_; }
     const WebSocket& websocket() const noexcept { return ws_; }
 
     [[nodiscard]] bool is_closed() const noexcept { return is_closed_ || !ws_.is_open(); }
+    [[nodiscard]] const WebSocketConfig& config() const noexcept { return config_; }
 
     /**
      * @brief Feeds incoming raw bytes received from transport.
@@ -37,6 +40,7 @@ private:
     WebSocket ws_;
     WebSocketHandler handler_{nullptr};
     WebSocketEchoHandler echo_handler_{nullptr};
+    WebSocketConfig config_{};
     std::string stream_buf_;
     std::string batch_out_;
     bool is_closed_{false};

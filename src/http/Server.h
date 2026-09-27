@@ -302,6 +302,29 @@ public:
         return *this;
     }
 
+    // WebSocket configuration
+    Server& websocket(const WebSocketConfig& ws_cfg) noexcept {
+        config_.websocket = ws_cfg;
+        return *this;
+    }
+    [[nodiscard]] const WebSocketConfig& websocket_config() const noexcept { return config_.websocket; }
+    Server& ws_max_message_size(size_t bytes) noexcept {
+        config_.websocket.max_message_size = bytes;
+        return *this;
+    }
+    Server& ws_max_frame_size(size_t bytes) noexcept {
+        config_.websocket.max_frame_size = bytes;
+        return *this;
+    }
+    Server& ws_require_masked_frames(bool require) noexcept {
+        config_.websocket.require_masked_frames = require;
+        return *this;
+    }
+    Server& ws_auto_ping_interval(uint32_t seconds) noexcept {
+        config_.websocket.auto_ping_interval_sec = seconds;
+        return *this;
+    }
+
     // Run single-threaded event loop
     void run();
 

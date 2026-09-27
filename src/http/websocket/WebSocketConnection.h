@@ -20,7 +20,8 @@ class WebSocketConnection : public IWebSocketTransport {
 public:
     WebSocketConnection(core::EventLoop& loop, int client_fd, std::string path,
                         WebSocketHandler handler = nullptr,
-                        WebSocketEchoHandler echo_handler = nullptr);
+                        WebSocketEchoHandler echo_handler = nullptr,
+                        const WebSocketConfig& config = {});
 
     ~WebSocketConnection() override = default;
 

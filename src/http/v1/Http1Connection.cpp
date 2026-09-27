@@ -263,7 +263,8 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                 }
 
                 websocket::WebSocketConnection ws_conn(loop_, client_fd_, std::string(req.path()),
-                                                      ws_entry->handler, ws_entry->echo_handler);
+                                                      ws_entry->handler, ws_entry->echo_handler,
+                                                      config_.websocket);
                 co_await ws_conn.run(std::move(trailing));
                 co_return;
             }
