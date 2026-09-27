@@ -47,6 +47,7 @@ core::Task<void> test_lua_scripting(RedisClient& client) {
     std::cout << "  -> EVALSHA executed successfully, verified GET: " << *val << "\n";
 
     // 4. eval_script automatic SHA1 computation and NOSCRIPT fallback
+    (void)co_await client.del("lua:counter");
     std::string auto_script = "return redis.call('INCR', KEYS[1])";
     resp = co_await client.eval_script(auto_script, {"lua:counter"});
     assert(resp.is_integer() && resp.as_integer() == 1);
