@@ -7,6 +7,7 @@
 #include "core/Task.h"
 #include <openssl/ssl.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <string>
 

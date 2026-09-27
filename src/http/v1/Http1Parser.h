@@ -17,7 +17,8 @@ enum class ParseStatus {
     NotImplemented,
     UriTooLong,
     HeadersTooLarge,
-    PayloadTooLarge
+    PayloadTooLarge,
+    ExpectationFailed
 };
 
 class Http1Parser {
@@ -109,7 +110,12 @@ public:
             }
         }
 
-        // RFC 9112 §3.2 / RFC 3986: request-target must be ASCII without CTLs, NUL, or high bytes
+        // RFC 9112 §3.2 / RFC 3986: request-target validation (no fragments, no poison %00, no CRLF)
+        if (!is_valid_request_target(full_path)) {
+            return ParseStatus::Error;
+        }
+
+        // Must be ASCII without CTLs, NUL, or high bytes
         for (char c : full_path) {
             unsigned char uc = static_cast<unsigned char>(c);
             if (uc <= 0x20 || uc >= 0x7F) {
@@ -179,6 +185,9 @@ public:
 
             size_t header_end = aegon::core::simd::SimdString::find_crlf(buffer, cursor);
             if (header_end == std::string_view::npos) {
+                if (buffer.size() - req_line_end > MAX_HEADERS_SIZE) {
+                    return ParseStatus::HeadersTooLarge;
+                }
                 return ParseStatus::NeedMoreData;
             }
 
@@ -238,26 +247,11 @@ public:
                     return ParseStatus::Error; // Duplicate Content-Length forbidden
                 }
                 has_content_length = true;
-                if (value.empty()) {
-                    return ParseStatus::Error; // Empty Content-Length forbidden
+                auto cl_opt = parse_valid_content_length(value);
+                if (!cl_opt) {
+                    return ParseStatus::Error;
                 }
-                content_length = 0;
-                size_t digits = 0;
-                for (char c : value) {
-                    if (c >= '0' && c <= '9') {
-                        ++digits;
-                        if (digits > 19) {
-                            return ParseStatus::Error; // Integer overflow -> 400
-                        }
-                        size_t next = content_length * 10 + (c - '0');
-                        if (next < content_length) {
-                            return ParseStatus::Error; // Overflow -> 400
-                        }
-                        content_length = next;
-                    } else {
-                        return ParseStatus::Error; // Invalid non-digit
-                    }
-                }
+                content_length = *cl_opt;
                 if (content_length > MAX_BODY_SIZE) {
                     return ParseStatus::PayloadTooLarge;
                 }
@@ -309,6 +303,8 @@ public:
             } else if (iequals(name, "Expect")) {
                 if (iequals(value, "100-continue")) {
                     req.set_expect_continue(true);
+                } else {
+                    return ParseStatus::ExpectationFailed;
                 }
             } else if (iequals(name, "Upgrade")) {
                 if (iequals(value, "h2c")) {
@@ -364,7 +360,7 @@ public:
                 size_t semi = aegon::core::simd::SimdString::find_char(size_line, ';');
                 if (semi != std::string_view::npos) {
                     std::string_view ext = size_line.substr(semi + 1);
-                    if (ext.empty()) {
+                    if (ext.empty() || ext.size() > 1024) {
                         return ParseStatus::Error;
                     }
                     size_t ext_pos = 0;
@@ -598,6 +594,10 @@ public:
                 std::string_view size_line = buffer.substr(chunk_cursor, line_end - chunk_cursor);
                 size_t semi = size_line.find(';');
                 if (semi != std::string_view::npos) {
+                    std::string_view ext = size_line.substr(semi + 1);
+                    if (ext.empty() || ext.size() > 1024) {
+                        return ParseStatus::Error;
+                    }
                     size_line = size_line.substr(0, semi);
                 }
 

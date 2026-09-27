@@ -382,6 +382,11 @@ public:
      * Invokes custom or standard RFC 7807 handlers for 404 (Not Found) and 405 (Method Not Allowed).
      */
     core::Task<void> dispatch(Request& req, Response& res, const ServiceRegistry* services) const {
+        if (req.method() == Method::OPTIONS && req.path() == "*") {
+            res.status(StatusCode::Ok).header("Allow", "GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH").text("");
+            co_return;
+        }
+
         auto match_res = match(req);
         Context ctx(req, res, services);
 

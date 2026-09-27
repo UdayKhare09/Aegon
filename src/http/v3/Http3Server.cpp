@@ -131,16 +131,15 @@ void Http3Server::check_expiries() {
     uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
 
-    std::vector<Http3Connection*> ticked;
+    std::unordered_set<Http3Connection*> ticked;
     ticked.reserve(connections_.size());
 
     for (auto& [_, conn] : connections_) {
         if (!conn || conn->is_closed()) continue;
         auto* raw = conn.get();
-        if (std::find(ticked.begin(), ticked.end(), raw) != ticked.end()) {
+        if (!ticked.insert(raw).second) {
             continue;
         }
-        ticked.push_back(raw);
 
         if (now >= raw->get_expiry()) {
             raw->handle_expiry();
@@ -203,6 +202,18 @@ core::Task<void> Http3Server::dispatch_datagram(std::span<const uint8_t> pkt,
             for (const auto& scid_str : conn->source_conn_ids()) {
                 connections_.emplace(scid_str, conn);
             }
+
+            // Dynamically track connection IDs generated during connection continuation
+            new_conn->set_cid_callbacks(
+                [this, weak = std::weak_ptr<Http3Connection>(new_conn)](std::string_view cid) {
+                    if (auto c = weak.lock()) {
+                        connections_.emplace(std::string(cid), c);
+                    }
+                },
+                [this](std::string_view cid) {
+                    connections_.erase(cid);
+                }
+            );
         }
     }
 

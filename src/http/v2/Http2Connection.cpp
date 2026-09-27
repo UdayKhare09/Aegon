@@ -66,7 +66,15 @@ Http2Connection::Http2Connection(core::EventLoop& loop, int client_fd, const Rou
     nghttp2_session_callbacks_set_on_invalid_frame_recv_callback(callbacks, on_invalid_frame_recv_cb);
     nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, on_stream_close_cb);
 
-    nghttp2_session_server_new(&session_, callbacks, this);
+    nghttp2_option* option;
+    nghttp2_option_new(&option);
+    nghttp2_option_set_max_continuations(option, 8);               // CVE-2024-27983 CONTINUATION flood
+    nghttp2_option_set_max_outbound_ack(option, 100);              // PING / SETTINGS ACK flood
+    nghttp2_option_set_stream_reset_rate_limit(option, 1000, 33);  // CVE-2023-44487 Rapid Reset
+    nghttp2_option_set_glitch_rate_limit(option, 1000, 33);        // Malformed frames flood
+
+    nghttp2_session_server_new2(&session_, callbacks, this, option);
+    nghttp2_option_del(option);
     nghttp2_session_callbacks_del(callbacks);
 }
 
@@ -136,6 +144,9 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
     if (n == ":method") {
         stream->req.set_method(string_to_method(v));
     } else if (n == ":path") {
+        if (!is_valid_request_target(v)) {
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        }
         if (v == "*" && stream->req.method() != Method::OPTIONS && stream->req.method() != Method::UNKNOWN) {
             return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
         }
@@ -164,6 +175,20 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
     } else if (n.starts_with(':')) {
         // Other pseudo headers (:scheme, etc.)
     } else {
+        if (core::simd::SimdString::iequals(n, "content-length")) {
+            auto cl_opt = parse_valid_content_length(v);
+            if (!cl_opt) {
+                return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE; // RFC 9113 §8.2.1 malformed content-length -> PROTOCOL_ERROR
+            }
+            if (*cl_opt > MAX_BODY_SIZE && stream->error_status == StatusCode::Ok) {
+                stream->error_status = StatusCode::PayloadTooLarge;
+            }
+        }
+        if (core::simd::SimdString::iequals(n, "expect")) {
+            if (!core::simd::SimdString::iequals(v, "100-continue") && stream->error_status == StatusCode::Ok) {
+                stream->error_status = StatusCode::ExpectationFailed;
+            }
+        }
         stream->header_storage.emplace_back(std::string(n), std::string(v));
         const auto& back = stream->header_storage.back();
         stream->req.headers().add(back.first, back.second);

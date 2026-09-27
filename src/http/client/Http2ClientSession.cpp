@@ -210,7 +210,13 @@ bool Http2ClientSession::init_session() {
     nghttp2_session_callbacks_set_on_frame_recv_callback(callbacks, on_h2_frame_recv_cb);
     nghttp2_session_callbacks_set_on_stream_close_callback(callbacks, on_h2_stream_close_cb);
 
-    int rv = nghttp2_session_client_new(&session_, callbacks, this);
+    nghttp2_option* option = nullptr;
+    nghttp2_option_new(&option);
+    nghttp2_option_set_max_continuations(option, 8);
+    nghttp2_option_set_max_outbound_ack(option, 100);
+
+    int rv = nghttp2_session_client_new2(&session_, callbacks, this, option);
+    nghttp2_option_del(option);
     nghttp2_session_callbacks_del(callbacks);
     if (rv != 0 || !session_) return false;
 

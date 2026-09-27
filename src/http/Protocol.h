@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string_view>
 #include <string>
+#include <optional>
 #include <cctype>
 
 namespace aegon::http {
@@ -102,6 +103,7 @@ enum class StatusCode : uint16_t {
     PayloadTooLarge = 413,
     UriTooLong = 414,
     UnsupportedMediaType = 415,
+    ExpectationFailed = 417,
     UnprocessableEntity = 422,
     UpgradeRequired = 426,
     TooManyRequests = 429,
@@ -146,6 +148,7 @@ constexpr std::string_view status_phrase(StatusCode code) noexcept {
         case StatusCode::PayloadTooLarge: return "Payload Too Large";
         case StatusCode::UriTooLong: return "URI Too Long";
         case StatusCode::UnsupportedMediaType: return "Unsupported Media Type";
+        case StatusCode::ExpectationFailed: return "Expectation Failed";
         case StatusCode::UnprocessableEntity: return "Unprocessable Entity";
         case StatusCode::UpgradeRequired: return "Upgrade Required";
         case StatusCode::TooManyRequests: return "Too Many Requests";
@@ -206,4 +209,44 @@ inline std::string to_lower_ascii(std::string_view sv) {
     return s;
 }
 
+/**
+ * @brief Validates request target / path per RFC 9112 §3.2, RFC 9113 §8.3.1, RFC 9114 §4.3.1
+ * Rejects URI fragments (#), percent-encoded NUL (%00), and percent-encoded CRLF (%0d, %0a).
+ */
+inline bool is_valid_request_target(std::string_view target) noexcept {
+    if (target.empty()) return false;
+    for (size_t i = 0; i < target.size(); ++i) {
+        char c = target[i];
+        if (c == '#') return false; // RFC 9112 §3.2: fragment prohibited in request target
+        if (c == '%') {
+            if (i + 2 < target.size()) {
+                char h1 = target[i + 1];
+                char h2 = target[i + 2];
+                // Reject %00 (poison NUL byte)
+                if (h1 == '0' && h2 == '0') return false;
+                // Reject %0D / %0A (CRLF injection)
+                if (h1 == '0' && (h2 == 'd' || h2 == 'D' || h2 == 'a' || h2 == 'A')) return false;
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Strictly parses and validates decimal Content-Length without overflow
+ */
+inline std::optional<size_t> parse_valid_content_length(std::string_view value) noexcept {
+    if (value.empty() || value.size() > 19) return std::nullopt;
+    size_t len = 0;
+    for (char c : value) {
+        if (c < '0' || c > '9') return std::nullopt;
+        size_t next = len * 10 + (c - '0');
+        if (next < len) return std::nullopt;
+        len = next;
+    }
+    return len;
+}
+
 } // namespace aegon::http
+
+

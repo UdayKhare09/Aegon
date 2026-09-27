@@ -86,6 +86,16 @@ Http3Connection::~Http3Connection() {
 
 void Http3Connection::add_source_conn_id(std::string_view cid) {
     scids_.emplace_back(cid);
+    if (on_cid_added_) {
+        on_cid_added_(cid);
+    }
+}
+
+void Http3Connection::remove_source_conn_id(std::string_view cid) {
+    std::erase_if(scids_, [&](const std::string& s) { return s == cid; });
+    if (on_cid_removed_) {
+        on_cid_removed_(cid);
+    }
 }
 
 void Http3Connection::setup_http3_streams() {
@@ -173,7 +183,9 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
         return 0;
     };
 
-    qcb.remove_connection_id = [](ngtcp2_conn*, const ngtcp2_cid*, void*) -> int {
+    qcb.remove_connection_id = [](ngtcp2_conn*, const ngtcp2_cid* cid, void* user_data) -> int {
+        auto* self = static_cast<Http3Connection*>(user_data);
+        self->remove_source_conn_id(std::string_view(reinterpret_cast<const char*>(cid->data), cid->datalen));
         return 0;
     };
 
@@ -371,6 +383,9 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
     } else if (n == ":path") {
         if (stream->seen_path) return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         stream->seen_path = true;
+        if (!is_valid_request_target(v)) {
+            return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
+        }
         if (v == "*" && stream->req.method() != Method::OPTIONS && stream->seen_method) {
             return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         }
@@ -405,6 +420,20 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     } else {
         stream->seen_regular_headers = true;
+        if (core::simd::SimdString::iequals(n, "content-length")) {
+            auto cl_opt = parse_valid_content_length(v);
+            if (!cl_opt) {
+                return NGHTTP3_ERR_MALFORMED_HTTP_HEADER; // RFC 9114 §4.2 malformed content-length -> H3_MESSAGE_ERROR
+            }
+            if (*cl_opt > MAX_BODY_SIZE && stream->error_status == StatusCode::Ok) {
+                stream->error_status = StatusCode::PayloadTooLarge;
+            }
+        }
+        if (core::simd::SimdString::iequals(n, "expect")) {
+            if (!core::simd::SimdString::iequals(v, "100-continue") && stream->error_status == StatusCode::Ok) {
+                stream->error_status = StatusCode::ExpectationFailed;
+            }
+        }
         stream->header_storage.emplace_back(std::string(n), std::string(v));
         const auto& back = stream->header_storage.back();
         stream->req.headers().add(back.first, back.second);

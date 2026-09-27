@@ -18,6 +18,7 @@
 #include <deque>
 #include <span>
 #include <cstdint>
+#include <functional>
 
 #include "http/ServiceRegistry.h"
 
@@ -97,6 +98,13 @@ public:
 
     void setup_http3_streams();
     void add_source_conn_id(std::string_view cid);
+    void remove_source_conn_id(std::string_view cid);
+
+    using CidCallback = std::function<void(std::string_view)>;
+    void set_cid_callbacks(CidCallback on_added, CidCallback on_removed) {
+        on_cid_added_ = std::move(on_added);
+        on_cid_removed_ = std::move(on_removed);
+    }
 
     // nghttp3 callbacks
     int on_stream_header(int64_t stream_id, int32_t token, nghttp3_rcbuf* name, nghttp3_rcbuf* value, uint8_t flags);
@@ -140,6 +148,8 @@ private:
     uint32_t version_{0};
     ngtcp2_cid client_dcid_{};
     ngtcp2_cid client_scid_{};
+    CidCallback on_cid_added_{nullptr};
+    CidCallback on_cid_removed_{nullptr};
 };
 
 } // namespace aegon::http::v3

@@ -35,6 +35,9 @@ inline std::optional<Response> make_http1_parse_error_response(v1::ParseStatus s
         case v1::ParseStatus::PayloadTooLarge:
             res.status(StatusCode::PayloadTooLarge).text("Payload Too Large: maximum body size exceeded");
             return res;
+        case v1::ParseStatus::ExpectationFailed:
+            res.status(StatusCode::ExpectationFailed).text("Expectation Failed");
+            return res;
         case v1::ParseStatus::Error:
             res.status(StatusCode::BadRequest).text("Bad Request");
             return res;
@@ -328,6 +331,21 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
                     break;
                 }
 
+                if (req.is_websocket_upgrade()) {
+                    auto ws_ver = req.headers().get("Sec-WebSocket-Version");
+                    if (!ws_ver || *ws_ver != "13") {
+                        Response ver_res;
+                        ver_res.status(StatusCode::UpgradeRequired)
+                               .header("Sec-WebSocket-Version", "13")
+                               .text("Upgrade Required: Sec-WebSocket-Version 13 required");
+                        std::string out;
+                        ver_res.serialize_http1(out);
+                        (void)(co_await tls_stream.write_plaintext(out.data(), out.size()));
+                        keep_alive = false;
+                        break;
+                    }
+                }
+
                 Response res;
                 co_await router_.dispatch(req, res, services_.get());
 
@@ -467,8 +485,30 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
             }
 
             // RFC 6455 WebSocket Upgrade
-            const auto* ws_entry = router_.find_ws(req.path());
-            if (ws_entry && req.is_websocket_upgrade()) {
+            if (req.is_websocket_upgrade()) {
+                auto ws_ver = req.headers().get("Sec-WebSocket-Version");
+                if (!ws_ver || *ws_ver != "13") {
+                    Response ver_res;
+                    ver_res.status(StatusCode::UpgradeRequired)
+                           .header("Sec-WebSocket-Version", "13")
+                           .text("Upgrade Required: Sec-WebSocket-Version 13 required");
+                    std::string out;
+                    ver_res.serialize_http1(out);
+                    (void)(co_await loop.ring().send_all(client_fd, out));
+                    keep_alive = false;
+                    break;
+                }
+
+                const auto* ws_entry = router_.find_ws(req.path());
+                if (!ws_entry) {
+                    Response not_found;
+                    not_found.status(StatusCode::NotFound).text("WebSocket endpoint not found");
+                    std::string out;
+                    not_found.serialize_http1(out);
+                    (void)(co_await loop.ring().send_all(client_fd, out));
+                    keep_alive = false;
+                    break;
+                }
                 std::string_view key = req.sec_websocket_key();
                 if (key.empty()) {
                     if (auto k = req.headers().get("Sec-WebSocket-Key")) {
@@ -572,6 +612,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
         }
     }
 
+    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
     (void)(co_await loop.ring().close(client_fd));
 }
 
@@ -629,6 +670,14 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, uint1
             }
             int nodelay = 1;
             ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+            int keepalive = 1;
+            ::setsockopt(accept_res.fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+            int keepidle = 30;  // 30s before sending keepalive probes
+            ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
+            int keepintvl = 10; // 10s between keepalive probes
+            ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+            int keepcnt = 3;    // Drop dead connection after 3 missed probes
+            ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
             if (is_tls && tls_ctx_) {
                 loop.spawn(handle_tls_connection(loop, accept_res.fd, port));
             } else {
