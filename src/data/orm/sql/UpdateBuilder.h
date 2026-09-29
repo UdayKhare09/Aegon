@@ -4,6 +4,7 @@
 #include "Table.h"
 #include "Expression.h"
 #include "QueryResult.h"
+#include "SqlParam.h"
 #include <string>
 #include <vector>
 
@@ -12,7 +13,7 @@ namespace aegon::data::orm::sql {
 template <typename Entity>
 class UpdateBuilder {
     TableDef<Entity> schema_;
-    std::vector<std::pair<std::string, std::string>> updates_;
+    std::vector<std::pair<std::string, SqlParam>> updates_;
     std::vector<Condition> conditions_;
 
 public:
@@ -21,13 +22,13 @@ public:
 
     template <typename FieldType, typename ValueType>
     UpdateBuilder& set(FieldType Entity::* field, const ValueType& val) {
-        updates_.emplace_back(schema_.resolve_column_name(field), format_param_value(val));
+        updates_.emplace_back(schema_.resolve_column_name(field), make_sql_param(val));
         return *this;
     }
 
     template <typename ValueType>
     UpdateBuilder& set(std::string col, const ValueType& val) {
-        updates_.emplace_back(std::move(col), format_param_value(val));
+        updates_.emplace_back(std::move(col), make_sql_param(val));
         return *this;
     }
 
@@ -41,13 +42,13 @@ public:
 
     template <typename FieldType, typename ValueType>
     UpdateBuilder& where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {format_param_value(val)}});
+        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {make_sql_param(val)}});
         return *this;
     }
 
     template <typename ValueType>
     UpdateBuilder& where(std::string col, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, std::move(col), op, {format_param_value(val)}});
+        conditions_.push_back({Conjunction::And, std::move(col), op, {make_sql_param(val)}});
         return *this;
     }
 

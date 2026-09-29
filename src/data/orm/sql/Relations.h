@@ -2,6 +2,7 @@
 #include "core/Task.h"
 #include "PerCoreConnectionPool.h"
 #include "Expression.h"
+#include "SqlParam.h"
 #include <string>
 #include <vector>
 #include <optional>
@@ -263,7 +264,7 @@ public:
         requires (!std::is_same_v<std::decay_t<ID>, T>)
     core::Task<bool> remove(Connection& conn, const ID& item_id) {
         if (!remover_) throw std::runtime_error("HasMany: no remover mutator configured (is this a 1:N relation?)");
-        co_return co_await remover_(conn, owner_key_, format_param_value(item_id), data_);
+        co_return co_await remover_(conn, owner_key_, make_sql_param(item_id).to_debug_string(), data_);
     }
 
     core::Task<bool> remove(Connection& conn, const T& item) {
@@ -273,7 +274,7 @@ public:
             auto s = T::schema();
             for (const auto& [col, val] : s.extract_values(item, false)) {
                 if (col == s.primary_key_name()) {
-                    id_str = val;
+                    id_str = val.to_debug_string();
                     break;
                 }
             }
@@ -303,7 +304,7 @@ public:
         requires (!std::is_same_v<std::decay_t<ID>, T>)
     core::Task<bool> detach(Connection& conn, const ID& item_id) {
         if (!detacher_) throw std::runtime_error("HasMany: no detacher mutator configured (is this an N:M relation?)");
-        co_return co_await detacher_(conn, owner_key_, format_param_value(item_id), data_);
+        co_return co_await detacher_(conn, owner_key_, make_sql_param(item_id).to_debug_string(), data_);
     }
 
     core::Task<bool> detach(Connection& conn, const T& item) {
@@ -313,7 +314,7 @@ public:
             auto s = T::schema();
             for (const auto& [col, val] : s.extract_values(item, false)) {
                 if (col == s.primary_key_name()) {
-                    id_str = val;
+                    id_str = val.to_debug_string();
                     break;
                 }
             }

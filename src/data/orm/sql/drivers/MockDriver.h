@@ -16,6 +16,7 @@ public:
     int rollback_count_{0};
 
     std::vector<std::string> executed_sqls_;
+    // Stores debug-string representation of params for test assertions.
     std::vector<std::vector<std::string>> executed_params_;
     std::vector<DriverRowView> mock_results_;
     size_t next_execute_result_{1};
@@ -23,15 +24,25 @@ public:
     explicit MockConnection(DatabaseDialect dialect = DatabaseDialect::PostgreSQL)
         : dialect_(dialect) {}
 
-    core::Task<size_t> execute(std::string_view sql, const std::vector<std::string>& params) override {
+    core::Task<size_t> execute(std::string_view sql, std::span<const SqlParam> params) override {
         executed_sqls_.emplace_back(sql);
-        executed_params_.push_back(params);
+        std::vector<std::string> debug_params;
+        debug_params.reserve(params.size());
+        for (const auto& p : params) {
+            debug_params.push_back(p.to_debug_string());
+        }
+        executed_params_.push_back(std::move(debug_params));
         co_return next_execute_result_;
     }
 
-    core::Task<std::vector<DriverRowView>> query(std::string_view sql, const std::vector<std::string>& params) override {
+    core::Task<std::vector<DriverRowView>> query(std::string_view sql, std::span<const SqlParam> params) override {
         executed_sqls_.emplace_back(sql);
-        executed_params_.push_back(params);
+        std::vector<std::string> debug_params;
+        debug_params.reserve(params.size());
+        for (const auto& p : params) {
+            debug_params.push_back(p.to_debug_string());
+        }
+        executed_params_.push_back(std::move(debug_params));
         co_return mock_results_;
     }
 

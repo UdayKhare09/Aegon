@@ -2,9 +2,10 @@
 
 #include "Dialect.h"
 #include "RowView.h"
+#include "SqlParam.h"
 #include "QueryResult.h"
 #include "core/Task.h"
-#include <string>
+#include <span>
 #include <string_view>
 #include <vector>
 #include <memory>
@@ -20,11 +21,11 @@ class Connection {
 public:
     virtual ~Connection() = default;
 
-    // Asynchronous query execution returning number of affected rows (for INSERT/UPDATE/DELETE)
-    virtual core::Task<size_t> execute(std::string_view sql, const std::vector<std::string>& params) = 0;
+    // Asynchronous query execution returning number of affected rows (INSERT/UPDATE/DELETE)
+    virtual core::Task<size_t> execute(std::string_view sql, std::span<const SqlParam> params) = 0;
 
-    // Asynchronous query execution returning a collection of rows (for SELECT)
-    virtual core::Task<std::vector<DriverRowView>> query(std::string_view sql, const std::vector<std::string>& params) = 0;
+    // Asynchronous query execution returning a collection of rows (SELECT)
+    virtual core::Task<std::vector<DriverRowView>> query(std::string_view sql, std::span<const SqlParam> params) = 0;
 
     // Transaction lifecycle primitives
     virtual core::Task<void> begin_transaction() = 0;

@@ -8,6 +8,7 @@
 #include "DeleteBuilder.h"
 #include "core/Task.h"
 #include "OptimisticLockException.h"
+#include "OrmCache.h"
 #include <string>
 #include <vector>
 #include <optional>
@@ -15,19 +16,6 @@
 #include <chrono>
 
 namespace aegon::data::orm::sql {
-
-enum class DeferredCacheOpType {
-    Del,
-    Incr,
-    Set
-};
-
-struct DeferredCacheOp {
-    DeferredCacheOpType type;
-    std::string key;
-    std::string value{};
-    std::chrono::seconds ttl{300};
-};
 
 class Transaction {
     Connection& conn_;
@@ -80,15 +68,16 @@ public:
         if (!schema.is_cached()) return;
 
         if (schema.cache_config().invalidation == InvalidationMode::Partitioned && schema.cache_config().partition_extractor) {
-            std::string part_key = schema.table_name() + ":part:" + schema.cache_config().partition_extractor(entity) + ":epoch";
+            std::string part_key = format_cache_partition_epoch_key(schema.table_name(), schema.cache_config().partition_extractor(entity));
             deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, std::move(part_key), {}, {}});
         } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-            deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, schema.table_name() + ":epoch", {}, {}});
+            deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, format_cache_epoch_key(schema.table_name()), {}, {}});
         } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
             auto vals = schema.extract_values(entity, false);
             for (const auto& [col, val] : vals) {
-                if (!val.empty()) {
-                    deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, schema.table_name() + ":pred:" + col + ":" + val + ":epoch", {}, {}});
+                if (!val.is_null()) {
+                    std::string val_str = val.to_debug_string();
+                    deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, format_cache_pred_epoch_key(schema.table_name(), col, val_str), {}, {}});
                 }
             }
         }
@@ -100,14 +89,14 @@ public:
             } else {
                 auto vals = schema.extract_values(entity, false);
                 for (const auto& [col, val] : vals) {
-                    if (col == schema.primary_key_name() && !val.empty()) {
-                        pk_val = val;
+                    if (col == schema.primary_key_name() && !val.is_null()) {
+                        pk_val = val.to_debug_string();
                         break;
                     }
                 }
             }
             if (!pk_val.empty()) {
-                std::string id_key = schema.table_name() + ":id:" + pk_val;
+                std::string id_key = format_cache_id_key(schema.table_name(), pk_val);
                 deferred_cache_ops_->push_back({DeferredCacheOpType::Set, std::move(id_key), schema.serialize_entity_json(entity), schema.cache_config().ttl});
             }
         }
@@ -123,13 +112,13 @@ public:
         auto vals = schema.extract_values(entity, false);
         for (const auto& [col, val] : vals) {
             if (col == schema.primary_key_name()) {
-                pk_str = val;
+                pk_str = val.to_debug_string();
                 break;
             }
         }
 
         if (!pk_str.empty()) {
-            std::string id_key = schema.table_name() + ":id:" + pk_str;
+            std::string id_key = format_cache_id_key(schema.table_name(), pk_str);
             if (schema.cache_config().mutation_sync == MutationSync::UpdateOnWrite) {
                 deferred_cache_ops_->push_back({DeferredCacheOpType::Set, std::move(id_key), schema.serialize_entity_json(entity), schema.cache_config().ttl});
             } else {
@@ -138,19 +127,20 @@ public:
         }
 
         if (schema.cache_config().unique_column && schema.cache_config().unique_extractor) {
-            std::string u_key = schema.table_name() + ":" + *schema.cache_config().unique_column + ":" + schema.cache_config().unique_extractor(entity);
+            std::string u_key = format_cache_unique_key(schema.table_name(), *schema.cache_config().unique_column, schema.cache_config().unique_extractor(entity));
             deferred_cache_ops_->push_back({DeferredCacheOpType::Del, std::move(u_key), {}, {}});
         }
 
         if (schema.cache_config().invalidation == InvalidationMode::Partitioned && schema.cache_config().partition_extractor) {
-            std::string part_key = schema.table_name() + ":part:" + schema.cache_config().partition_extractor(entity) + ":epoch";
+            std::string part_key = format_cache_partition_epoch_key(schema.table_name(), schema.cache_config().partition_extractor(entity));
             deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, std::move(part_key), {}, {}});
         } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-            deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, schema.table_name() + ":epoch", {}, {}});
+            deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, format_cache_epoch_key(schema.table_name()), {}, {}});
         } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
             for (const auto& [col, val] : vals) {
-                if (!val.empty()) {
-                    deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, schema.table_name() + ":pred:" + col + ":" + val + ":epoch", {}, {}});
+                if (!val.is_null()) {
+                    std::string val_str = val.to_debug_string();
+                    deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, format_cache_pred_epoch_key(schema.table_name(), col, val_str), {}, {}});
                 }
             }
         }
@@ -162,14 +152,14 @@ public:
         auto schema = Entity::schema();
         if (!schema.is_cached()) return;
 
-        std::string id_str = format_param_value(id);
-        std::string id_key = schema.table_name() + ":id:" + id_str;
+        std::string id_str = make_sql_param(id).to_debug_string();
+        std::string id_key = format_cache_id_key(schema.table_name(), id_str);
         deferred_cache_ops_->push_back({DeferredCacheOpType::Del, std::move(id_key), {}, {}});
 
         if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
-            deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, schema.table_name() + ":epoch", {}, {}});
+            deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, format_cache_epoch_key(schema.table_name()), {}, {}});
         } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
-            deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, schema.table_name() + ":pred:" + schema.primary_key_name() + ":" + id_str + ":epoch", {}, {}});
+            deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, format_cache_pred_epoch_key(schema.table_name(), schema.primary_key_name(), id_str), {}, {}});
         }
     }
 
@@ -249,7 +239,7 @@ public:
         std::string pk_val;
         for (const auto& [col, val] : extracted) {
             if (col == pk_name) {
-                pk_val = val;
+                pk_val = val.to_debug_string();
                 break;
             }
         }
@@ -494,7 +484,7 @@ public:
         sql.append(p2);
         sql.append(");");
 
-        co_await conn_.execute(sql, {format_param_value(parent_id), format_param_value(child_id)});
+        co_await conn_.execute(sql, std::array{make_sql_param(parent_id), make_sql_param(child_id)});
     }
 
     template <typename JunctionEntity, typename ParentID, typename ChildID>
@@ -516,7 +506,7 @@ public:
         sql.append(p2);
         sql.append(";");
 
-        size_t n = co_await conn_.execute(sql, {format_param_value(parent_id), format_param_value(child_id)});
+        size_t n = co_await conn_.execute(sql, std::array{make_sql_param(parent_id), make_sql_param(child_id)});
         co_return n > 0;
     }
 
@@ -529,7 +519,7 @@ public:
         co_return co_await conn_.execute(query.sql, query.params);
     }
 
-    core::Task<size_t> execute(std::string_view sql, const std::vector<std::string>& params = {}) {
+    core::Task<size_t> execute(std::string_view sql, std::span<const SqlParam> params = {}) {
         co_return co_await conn_.execute(sql, params);
     }
 

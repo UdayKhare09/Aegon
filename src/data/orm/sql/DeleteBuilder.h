@@ -4,6 +4,7 @@
 #include "Table.h"
 #include "Expression.h"
 #include "QueryResult.h"
+#include "SqlParam.h"
 #include <string>
 #include <vector>
 
@@ -20,13 +21,13 @@ public:
 
     template <typename FieldType, typename ValueType>
     DeleteBuilder& where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {format_param_value(val)}});
+        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {make_sql_param(val)}});
         return *this;
     }
 
     template <typename ValueType>
     DeleteBuilder& where(std::string col, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, std::move(col), op, {format_param_value(val)}});
+        conditions_.push_back({Conjunction::And, std::move(col), op, {make_sql_param(val)}});
         return *this;
     }
 
@@ -42,13 +43,13 @@ public:
 
     template <typename FieldType, typename ValueType>
     DeleteBuilder& or_where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::Or, schema_.resolve_column_name(field), op, {format_param_value(val)}});
+        conditions_.push_back({Conjunction::Or, schema_.resolve_column_name(field), op, {make_sql_param(val)}});
         return *this;
     }
 
     template <typename ValueType>
     DeleteBuilder& or_where(std::string col, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::Or, std::move(col), op, {format_param_value(val)}});
+        conditions_.push_back({Conjunction::Or, std::move(col), op, {make_sql_param(val)}});
         return *this;
     }
 

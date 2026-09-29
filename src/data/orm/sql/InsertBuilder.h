@@ -3,6 +3,7 @@
 #include "Dialect.h"
 #include "Table.h"
 #include "QueryResult.h"
+#include "SqlParam.h"
 #include <string>
 #include <vector>
 

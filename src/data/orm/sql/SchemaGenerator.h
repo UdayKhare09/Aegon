@@ -6,121 +6,48 @@
 #include <string_view>
 #include <vector>
 
+#include <span>
+
 namespace aegon::data::orm::sql {
+
+std::string generate_ddl_impl(
+    DatabaseDialect dialect,
+    std::string_view table_name,
+    std::span<const ColumnMetadata> columns,
+    std::span<const TableConstraint> constraints,
+    std::span<const std::string> composite_pk_columns
+);
+
+std::vector<std::string> generate_indexes_impl(
+    DatabaseDialect dialect,
+    std::string_view table_name,
+    std::span<const ColumnMetadata> columns,
+    std::span<const TableConstraint> constraints
+);
+
+std::string generate_drop_table_impl(
+    DatabaseDialect dialect,
+    std::string_view table_name,
+    bool if_exists,
+    bool cascade
+);
 
 template <typename Entity>
 inline std::string generate_ddl(DatabaseDialect dialect) {
     auto schema = Entity::schema();
-    const auto& table_name = schema.table_name();
-    const auto& columns = schema.columns();
-
-    std::string sql = "CREATE TABLE IF NOT EXISTS ";
-    sql.append(DialectTraits::quote_identifier(dialect, table_name));
-    sql.append(" (\n");
-
-    std::vector<std::string> fk_constraints;
-
-    for (size_t i = 0; i < columns.size(); ++i) {
-        const auto& col = columns[i];
-        sql.append("    ");
-        sql.append(DialectTraits::quote_identifier(dialect, col.column_name));
-        sql.push_back(' ');
-
-        if (col.is_primary_key && col.is_auto_increment) {
-            sql.append(DialectTraits::auto_increment_pk(dialect));
-        } else {
-            sql.append(col.sql_type_fn(dialect, col.length));
-
-            if (col.is_primary_key) {
-                sql.append(" PRIMARY KEY");
-            } else {
-                if (!col.is_nullable) {
-                    sql.append(" NOT NULL");
-                }
-                if (col.is_unique) {
-                    sql.append(" UNIQUE");
-                }
-                if (col.is_created_at) {
-                    sql.append(" DEFAULT ");
-                    sql.append(DialectTraits::current_timestamp(dialect));
-                } else if (col.is_updated_at) {
-                    sql.append(" DEFAULT ");
-                    sql.append(DialectTraits::current_timestamp(dialect));
-                } else if (!col.default_value.empty()) {
-                    sql.append(" DEFAULT ");
-                    sql.append(col.default_value);
-                }
-            }
-        }
-
-        if (col.foreign_key) {
-            std::string fk_sql = "    CONSTRAINT fk_" + table_name + "_" + col.column_name +
-                                 " FOREIGN KEY (" + DialectTraits::quote_identifier(dialect, col.column_name) +
-                                 ") REFERENCES " + DialectTraits::quote_identifier(dialect, col.foreign_key->target_table) +
-                                 " (" + DialectTraits::quote_identifier(dialect, col.foreign_key->target_column) + ")";
-
-            if (col.foreign_key->on_delete != OnDeleteAction::NoAction) {
-                fk_sql.append(" ON DELETE ");
-                fk_sql.append(on_delete_action_to_sql(col.foreign_key->on_delete));
-            }
-            if (col.foreign_key->on_update != OnDeleteAction::NoAction) {
-                fk_sql.append(" ON UPDATE ");
-                fk_sql.append(on_delete_action_to_sql(col.foreign_key->on_update));
-            }
-            fk_constraints.push_back(std::move(fk_sql));
-        }
-
-        if (i + 1 < columns.size() || !fk_constraints.empty()) {
-            sql.append(",\n");
-        } else {
-            sql.push_back('\n');
-        }
-    }
-
-    for (size_t i = 0; i < fk_constraints.size(); ++i) {
-        sql.append(fk_constraints[i]);
-        if (i + 1 < fk_constraints.size()) {
-            sql.append(",\n");
-        } else {
-            sql.push_back('\n');
-        }
-    }
-
-    sql.append(");");
-    return sql;
+    return generate_ddl_impl(dialect, schema.table_name(), schema.columns(), schema.constraints(), schema.composite_pk_columns());
 }
 
 template <typename Entity>
 inline std::vector<std::string> generate_indexes(DatabaseDialect dialect) {
     auto schema = Entity::schema();
-    const auto& table_name = schema.table_name();
-    const auto& columns = schema.columns();
-
-    std::vector<std::string> indexes;
-
-    for (const auto& col : columns) {
-        if (col.is_indexed && !col.is_primary_key && !col.is_unique) {
-            std::string idx = "CREATE INDEX IF NOT EXISTS idx_" + table_name + "_" + col.column_name +
-                              " ON " + DialectTraits::quote_identifier(dialect, table_name) +
-                              " (" + DialectTraits::quote_identifier(dialect, col.column_name) + ");";
-            indexes.push_back(std::move(idx));
-        }
-    }
-
-    return indexes;
+    return generate_indexes_impl(dialect, schema.table_name(), schema.columns(), schema.constraints());
 }
 
 template <typename Entity>
 inline std::string generate_drop_table(DatabaseDialect dialect, bool if_exists = true, bool cascade = false) {
     auto schema = Entity::schema();
-    std::string sql = "DROP TABLE ";
-    if (if_exists) sql.append("IF EXISTS ");
-    sql.append(DialectTraits::quote_identifier(dialect, schema.table_name()));
-    if (cascade && dialect == DatabaseDialect::PostgreSQL) {
-        sql.append(" CASCADE");
-    }
-    sql.push_back(';');
-    return sql;
+    return generate_drop_table_impl(dialect, schema.table_name(), if_exists, cascade);
 }
 
 } // namespace aegon::data::orm::sql

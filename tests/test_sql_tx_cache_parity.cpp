@@ -172,12 +172,12 @@ core::Task<void> run_tests() {
 
         // Test tx.link and tx.unlink
         co_await tx.link<UserRole>(a.id, 100);
-        auto count_linked = co_await tx.count(tx.from<UserRole>().where(&UserRole::user_id, Op::Eq, a.id));
+        [[maybe_unused]] auto count_linked = co_await tx.count(tx.from<UserRole>().where(&UserRole::user_id, Op::Eq, a.id));
         assert(count_linked == 1);
 
-        bool unlinked = co_await tx.unlink<UserRole>(a.id, 100);
+        [[maybe_unused]] bool unlinked = co_await tx.unlink<UserRole>(a.id, 100);
         assert(unlinked);
-        auto count_unlinked = co_await tx.count(tx.from<UserRole>().where(&UserRole::user_id, Op::Eq, a.id));
+        [[maybe_unused]] auto count_unlinked = co_await tx.count(tx.from<UserRole>().where(&UserRole::user_id, Op::Eq, a.id));
         assert(count_unlinked == 0);
     });
     std::cout << "[PASS] Transaction feature parity (insert auto-id, find_by_unique, link, unlink)\n";
@@ -204,7 +204,7 @@ core::Task<void> run_tests() {
     std::cout << "[PASS] Deferred cache invalidation flushed on commit (fresh data served)\n";
 
     // --- TEST 3: Deferred Cache Safety on ROLLBACK ---
-    bool exception_caught = false;
+    [[maybe_unused]] bool exception_caught = false;
     try {
         co_await db.transaction([&](Transaction& tx) -> core::Task<void> {
             auto opt = co_await tx.find_by_id<Account>(1);

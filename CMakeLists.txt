@@ -92,8 +92,18 @@ target_link_libraries(aegon_memory PUBLIC
 )
 
 # 5. Unified ORM & SQL Query Engine (aegon_orm)
-add_library(aegon_orm INTERFACE)
-target_link_libraries(aegon_orm INTERFACE
+add_library(aegon_orm
+    src/data/orm/sql/SqlParam.cpp
+    src/data/orm/sql/Dialect.cpp
+    src/data/orm/sql/Expression.cpp
+    src/data/orm/sql/SelectBuilder.cpp
+    src/data/orm/sql/OrmCache.cpp
+    src/data/orm/sql/SchemaGenerator.cpp
+    src/data/orm/sql/PerCoreConnectionPool.cpp
+    src/data/orm/sql/drivers/SqliteDriver.cpp
+    src/data/orm/sql/drivers/PostgresDriver.cpp
+)
+target_link_libraries(aegon_orm PUBLIC
     aegon_core
     glaze::glaze
     sqlite3
@@ -155,7 +165,7 @@ foreach(mod ${AEGON_MODULES})
     add_library(Aegon::${mod} ALIAS aegon_${mod})
 endforeach()
 
-foreach(tgt aegon_core aegon_config aegon_redis aegon_memory aegon_http aegon_gateway)
+foreach(tgt aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http aegon_gateway)
     target_include_directories(${tgt} PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -163,10 +173,7 @@ foreach(tgt aegon_core aegon_config aegon_redis aegon_memory aegon_http aegon_ga
     )
 endforeach()
 
-target_include_directories(aegon_orm INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/aegon>
+target_include_directories(aegon_orm PUBLIC
     $<$<BOOL:${PostgreSQL_FOUND}>:${PostgreSQL_INCLUDE_DIRS}>
 )
 

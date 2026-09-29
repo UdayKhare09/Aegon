@@ -5,6 +5,7 @@
 #include "Expression.h"
 #include "QueryResult.h"
 #include "RowView.h"
+#include "SqlParam.h"
 #include <string>
 #include <vector>
 #include <optional>
@@ -24,6 +25,37 @@ struct Page {
     bool has_next{false};
     bool has_prev{false};
 };
+
+QueryResult compile_select_query_impl(
+    DatabaseDialect dialect,
+    std::string_view table_name,
+    std::string_view select_all_prefix,
+    std::span<const std::string> projected_columns,
+    std::span<const Condition> conditions,
+    std::span<const std::string> group_bys,
+    std::span<const Condition> havings,
+    std::span<const OrderByClause> order_bys,
+    std::optional<size_t> limit,
+    std::optional<size_t> offset
+);
+
+QueryResult compile_count_query_impl(
+    DatabaseDialect dialect,
+    std::string_view table_name,
+    std::span<const Condition> conditions,
+    std::span<const std::string> group_bys,
+    std::span<const Condition> havings
+);
+
+QueryResult compile_aggregate_query_impl(
+    DatabaseDialect dialect,
+    std::string_view table_name,
+    std::string_view agg_func,
+    std::string_view col_expr,
+    std::span<const Condition> conditions,
+    std::span<const std::string> group_bys,
+    std::span<const Condition> havings
+);
 
 template <typename Entity>
 class SelectBuilder {
@@ -47,7 +79,7 @@ public:
 
     template <typename Val>
     SelectBuilder& partition(const Val& v) {
-        partition_value_ = format_param_value(v);
+        partition_value_ = make_sql_param(v).to_debug_string();
         return *this;
     }
 
@@ -57,7 +89,7 @@ public:
             const auto& target_col = *schema_.cache_config().partition_column;
             for (const auto& cond : conditions_) {
                 if (cond.conj == Conjunction::And && cond.column == target_col && cond.op == Op::Eq && !cond.values.empty()) {
-                    return cond.values[0];
+                    return cond.values[0].to_debug_string();
                 }
             }
         }
@@ -71,7 +103,7 @@ public:
         std::vector<std::pair<std::string, std::string>> preds;
         for (const auto& cond : conditions_) {
             if (cond.conj == Conjunction::And && cond.op == Op::Eq && !cond.values.empty()) {
-                preds.emplace_back(cond.column, cond.values[0]);
+                preds.emplace_back(cond.column, cond.values[0].to_debug_string());
             }
         }
         return preds;
@@ -136,7 +168,7 @@ public:
         for (const auto& p : q.params) {
             h ^= 0x5c;
             h *= 1099511628211ULL;
-            for (char c : p) {
+            for (char c : p.to_debug_string()) {
                 h ^= static_cast<uint8_t>(c);
                 h *= 1099511628211ULL;
             }
@@ -216,7 +248,7 @@ public:
             Condition c;
             c.conj = Conjunction::And;
             c.custom_compiler = [exists_fn, parent_tbl, child_conds = std::move(child_conds)](
-                DatabaseDialect dialect, size_t& param_idx, std::vector<std::string>& out_params) -> std::string {
+                DatabaseDialect dialect, size_t& param_idx, std::vector<SqlParam>& out_params) -> std::string {
                 return exists_fn(dialect, false, parent_tbl, child_conds, param_idx, out_params);
             };
             conditions_.push_back(std::move(c));
@@ -242,7 +274,7 @@ public:
             Condition c;
             c.conj = Conjunction::And;
             c.custom_compiler = [exists_fn, parent_tbl, child_conds = std::move(child_conds)](
-                DatabaseDialect dialect, size_t& param_idx, std::vector<std::string>& out_params) -> std::string {
+                DatabaseDialect dialect, size_t& param_idx, std::vector<SqlParam>& out_params) -> std::string {
                 return exists_fn(dialect, false, parent_tbl, child_conds, param_idx, out_params);
             };
             conditions_.push_back(std::move(c));
@@ -268,7 +300,7 @@ public:
             Condition c;
             c.conj = Conjunction::And;
             c.custom_compiler = [exists_fn, parent_tbl, child_conds = std::move(child_conds)](
-                DatabaseDialect dialect, size_t& param_idx, std::vector<std::string>& out_params) -> std::string {
+                DatabaseDialect dialect, size_t& param_idx, std::vector<SqlParam>& out_params) -> std::string {
                 return exists_fn(dialect, true, parent_tbl, child_conds, param_idx, out_params);
             };
             conditions_.push_back(std::move(c));
@@ -294,7 +326,7 @@ public:
             Condition c;
             c.conj = Conjunction::And;
             c.custom_compiler = [exists_fn, parent_tbl, child_conds = std::move(child_conds)](
-                DatabaseDialect dialect, size_t& param_idx, std::vector<std::string>& out_params) -> std::string {
+                DatabaseDialect dialect, size_t& param_idx, std::vector<SqlParam>& out_params) -> std::string {
                 return exists_fn(dialect, true, parent_tbl, child_conds, param_idx, out_params);
             };
             conditions_.push_back(std::move(c));
@@ -328,13 +360,13 @@ public:
     // Where conditions
     template <typename FieldType, typename ValueType>
     SelectBuilder& where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {format_param_value(val)}, nullptr});
+        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {make_sql_param(val)}, nullptr});
         return *this;
     }
 
     template <typename ValueType>
     SelectBuilder& where(std::string col, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, std::move(col), op, {format_param_value(val)}, nullptr});
+        conditions_.push_back({Conjunction::And, std::move(col), op, {make_sql_param(val)}, nullptr});
         return *this;
     }
 
@@ -350,21 +382,21 @@ public:
 
     template <typename FieldType, typename ValueType>
     SelectBuilder& or_where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::Or, schema_.resolve_column_name(field), op, {format_param_value(val)}, nullptr});
+        conditions_.push_back({Conjunction::Or, schema_.resolve_column_name(field), op, {make_sql_param(val)}, nullptr});
         return *this;
     }
 
     template <typename ValueType>
     SelectBuilder& or_where(std::string col, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::Or, std::move(col), op, {format_param_value(val)}, nullptr});
+        conditions_.push_back({Conjunction::Or, std::move(col), op, {make_sql_param(val)}, nullptr});
         return *this;
     }
 
     template <typename FieldType, typename Container>
     SelectBuilder& where_in(FieldType Entity::* field, const Container& values) {
-        std::vector<std::string> formatted;
+        std::vector<SqlParam> formatted;
         for (const auto& item : values) {
-            formatted.push_back(format_param_value(item));
+            formatted.push_back(make_sql_param(item));
         }
         conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), Op::In, std::move(formatted), nullptr});
         return *this;
@@ -372,7 +404,7 @@ public:
 
     template <typename FieldType, typename LowType, typename HighType>
     SelectBuilder& where_between(FieldType Entity::* field, const LowType& low, const HighType& high) {
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), Op::Between, {format_param_value(low), format_param_value(high)}, nullptr});
+        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), Op::Between, {make_sql_param(low), make_sql_param(high)}, nullptr});
         return *this;
     }
 
@@ -410,7 +442,7 @@ public:
     SelectBuilder& having(std::string raw_expr) {
         Condition c;
         c.conj = Conjunction::And;
-        c.custom_compiler = [expr = std::move(raw_expr)](DatabaseDialect, size_t&, std::vector<std::string>&) {
+        c.custom_compiler = [expr = std::move(raw_expr)](DatabaseDialect, size_t&, std::vector<SqlParam>&) {
             return expr;
         };
         havings_.push_back(std::move(c));
@@ -419,7 +451,7 @@ public:
 
     template <typename FieldType, typename ValueType>
     SelectBuilder& having(FieldType Entity::* field, Op op, const ValueType& val) {
-        havings_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {format_param_value(val)}, nullptr});
+        havings_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {make_sql_param(val)}, nullptr});
         return *this;
     }
 
@@ -447,147 +479,40 @@ public:
 
     // SQL compilation
     [[nodiscard]] QueryResult to_sql(DatabaseDialect dialect) const {
-        QueryResult result;
-        std::string& sql = result.sql;
-        sql.reserve(256);
-
-        if (projected_columns_.empty()) {
-            sql.append(schema_.select_all_prefix(dialect));
-        } else {
-            sql.append("SELECT ");
-            for (size_t i = 0; i < projected_columns_.size(); ++i) {
-                sql.append(DialectTraits::quote_identifier(dialect, projected_columns_[i]));
-                if (i + 1 < projected_columns_.size()) sql.append(", ");
-            }
-            sql.append(" FROM ");
-            sql.append(DialectTraits::quote_identifier(dialect, schema_.table_name()));
-        }
-
-        size_t param_idx = 1;
-
-        if (!conditions_.empty()) {
-            sql.append(" WHERE ");
-            compile_conditions(conditions_, dialect, param_idx, sql, result.params);
-        }
-
-        if (!group_bys_.empty()) {
-            sql.append(" GROUP BY ");
-            for (size_t i = 0; i < group_bys_.size(); ++i) {
-                if (i > 0) sql.append(", ");
-                sql.append(DialectTraits::quote_identifier(dialect, group_bys_[i]));
-            }
-        }
-
-        if (!havings_.empty()) {
-            sql.append(" HAVING ");
-            for (size_t i = 0; i < havings_.size(); ++i) {
-                if (i > 0) {
-                    sql.append(havings_[i].conj == Conjunction::Or ? " OR " : " AND ");
-                }
-                compile_condition(havings_[i], dialect, param_idx, sql, result.params);
-            }
-        }
-
-        if (!order_bys_.empty()) {
-            sql.append(" ORDER BY ");
-            for (size_t i = 0; i < order_bys_.size(); ++i) {
-                sql.append(DialectTraits::quote_identifier(dialect, order_bys_[i].column));
-                sql.push_back(' ');
-                sql.append(order_to_sql(order_bys_[i].direction));
-                if (i + 1 < order_bys_.size()) sql.append(", ");
-            }
-        }
-
-        if (limit_.has_value()) {
-            sql.append(" LIMIT ");
-            sql.append(std::to_string(*limit_));
-        }
-
-        if (offset_.has_value()) {
-            sql.append(" OFFSET ");
-            sql.append(std::to_string(*offset_));
-        }
-
-        sql.push_back(';');
-        return result;
+        return compile_select_query_impl(
+            dialect,
+            schema_.table_name(),
+            schema_.select_all_prefix(dialect),
+            projected_columns_,
+            conditions_,
+            group_bys_,
+            havings_,
+            order_bys_,
+            limit_,
+            offset_
+        );
     }
 
     [[nodiscard]] QueryResult to_count_sql(DatabaseDialect dialect) const {
-        QueryResult result;
-        std::string& sql = result.sql;
-        sql.reserve(128);
-
-        sql.append("SELECT COUNT(*) FROM ");
-        sql.append(DialectTraits::quote_identifier(dialect, schema_.table_name()));
-
-        size_t param_idx = 1;
-
-        if (!conditions_.empty()) {
-            sql.append(" WHERE ");
-            compile_conditions(conditions_, dialect, param_idx, sql, result.params);
-        }
-
-        if (!group_bys_.empty()) {
-            sql.append(" GROUP BY ");
-            for (size_t i = 0; i < group_bys_.size(); ++i) {
-                if (i > 0) sql.append(", ");
-                sql.append(DialectTraits::quote_identifier(dialect, group_bys_[i]));
-            }
-        }
-
-        if (!havings_.empty()) {
-            sql.append(" HAVING ");
-            for (size_t i = 0; i < havings_.size(); ++i) {
-                if (i > 0) sql.append(havings_[i].conj == Conjunction::Or ? " OR " : " AND ");
-                compile_condition(havings_[i], dialect, param_idx, sql, result.params);
-            }
-        }
-
-        sql.push_back(';');
-        return result;
+        return compile_count_query_impl(
+            dialect,
+            schema_.table_name(),
+            conditions_,
+            group_bys_,
+            havings_
+        );
     }
 
     [[nodiscard]] QueryResult to_aggregate_sql(DatabaseDialect dialect, std::string_view agg_func, std::string_view col_expr) const {
-        QueryResult result;
-        std::string& sql = result.sql;
-        sql.reserve(128);
-
-        sql.append("SELECT ");
-        sql.append(agg_func);
-        sql.push_back('(');
-        if (col_expr == "*") {
-            sql.push_back('*');
-        } else {
-            sql.append(DialectTraits::quote_identifier(dialect, col_expr));
-        }
-        sql.append(") FROM ");
-        sql.append(DialectTraits::quote_identifier(dialect, schema_.table_name()));
-
-        size_t param_idx = 1;
-
-        if (!conditions_.empty()) {
-            sql.append(" WHERE ");
-            compile_conditions(conditions_, dialect, param_idx, sql, result.params);
-        }
-
-        if (!group_bys_.empty()) {
-            sql.append(" GROUP BY ");
-            for (size_t i = 0; i < group_bys_.size(); ++i) {
-                if (i > 0) sql.append(", ");
-                sql.append(DialectTraits::quote_identifier(dialect, group_bys_[i]));
-            }
-        }
-
-        if (!havings_.empty()) {
-            sql.append(" HAVING ");
-            for (size_t i = 0; i < havings_.size(); ++i) {
-                if (i > 0) sql.append(havings_[i].conj == Conjunction::Or ? " OR " : " AND ");
-                compile_condition(havings_[i], dialect, param_idx, sql, result.params);
-            }
-        }
-
-        sql.push_back(';');
-        return result;
+        return compile_aggregate_query_impl(
+            dialect,
+            schema_.table_name(),
+            agg_func,
+            col_expr,
+            conditions_,
+            group_bys_,
+            havings_
+        );
     }
 
     template <typename FieldType>

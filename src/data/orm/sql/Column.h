@@ -33,6 +33,13 @@ struct ForeignKeyMetadata {
     OnDeleteAction on_update{OnDeleteAction::NoAction};
 };
 
+struct TableConstraint {
+    enum class Kind : uint8_t { PrimaryKey, UniqueKey, Index } kind{Kind::Index};
+    std::string name;
+    std::vector<std::string> columns;
+    bool unique{false};
+};
+
 struct ColumnMetadata {
     std::string column_name;
     std::string (*sql_type_fn)(DatabaseDialect, size_t length){nullptr};

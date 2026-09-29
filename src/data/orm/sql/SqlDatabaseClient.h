@@ -17,6 +17,7 @@
 #include <atomic>
 #include <algorithm>
 
+#include "OrmCache.h"
 #include "data/cache/CacheBackend.h"
 
 namespace aegon::data::orm::sql {
@@ -60,15 +61,7 @@ public:
     // Helper to flush deferred cache operations
     core::Task<void> flush_deferred_cache(const std::vector<DeferredCacheOp>& ops) {
         if (!cache_ || ops.empty()) co_return;
-        for (const auto& op : ops) {
-            if (op.type == DeferredCacheOpType::Del) {
-                co_await cache_->del(op.key);
-            } else if (op.type == DeferredCacheOpType::Incr) {
-                co_await cache_->incr(op.key);
-            } else if (op.type == DeferredCacheOpType::Set) {
-                co_await cache_->set(op.key, op.value, op.ttl);
-            }
-        }
+        co_await aegon::data::orm::sql::flush_deferred_cache(*cache_, ops);
     }
 
     // Transaction & Unit of Work Lifecycle (always on primary pool)
@@ -191,8 +184,8 @@ public:
     template <typename Entity, typename ID>
     core::Task<std::optional<Entity>> find_by_id(const ID& id) {
         auto schema = Entity::schema();
-        std::string id_str = format_param_value(id);
-        std::string id_key = schema.table_name() + ":id:" + id_str;
+        std::string id_str = make_sql_param(id).to_debug_string();
+        std::string id_key = format_cache_id_key(schema.table_name(), id_str);
 
         if (cache_ && schema.is_cached() && schema.cache_config().by_id) {
             auto cached_json = co_await cache_->get(id_key);
@@ -212,7 +205,7 @@ public:
             std::string json = schema.serialize_entity_json(*opt_entity);
             co_await cache_->set(id_key, json, schema.cache_config().ttl);
             if (schema.cache_config().unique_column && schema.cache_config().unique_extractor) {
-                std::string u_key = schema.table_name() + ":" + *schema.cache_config().unique_column + ":" + schema.cache_config().unique_extractor(*opt_entity);
+                std::string u_key = format_cache_unique_key(schema.table_name(), *schema.cache_config().unique_column, schema.cache_config().unique_extractor(*opt_entity));
                 co_await cache_->set(u_key, id_str, schema.cache_config().ttl);
             }
         }
@@ -224,10 +217,10 @@ public:
     core::Task<std::optional<Entity>> find_by_unique(FieldType Entity::* field, const ValueType& val) {
         auto schema = Entity::schema();
         std::string col_name = schema.resolve_column_name(field);
-        std::string val_str = format_param_value(val);
+        std::string val_str = make_sql_param(val).to_debug_string();
 
         if (cache_ && schema.is_cached() && schema.cache_config().unique_column && *schema.cache_config().unique_column == col_name) {
-            std::string u_key = schema.table_name() + ":" + col_name + ":" + val_str;
+            std::string u_key = format_cache_unique_key(schema.table_name(), col_name, val_str);
             auto opt_pk = co_await cache_->get(u_key);
             if (opt_pk) {
                 auto by_id_res = co_await find_by_id<Entity>(*opt_pk);
@@ -243,14 +236,14 @@ public:
             std::string pk;
             for (const auto& [c, v] : vals) {
                 if (c == schema.primary_key_name()) {
-                    pk = v;
+                    pk = v.to_debug_string();
                     break;
                 }
             }
             if (!pk.empty()) {
-                std::string id_key = schema.table_name() + ":id:" + pk;
+                std::string id_key = format_cache_id_key(schema.table_name(), pk);
                 co_await cache_->set(id_key, schema.serialize_entity_json(*opt_entity), schema.cache_config().ttl);
-                std::string u_key = schema.table_name() + ":" + col_name + ":" + val_str;
+                std::string u_key = format_cache_unique_key(schema.table_name(), col_name, val_str);
                 co_await cache_->set(u_key, pk, schema.cache_config().ttl);
             }
         }
@@ -388,7 +381,7 @@ public:
                 std::string pk;
                 for (const auto& [col, val] : vals) {
                     if (col == schema.primary_key_name()) {
-                        pk = val;
+                        pk = val.to_debug_string();
                         break;
                     }
                 }
@@ -478,7 +471,7 @@ public:
         co_return co_await tx.execute(query);
     }
 
-    core::Task<size_t> execute(std::string_view sql, const std::vector<std::string>& params = {}) {
+    core::Task<size_t> execute(std::string_view sql, std::span<const SqlParam> params = {}) {
         auto guard = primary_pool_.acquire();
         Transaction tx(*guard);
         co_return co_await tx.execute(sql, params);

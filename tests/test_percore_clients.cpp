@@ -86,6 +86,53 @@ void test_percore_http_client_multithreading() {
     std::cout << "  -> PASS: All 4 threads received distinct, isolated HttpClient instances.\n";
 }
 
+void test_percore_connection_pool_capacity_limit() {
+    std::cout << "[Test 3] Testing PerCoreConnectionPool capacity limit enforcement...\n";
+
+    constexpr size_t POOL_CAP = 3;
+    auto factory = []() -> std::unique_ptr<Connection> {
+        return std::make_unique<drivers::SqliteConnection>(":memory:");
+    };
+
+    PerCoreConnectionPool pool(factory, POOL_CAP);
+    assert(pool.capacity() == POOL_CAP);
+    assert(pool.total_spawned() == 0);
+
+    // Acquire up to capacity
+    std::vector<ConnectionGuard> guards;
+    guards.reserve(POOL_CAP);
+    for (size_t i = 0; i < POOL_CAP; ++i) {
+        guards.push_back(pool.acquire());
+        assert(guards.back().valid());
+    }
+    assert(pool.total_spawned() == POOL_CAP);
+    assert(pool.idle_count() == 0);
+
+    // Attempt to exceed capacity -> should throw std::runtime_error
+    bool threw = false;
+    try {
+        auto extra_guard = pool.acquire();
+    } catch (const std::runtime_error& e) {
+        threw = true;
+        std::string msg = e.what();
+        assert(msg.find("all connections busy") != std::string::npos);
+    }
+    assert(threw);
+    (void)threw;
+
+    // Release one connection
+    guards.pop_back();
+    assert(pool.idle_count() == 1);
+    assert(pool.total_spawned() == POOL_CAP);
+
+    // Now acquiring again should succeed
+    auto re_acquired = pool.acquire();
+    assert(re_acquired.valid());
+    assert(pool.idle_count() == 0);
+
+    std::cout << "  -> PASS: Pool strictly enforces capacity limit (" << POOL_CAP << ") and re-leases idle connections.\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "       AEGON PER-CORE CLIENTS TEST SUITE               \n";
@@ -93,6 +140,7 @@ int main() {
 
     test_percore_connection_pool_multithreading();
     test_percore_http_client_multithreading();
+    test_percore_connection_pool_capacity_limit();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL PER-CORE CLIENT TESTS PASSED! <<<           \n";

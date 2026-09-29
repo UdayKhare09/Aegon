@@ -129,7 +129,7 @@ core::Task<void> run_orm_cache_tests() {
     std::cout << "[PASS] Insert cached entity and incremented partition epoch\n";
 
     // 2. find_by_id: verify cache hit
-    int gets_before = mock_cache->get_count;
+    [[maybe_unused]] int gets_before = mock_cache->get_count;
     auto found_a1 = co_await client.find_by_id<Account>(1);
     assert(found_a1.has_value());
     assert(found_a1->name == "Alice");
@@ -137,7 +137,7 @@ core::Task<void> run_orm_cache_tests() {
     std::cout << "[PASS] find_by_id served from cache\n";
 
     // 3. fetch_all with query caching
-    auto q_before_gets = mock_cache->get_count;
+    [[maybe_unused]] auto q_before_gets = mock_cache->get_count;
     auto accounts_list1 = co_await client.fetch_all(
         client.from<Account>().where(&Account::org_id, Op::Eq, 10).cached()
     );
@@ -172,7 +172,7 @@ core::Task<void> run_orm_cache_tests() {
     std::cout << "[PASS] Partitioned invalidation scoped to parent ID\n";
 
     // 6. delete_by_id
-    bool deleted = co_await client.delete_by_id<Account>(1);
+    [[maybe_unused]] bool deleted = co_await client.delete_by_id<Account>(1);
     assert(deleted);
     assert(mock_cache->store.find("accounts:id:1") == mock_cache->store.end());
     std::cout << "[PASS] delete_by_id purged cache key\n";

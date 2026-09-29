@@ -75,6 +75,23 @@ struct Post {
     }
 };
 
+// 4. UserRole POCO Entity with Composite Primary Key & Multi-Column Indexes
+struct UserRole {
+    int64_t user_id{0};
+    int64_t role_id{0};
+    DateTime assigned_at;
+
+    static auto schema() {
+        return table<UserRole>("user_roles")
+            .column(&UserRole::user_id, "user_id")
+            .column(&UserRole::role_id, "role_id")
+            .created_at(&UserRole::assigned_at, "assigned_at")
+            .composite_primary_key(&UserRole::user_id, &UserRole::role_id)
+            .add_index("idx_user_roles_composite", &UserRole::role_id, &UserRole::assigned_at)
+            .add_unique_index("uq_user_roles_pair", &UserRole::user_id, &UserRole::role_id);
+    }
+};
+
 void test_dialect_traits() {
     std::cout << "[Test 1] Testing Dialect Traits (Quoting, Placeholders, Auto-inc)...\n";
 
@@ -206,6 +223,41 @@ void test_foreign_keys_and_auto_inc() {
     std::cout << "  -> PASS: Strongly-typed foreign keys and auto-increment PKs verified.\n";
 }
 
+void test_composite_pk_and_indexes() {
+    std::cout << "[Test 6] Testing Composite Primary Keys & Table-Level Constraints...\n";
+
+    // 1. PostgreSQL DDL for UserRole with Composite PK
+    std::string ddl_pg = generate_ddl<UserRole>(DatabaseDialect::PostgreSQL);
+    std::cout << "--- Generated UserRole PG DDL ---\n" << ddl_pg << "\n---------------------------------\n";
+
+    TEST_CHECK(ddl_pg.find("CREATE TABLE IF NOT EXISTS \"user_roles\" (") != std::string::npos);
+    TEST_CHECK(ddl_pg.find("\"user_id\" BIGINT NOT NULL") != std::string::npos);
+    TEST_CHECK(ddl_pg.find("\"role_id\" BIGINT NOT NULL") != std::string::npos);
+    TEST_CHECK(ddl_pg.find("PRIMARY KEY (\"user_id\", \"role_id\")") != std::string::npos);
+    TEST_CHECK(ddl_pg.find("CONSTRAINT uq_user_roles_pair UNIQUE (\"user_id\", \"role_id\")") != std::string::npos);
+
+    // 2. SQLite DDL for UserRole with Composite PK
+    std::string ddl_sqlite = generate_ddl<UserRole>(DatabaseDialect::SQLite);
+    std::cout << "--- Generated UserRole SQLite DDL ---\n" << ddl_sqlite << "\n-------------------------------------\n";
+
+    TEST_CHECK(ddl_sqlite.find("CREATE TABLE IF NOT EXISTS \"user_roles\" (") != std::string::npos);
+    TEST_CHECK(ddl_sqlite.find("PRIMARY KEY (\"user_id\", \"role_id\")") != std::string::npos);
+
+    // 3. Multi-Column Composite Index Generation
+    auto indexes = generate_indexes<UserRole>(DatabaseDialect::PostgreSQL);
+    TEST_CHECK(!indexes.empty());
+    bool found_composite_idx = false;
+    for (const auto& idx : indexes) {
+        if (idx.find("idx_user_roles_composite") != std::string::npos &&
+            idx.find("(\"role_id\", \"assigned_at\")") != std::string::npos) {
+            found_composite_idx = true;
+        }
+    }
+    TEST_CHECK(found_composite_idx);
+
+    std::cout << "  -> PASS: Composite primary keys and multi-column indexes verified.\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "    AEGON C++26 SQL ORM SCHEMA & DIALECT TEST SUITE    \n";
@@ -216,6 +268,7 @@ int main() {
     test_postgresql_ddl();
     test_sqlite_ddl();
     test_foreign_keys_and_auto_inc();
+    test_composite_pk_and_indexes();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL SQL ORM SCHEMA TESTS PASSED! <<<\n";
