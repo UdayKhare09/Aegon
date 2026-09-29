@@ -80,11 +80,9 @@ void test_dialect_traits() {
 
     // Quoting
     TEST_CHECK(DialectTraits::quote_char(DatabaseDialect::PostgreSQL) == '"');
-    TEST_CHECK(DialectTraits::quote_char(DatabaseDialect::MySQL) == '`');
     TEST_CHECK(DialectTraits::quote_char(DatabaseDialect::SQLite) == '"');
 
     TEST_CHECK(DialectTraits::quote_identifier(DatabaseDialect::PostgreSQL, "users") == "\"users\"");
-    TEST_CHECK(DialectTraits::quote_identifier(DatabaseDialect::MySQL, "users") == "`users`");
     TEST_CHECK(DialectTraits::quote_identifier(DatabaseDialect::SQLite, "users") == "\"users\"");
 
     // Placeholders
@@ -92,13 +90,12 @@ void test_dialect_traits() {
     DialectTraits::format_placeholder(DatabaseDialect::PostgreSQL, 1, p_pg);
     TEST_CHECK(p_pg == "$1");
 
-    std::string p_my;
-    DialectTraits::format_placeholder(DatabaseDialect::MySQL, 1, p_my);
-    TEST_CHECK(p_my == "?");
+    std::string p_sqlite;
+    DialectTraits::format_placeholder(DatabaseDialect::SQLite, 1, p_sqlite);
+    TEST_CHECK(p_sqlite == "?");
 
     // Auto-inc PK
     TEST_CHECK(DialectTraits::auto_increment_pk(DatabaseDialect::PostgreSQL).find("IDENTITY") != std::string::npos);
-    TEST_CHECK(DialectTraits::auto_increment_pk(DatabaseDialect::MySQL).find("AUTO_INCREMENT") != std::string::npos);
     TEST_CHECK(DialectTraits::auto_increment_pk(DatabaseDialect::SQLite).find("AUTOINCREMENT") != std::string::npos);
 
     std::cout << "  -> PASS: Dialect traits verified.\n";
@@ -109,39 +106,32 @@ void test_type_mapper() {
 
     // Primitives
     TEST_CHECK(TypeMapper<bool>::column_type(DatabaseDialect::PostgreSQL) == "BOOLEAN");
-    TEST_CHECK(TypeMapper<bool>::column_type(DatabaseDialect::MySQL) == "TINYINT(1)");
     TEST_CHECK(TypeMapper<bool>::column_type(DatabaseDialect::SQLite) == "INTEGER");
 
     TEST_CHECK(TypeMapper<int32_t>::column_type(DatabaseDialect::PostgreSQL) == "INTEGER");
-    TEST_CHECK(TypeMapper<int32_t>::column_type(DatabaseDialect::MySQL) == "INT");
 
     TEST_CHECK(TypeMapper<std::string>::column_type(DatabaseDialect::PostgreSQL, 255) == "VARCHAR(255)");
     TEST_CHECK(TypeMapper<std::string>::column_type(DatabaseDialect::PostgreSQL, 0) == "TEXT");
 
     // Foundational Types
     TEST_CHECK(TypeMapper<UUID>::column_type(DatabaseDialect::PostgreSQL) == "UUID");
-    TEST_CHECK(TypeMapper<UUID>::column_type(DatabaseDialect::MySQL) == "BINARY(16)");
     TEST_CHECK(TypeMapper<UUID>::column_type(DatabaseDialect::SQLite) == "TEXT");
 
     TEST_CHECK(TypeMapper<DateTime>::column_type(DatabaseDialect::PostgreSQL) == "TIMESTAMPTZ");
-    TEST_CHECK(TypeMapper<DateTime>::column_type(DatabaseDialect::MySQL) == "DATETIME(6)");
     TEST_CHECK(TypeMapper<DateTime>::column_type(DatabaseDialect::SQLite) == "TEXT");
 
     TEST_CHECK(TypeMapper<Decimal128>::column_type(DatabaseDialect::PostgreSQL) == "NUMERIC(18, 4)");
-    TEST_CHECK(TypeMapper<Decimal128>::column_type(DatabaseDialect::MySQL) == "DECIMAL(18, 4)");
     TEST_CHECK(TypeMapper<Decimal128>::column_type(DatabaseDialect::SQLite) == "NUMERIC");
 
     TEST_CHECK(TypeMapper<Json>::column_type(DatabaseDialect::PostgreSQL) == "JSONB");
-    TEST_CHECK(TypeMapper<Json>::column_type(DatabaseDialect::MySQL) == "JSON");
     TEST_CHECK(TypeMapper<Json>::column_type(DatabaseDialect::SQLite) == "TEXT");
 
     TEST_CHECK(TypeMapper<IpAddress>::column_type(DatabaseDialect::PostgreSQL) == "INET");
-    TEST_CHECK(TypeMapper<IpAddress>::column_type(DatabaseDialect::MySQL) == "VARBINARY(16)");
 
     TEST_CHECK(TypeMapper<MacAddress>::column_type(DatabaseDialect::PostgreSQL) == "MACADDR");
     TEST_CHECK(TypeMapper<Blob>::column_type(DatabaseDialect::PostgreSQL) == "BYTEA");
-    TEST_CHECK(TypeMapper<Blob>::column_type(DatabaseDialect::MySQL) == "LONGBLOB");
-    TEST_CHECK(TypeMapper<Hash256>::column_type(DatabaseDialect::MySQL) == "BINARY(32)");
+    TEST_CHECK(TypeMapper<Blob>::column_type(DatabaseDialect::SQLite) == "BLOB");
+    TEST_CHECK(TypeMapper<Hash256>::column_type(DatabaseDialect::PostgreSQL) == "BYTEA");
 
     // Nullability
     TEST_CHECK(!TypeMapper<std::string>::is_nullable);
@@ -180,28 +170,8 @@ void test_postgresql_ddl() {
     std::cout << "  -> PASS: PostgreSQL DDL perfectly matches native schema.\n";
 }
 
-void test_mysql_ddl() {
-    std::cout << "[Test 4] Testing MySQL DDL Generation for User Entity...\n";
-
-    std::string ddl = generate_ddl<User>(DatabaseDialect::MySQL);
-    std::cout << "--- Generated MySQL DDL ---\n" << ddl << "\n---------------------------\n";
-
-    TEST_CHECK(ddl.find("CREATE TABLE IF NOT EXISTS `users` (") != std::string::npos);
-    TEST_CHECK(ddl.find("`id` BINARY(16) PRIMARY KEY") != std::string::npos);
-    TEST_CHECK(ddl.find("`email` VARCHAR(255) NOT NULL UNIQUE") != std::string::npos);
-    TEST_CHECK(ddl.find("`username` VARCHAR(50) NOT NULL") != std::string::npos);
-    TEST_CHECK(ddl.find("`bio` TEXT,\n") != std::string::npos);
-    TEST_CHECK(ddl.find("`balance` DECIMAL(18, 4) NOT NULL DEFAULT 0.0000") != std::string::npos);
-    TEST_CHECK(ddl.find("`preferences` JSON NOT NULL") != std::string::npos);
-    TEST_CHECK(ddl.find("`last_login_ip` VARBINARY(16) NOT NULL") != std::string::npos);
-    TEST_CHECK(ddl.find("`created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)") != std::string::npos);
-    TEST_CHECK(ddl.find("`updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)") != std::string::npos);
-
-    std::cout << "  -> PASS: MySQL DDL with backticks and ON UPDATE CURRENT_TIMESTAMP verified.\n";
-}
-
 void test_sqlite_ddl() {
-    std::cout << "[Test 5] Testing SQLite DDL Generation for User Entity...\n";
+    std::cout << "[Test 4] Testing SQLite DDL Generation for User Entity...\n";
 
     std::string ddl = generate_ddl<User>(DatabaseDialect::SQLite);
     std::cout << "--- Generated SQLite DDL ---\n" << ddl << "\n----------------------------\n";
@@ -217,7 +187,7 @@ void test_sqlite_ddl() {
 }
 
 void test_foreign_keys_and_auto_inc() {
-    std::cout << "[Test 6] Testing Foreign Key Relationships & Auto-Increment Primary Keys...\n";
+    std::cout << "[Test 5] Testing Foreign Key Relationships & Auto-Increment Primary Keys...\n";
 
     // 1. Order entity referencing User with ON DELETE CASCADE
     std::string order_ddl = generate_ddl<Order>(DatabaseDialect::PostgreSQL);
@@ -229,9 +199,6 @@ void test_foreign_keys_and_auto_inc() {
     // 2. Post entity with Auto-Increment BIGINT PK
     std::string post_pg = generate_ddl<Post>(DatabaseDialect::PostgreSQL);
     TEST_CHECK(post_pg.find("\"id\" BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY") != std::string::npos);
-
-    std::string post_my = generate_ddl<Post>(DatabaseDialect::MySQL);
-    TEST_CHECK(post_my.find("`id` BIGINT AUTO_INCREMENT PRIMARY KEY") != std::string::npos);
 
     std::string post_sqlite = generate_ddl<Post>(DatabaseDialect::SQLite);
     TEST_CHECK(post_sqlite.find("\"id\" INTEGER PRIMARY KEY AUTOINCREMENT") != std::string::npos);
@@ -247,7 +214,6 @@ int main() {
     test_dialect_traits();
     test_type_mapper();
     test_postgresql_ddl();
-    test_mysql_ddl();
     test_sqlite_ddl();
     test_foreign_keys_and_auto_inc();
 

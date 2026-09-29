@@ -270,7 +270,7 @@ public:
         co_return affected;
     }
 
-    core::Task<std::vector<MockRowView>> query(std::string_view sql, const std::vector<std::string>& params) override {
+    core::Task<std::vector<DriverRowView>> query(std::string_view sql, const std::vector<std::string>& params) override {
         if (!conn_) throw std::runtime_error("PostgresConnection: connection is closed.");
 
         std::array<const char*, 16> small_ptrs;
@@ -345,7 +345,7 @@ public:
         int rows_count = PQntuples(res);
         int cols_count = PQnfields(res);
         auto shared_res = std::shared_ptr<PGresult>(res, PQclear);
-        std::vector<MockRowView> rows;
+        std::vector<DriverRowView> rows;
         rows.reserve(rows_count);
 
         for (int r = 0; r < rows_count; ++r) {

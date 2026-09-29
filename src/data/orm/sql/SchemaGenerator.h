@@ -44,12 +44,8 @@ inline std::string generate_ddl(DatabaseDialect dialect) {
                     sql.append(" DEFAULT ");
                     sql.append(DialectTraits::current_timestamp(dialect));
                 } else if (col.is_updated_at) {
-                    if (dialect == DatabaseDialect::MySQL) {
-                        sql.append(" DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)");
-                    } else {
-                        sql.append(" DEFAULT ");
-                        sql.append(DialectTraits::current_timestamp(dialect));
-                    }
+                    sql.append(" DEFAULT ");
+                    sql.append(DialectTraits::current_timestamp(dialect));
                 } else if (!col.default_value.empty()) {
                     sql.append(" DEFAULT ");
                     sql.append(col.default_value);

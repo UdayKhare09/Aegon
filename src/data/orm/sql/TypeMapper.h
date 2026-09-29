@@ -30,7 +30,6 @@ struct TypeMapper<bool> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "BOOLEAN";
-            case DatabaseDialect::MySQL:      return "TINYINT(1)";
             case DatabaseDialect::SQLite:     return "INTEGER";
         }
         return "INTEGER";
@@ -43,7 +42,6 @@ struct TypeMapper<int16_t> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "SMALLINT";
-            case DatabaseDialect::MySQL:      return "SMALLINT";
             case DatabaseDialect::SQLite:     return "INTEGER";
         }
         return "INTEGER";
@@ -56,7 +54,6 @@ struct TypeMapper<uint16_t> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "SMALLINT";
-            case DatabaseDialect::MySQL:      return "SMALLINT UNSIGNED";
             case DatabaseDialect::SQLite:     return "INTEGER";
         }
         return "INTEGER";
@@ -69,7 +66,6 @@ struct TypeMapper<int32_t> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "INTEGER";
-            case DatabaseDialect::MySQL:      return "INT";
             case DatabaseDialect::SQLite:     return "INTEGER";
         }
         return "INTEGER";
@@ -82,7 +78,6 @@ struct TypeMapper<uint32_t> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "BIGINT"; // Postgres has no unsigned int
-            case DatabaseDialect::MySQL:      return "INT UNSIGNED";
             case DatabaseDialect::SQLite:     return "INTEGER";
         }
         return "INTEGER";
@@ -95,7 +90,6 @@ struct TypeMapper<int64_t> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "BIGINT";
-            case DatabaseDialect::MySQL:      return "BIGINT";
             case DatabaseDialect::SQLite:     return "INTEGER";
         }
         return "INTEGER";
@@ -108,7 +102,6 @@ struct TypeMapper<uint64_t> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "NUMERIC(20, 0)"; // 64-bit unsigned fits in numeric
-            case DatabaseDialect::MySQL:      return "BIGINT UNSIGNED";
             case DatabaseDialect::SQLite:     return "INTEGER";
         }
         return "INTEGER";
@@ -121,7 +114,6 @@ struct TypeMapper<float> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "REAL";
-            case DatabaseDialect::MySQL:      return "FLOAT";
             case DatabaseDialect::SQLite:     return "REAL";
         }
         return "REAL";
@@ -134,7 +126,6 @@ struct TypeMapper<double> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "DOUBLE PRECISION";
-            case DatabaseDialect::MySQL:      return "DOUBLE";
             case DatabaseDialect::SQLite:     return "REAL";
         }
         return "REAL";
@@ -150,7 +141,6 @@ struct TypeMapper<std::string> {
         }
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "TEXT";
-            case DatabaseDialect::MySQL:      return "TEXT";
             case DatabaseDialect::SQLite:     return "TEXT";
         }
         return "TEXT";
@@ -170,7 +160,6 @@ struct TypeMapper<types::UUID> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "UUID";
-            case DatabaseDialect::MySQL:      return "BINARY(16)";
             case DatabaseDialect::SQLite:     return "TEXT";
         }
         return "TEXT";
@@ -183,7 +172,6 @@ struct TypeMapper<types::DateTime> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "TIMESTAMPTZ";
-            case DatabaseDialect::MySQL:      return "DATETIME(6)";
             case DatabaseDialect::SQLite:     return "TEXT";
         }
         return "TEXT";
@@ -196,7 +184,6 @@ struct TypeMapper<types::Date> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "DATE";
-            case DatabaseDialect::MySQL:      return "DATE";
             case DatabaseDialect::SQLite:     return "TEXT";
         }
         return "TEXT";
@@ -209,7 +196,6 @@ struct TypeMapper<types::Time> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "TIME";
-            case DatabaseDialect::MySQL:      return "TIME(6)";
             case DatabaseDialect::SQLite:     return "TEXT";
         }
         return "TEXT";
@@ -223,7 +209,6 @@ struct TypeMapper<types::Decimal<P, S>> {
         std::string ps = "(" + std::to_string(P) + ", " + std::to_string(S) + ")";
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "NUMERIC" + ps;
-            case DatabaseDialect::MySQL:      return "DECIMAL" + ps;
             case DatabaseDialect::SQLite:     return "NUMERIC";
         }
         return "NUMERIC";
@@ -236,7 +221,6 @@ struct TypeMapper<types::Json> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "JSONB";
-            case DatabaseDialect::MySQL:      return "JSON";
             case DatabaseDialect::SQLite:     return "TEXT";
         }
         return "TEXT";
@@ -249,7 +233,6 @@ struct TypeMapper<types::IpAddress> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "INET";
-            case DatabaseDialect::MySQL:      return "VARBINARY(16)";
             case DatabaseDialect::SQLite:     return "TEXT";
         }
         return "TEXT";
@@ -262,7 +245,6 @@ struct TypeMapper<types::MacAddress> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "MACADDR";
-            case DatabaseDialect::MySQL:      return "BINARY(6)";
             case DatabaseDialect::SQLite:     return "TEXT";
         }
         return "TEXT";
@@ -275,7 +257,6 @@ struct TypeMapper<types::Blob> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "BYTEA";
-            case DatabaseDialect::MySQL:      return "LONGBLOB";
             case DatabaseDialect::SQLite:     return "BLOB";
         }
         return "BLOB";
@@ -288,7 +269,6 @@ struct TypeMapper<types::Hash256> {
     static std::string column_type(DatabaseDialect d, size_t = 0) {
         switch (d) {
             case DatabaseDialect::PostgreSQL: return "BYTEA";
-            case DatabaseDialect::MySQL:      return "BINARY(32)";
             case DatabaseDialect::SQLite:     return "BLOB";
         }
         return "BLOB";

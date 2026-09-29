@@ -87,7 +87,7 @@ public:
         co_return affected;
     }
 
-    core::Task<std::vector<MockRowView>> query(std::string_view sql, const std::vector<std::string>& params) override {
+    core::Task<std::vector<DriverRowView>> query(std::string_view sql, const std::vector<std::string>& params) override {
         if (!db_) throw std::runtime_error("SqliteConnection: database is closed.");
 
         sqlite3_stmt* stmt = nullptr;
@@ -104,11 +104,11 @@ public:
             }
         }
 
-        std::vector<MockRowView> rows;
+        std::vector<DriverRowView> rows;
         int cols = sqlite3_column_count(stmt);
 
         while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-            MockRowView row;
+            DriverRowView row;
             for (int i = 0; i < cols; ++i) {
                 if (sqlite3_column_type(stmt, i) == SQLITE_NULL) {
                     row.add_null();

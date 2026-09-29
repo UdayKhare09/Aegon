@@ -75,7 +75,7 @@ void test_member_pointer_resolution() {
 }
 
 void test_select_builder_queries() {
-    std::cout << "[Test 2] Testing SelectBuilder Query Generation (PostgreSQL, MySQL, SQLite)...\n";
+    std::cout << "[Test 2] Testing SelectBuilder Query Generation (PostgreSQL, SQLite)...\n";
 
     // 1. Full select projection
     auto q1 = from<User>().to_sql(DatabaseDialect::PostgreSQL);
@@ -84,9 +84,9 @@ void test_select_builder_queries() {
     TEST_CHECK(q1.params.empty());
 
     // 2. Custom column projection
-    auto q2 = from<User>().select(&User::id, &User::email, &User::balance).to_sql(DatabaseDialect::MySQL);
+    auto q2 = from<User>().select(&User::id, &User::email, &User::balance).to_sql(DatabaseDialect::SQLite);
     std::cout << "  Select Proj SQL: " << q2.sql << "\n";
-    TEST_CHECK(q2.sql == "SELECT `id`, `email`, `balance` FROM `users`;");
+    TEST_CHECK(q2.sql == "SELECT \"id\", \"email\", \"balance\" FROM \"users\";");
 
     // 3. Where clause with operators, ordering, limit & offset
     auto q3 = from<User>()
@@ -103,15 +103,15 @@ void test_select_builder_queries() {
     TEST_CHECK(q3.params[0] == "uday@aegon.dev");
     TEST_CHECK(q3.params[1] == "100.5");
 
-    // 4. Same query in MySQL uses '?' placeholders and backticks
-    auto q3_mysql = from<User>()
+    // 4. Same query in SQLite uses '?' placeholders and double quotes
+    auto q3_sqlite = from<User>()
         .where(&User::email, Op::Eq, "uday@aegon.dev")
         .and_where(&User::balance, Op::Gte, 100.50)
         .order_by(&User::created_at, SortOrder::Desc)
         .limit(10)
         .offset(20)
-        .to_sql(DatabaseDialect::MySQL);
-    TEST_CHECK(q3_mysql.sql == "SELECT `id`, `email`, `username`, `bio`, `balance`, `preferences`, `last_login_ip`, `created_at`, `updated_at` FROM `users` WHERE `email` = ? AND `balance` >= ? ORDER BY `created_at` DESC LIMIT 10 OFFSET 20;");
+        .to_sql(DatabaseDialect::SQLite);
+    TEST_CHECK(q3_sqlite.sql == "SELECT \"id\", \"email\", \"username\", \"bio\", \"balance\", \"preferences\", \"last_login_ip\", \"created_at\", \"updated_at\" FROM \"users\" WHERE \"email\" = ? AND \"balance\" >= ? ORDER BY \"created_at\" DESC LIMIT 10 OFFSET 20;");
 
     // 5. IN, BETWEEN, IS NULL, OR conditions
     auto q4 = from<User>()
@@ -217,10 +217,10 @@ void test_update_and_delete_builders() {
     auto up2 = update<User>()
         .set_entity(u)
         .where(&User::id, Op::Eq, user_id)
-        .to_sql(DatabaseDialect::MySQL);
+        .to_sql(DatabaseDialect::SQLite);
 
-    std::cout << "  Entity Update MySQL SQL: " << up2.sql << "\n";
-    TEST_CHECK(up2.sql.find("UPDATE `users` SET `id` = ?, `email` = ?") != std::string::npos);
+    std::cout << "  Entity Update SQLite SQL: " << up2.sql << "\n";
+    TEST_CHECK(up2.sql.find("UPDATE \"users\" SET \"id\" = ?, \"email\" = ?") != std::string::npos);
     TEST_CHECK(up2.params.size() == 10); // 9 fields updated + 1 where condition
 
     // Delete query
@@ -240,7 +240,7 @@ void test_row_to_entity_auto_hydration() {
     std::cout << "[Test 5] Testing Row -> Entity Auto-Hydration (Primitives, Optionals, Foundational Types)...\n";
 
     // Build a mock database row matching schema of User
-    MockRowView row1;
+    DriverRowView row1;
     row1.add_value("550e8400-e29b-41d4-a716-446655440000"); // id
     row1.add_value("test@aegon.dev");                       // email
     row1.add_value("aegon_user");                           // username
@@ -265,7 +265,7 @@ void test_row_to_entity_auto_hydration() {
     TEST_CHECK(u1.updated_at == DateTime::from_string("2026-09-07T15:00:00.000000Z").value());
 
     // Test with NULL bio
-    MockRowView row2;
+    DriverRowView row2;
     row2.add_value("6ba7b810-9dad-11d1-80b4-00c04fd430c8");
     row2.add_value("nullbio@aegon.dev");
     row2.add_value("null_bio_user");
@@ -282,7 +282,7 @@ void test_row_to_entity_auto_hydration() {
     TEST_CHECK(u2.balance.to_string() == "0.0000");
 
     // Test batch hydration
-    std::vector<MockRowView> rows = {row1, row2};
+    std::vector<DriverRowView> rows = {row1, row2};
     std::vector<User> users = select_builder.map_rows(rows);
     TEST_CHECK(users.size() == 2);
     TEST_CHECK(users[0].username == "aegon_user");

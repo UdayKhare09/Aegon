@@ -98,8 +98,8 @@ inline T parse_field_value(std::string_view s) {
     }
 }
 
-// In-memory MockRowView for testing and driver adaptation
-class MockRowView : public RowView {
+// DriverRowView provides unified row access (both zero-copy driver delegation and materialized rows)
+class DriverRowView : public RowView {
     std::vector<std::optional<std::string>> values_;
     std::shared_ptr<void> owner_{nullptr};
     void* raw_handle_{nullptr};
@@ -109,14 +109,14 @@ class MockRowView : public RowView {
     bool (*is_null_fn_)(void* handle, int row, int col){nullptr};
 
 public:
-    MockRowView() = default;
-    explicit MockRowView(std::vector<std::optional<std::string>> values)
+    DriverRowView() = default;
+    explicit DriverRowView(std::vector<std::optional<std::string>> values)
         : values_(std::move(values)) {}
 
     // Zero-copy constructor: delegates directly to driver buffer via function pointers
-    MockRowView(std::shared_ptr<void> owner, void* raw_handle, int row_idx, int col_count,
-                std::string_view (*getter)(void*, int, int),
-                bool (*is_null)(void*, int, int))
+    DriverRowView(std::shared_ptr<void> owner, void* raw_handle, int row_idx, int col_count,
+                  std::string_view (*getter)(void*, int, int),
+                  bool (*is_null)(void*, int, int))
         : owner_(std::move(owner)),
           raw_handle_(raw_handle),
           row_idx_(row_idx),

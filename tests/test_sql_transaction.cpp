@@ -235,7 +235,7 @@ Task<void> test_direct_operations() {
     TEST_CHECK(mock_ptr->executed_sqls_[1].find("DELETE FROM \"users\" WHERE \"id\" = $1") != std::string::npos);
 
     // 3. Direct Find By ID (with mock row return)
-    MockRowView row;
+    DriverRowView row;
     row.add_value(user.id.to_string());
     row.add_value(user.email);
     row.add_value(user.username);

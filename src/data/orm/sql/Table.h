@@ -518,7 +518,7 @@ public:
                     }
                 }
             }
-            MockRowView mrow(std::move(col_vals));
+            DriverRowView mrow(std::move(col_vals));
             for (size_t i = 0; i < hydrators_.size(); ++i) {
                 hydrators_[i](out, mrow, i);
             }

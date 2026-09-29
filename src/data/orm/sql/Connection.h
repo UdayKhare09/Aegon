@@ -24,7 +24,7 @@ public:
     virtual core::Task<size_t> execute(std::string_view sql, const std::vector<std::string>& params) = 0;
 
     // Asynchronous query execution returning a collection of rows (for SELECT)
-    virtual core::Task<std::vector<MockRowView>> query(std::string_view sql, const std::vector<std::string>& params) = 0;
+    virtual core::Task<std::vector<DriverRowView>> query(std::string_view sql, const std::vector<std::string>& params) = 0;
 
     // Transaction lifecycle primitives
     virtual core::Task<void> begin_transaction() = 0;

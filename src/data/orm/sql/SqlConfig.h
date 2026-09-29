@@ -8,7 +8,7 @@
 namespace aegon::data::orm::sql {
 
 /**
- * @brief Unified configuration for SQL database engines (PostgreSQL, SQLite, MySQL).
+ * @brief Unified configuration for SQL database engines (PostgreSQL, SQLite).
  *
  * Supports designated-initializer configuration on Server:
  * @code
