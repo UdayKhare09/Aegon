@@ -1,7 +1,7 @@
 #include "IoUring.h"
+#include "log/Logger.h"
 #include <unistd.h>
 #include <cstring>
-#include <iostream>
 
 namespace aegon::core {
 
@@ -32,10 +32,14 @@ void IoUring::init(const IoUringConfig& config) {
 
     int ret = io_uring_queue_init_params(config.entries, &ring_, &params);
     if (ret != 0) {
+        log::error("[io_uring] io_uring_queue_init_params failed (entries={}, ret={}): {}",
+                   config.entries, ret, std::strerror(-ret));
         throw std::system_error(-ret, std::generic_category(),
                                 "io_uring_queue_init_params failed");
     }
     initialized_ = true;
+    log::debug("[io_uring] Initialized ring fd={}, entries={}, flags={:#x}",
+               ring_.ring_fd, config.entries, params.flags);
 
     // io_uring_ring_dontfork (5.6): prevent child processes from inheriting
     // the ring fd on fork(). Accidental inheritance can corrupt the ring state.
@@ -64,6 +68,7 @@ IoUring::IoUring(const IoUringConfig& config) {
 
 IoUring::~IoUring() {
     if (initialized_) {
+        log::debug("[io_uring] Closing ring fd={}", ring_.ring_fd);
         io_uring_queue_exit(&ring_);
         initialized_ = false;
     }
@@ -120,18 +125,23 @@ bool IoUring::register_direct_fds(unsigned count) noexcept {
     if (ret == 0) {
         files_registered_  = true;
         direct_fd_slots_   = count;
+        log::debug("[io_uring] Registered {} sparse direct fds", count);
         return true;
     }
+    log::warn("[io_uring] io_uring_register_files_sparse failed: {}", std::strerror(-ret));
     return false;
 }
 
 void IoUring::update_direct_fd(unsigned slot, int fd) {
     if (!files_registered_ || slot >= direct_fd_slots_) {
+        log::error("[io_uring] Direct fd slot {} out of range (slots={})", slot, direct_fd_slots_);
         throw std::out_of_range("Direct fd slot out of range");
     }
     int fds[1] = {fd};
     int ret = io_uring_register_files_update(&ring_, slot, fds, 1);
     if (ret < 0) {
+        log::error("[io_uring] io_uring_register_files_update failed (slot={}, fd={}): {}",
+                   slot, fd, std::strerror(-ret));
         throw std::system_error(-ret, std::generic_category(),
                                 "io_uring_register_files_update failed");
     }
@@ -658,6 +668,8 @@ size_t IoUring::process_completions() noexcept {
 int IoUring::submit_and_wait(uint32_t min_complete) {
     int ret = io_uring_submit_and_wait(&ring_, min_complete);
     if (ret < 0 && ret != -EINTR) {
+        log::error("[io_uring] io_uring_submit_and_wait failed (min_complete={}): {}",
+                   min_complete, std::strerror(-ret));
         throw std::system_error(-ret, std::generic_category(),
                                 "io_uring_submit_and_wait failed");
     }

@@ -1,4 +1,5 @@
 #include "EventLoop.h"
+#include "log/Logger.h"
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
@@ -6,7 +7,6 @@
 #include <poll.h>
 #include <stdexcept>
 #include <algorithm>
-#include <iostream>
 
 namespace aegon::core {
 
@@ -26,6 +26,8 @@ EventLoop::EventLoop(uint32_t ring_entries, uint16_t pbuf_entries, size_t buffer
       wakeup_awaiter_(*this) {
     wakeup_fd_ = ::eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     // Non-fatal: if eventfd fails, stop() degrades to a non-waking flag-only stop
+    log::debug("[EventLoop] Created event loop: ring_entries={}, pbuf_entries={}, buf_size={}",
+               ring_entries, pbuf_entries, buffer_size);
 }
 
 EventLoop::EventLoop(const IoUringConfig& ring_config, uint16_t pbuf_entries, size_t buffer_size)
@@ -78,6 +80,7 @@ void EventLoop::pin_to_core(int core_id) {
         throw std::system_error(rc, std::generic_category(),
                                 "pthread_setaffinity_np failed");
     }
+    log::debug("[EventLoop] Pinned thread to CPU core {}", core_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +102,7 @@ void EventLoop::spawn(Task<void> task) {
 // ---------------------------------------------------------------------------
 
 void EventLoop::stop() noexcept {
+    log::debug("[EventLoop] Stop requested");
     running_.store(false, std::memory_order_release);
     if (wakeup_fd_ >= 0) {
         uint64_t one = 1;
@@ -124,6 +128,7 @@ void EventLoop::run() {
     } guard(this);
 
     running_.store(true, std::memory_order_release);
+    log::debug("[EventLoop] Starting event loop (root tasks={})", tasks_.size());
 
     // Arm the cross-thread wakeup poll. When stop() writes to wakeup_fd_,
     // submit_and_wait() returns with a POLLIN CQE, process_completions() calls
@@ -148,10 +153,9 @@ void EventLoop::run() {
                 try {
                     t.result();
                 } catch (const std::exception& e) {
-                    std::cerr << "[EventLoop] Uncaught exception in root task: "
-                              << e.what() << '\n';
+                    log::error("[EventLoop] Uncaught exception in root task: {}", e.what());
                 } catch (...) {
-                    std::cerr << "[EventLoop] Uncaught unknown exception in root task\n";
+                    log::error("[EventLoop] Uncaught unknown exception in root task");
                 }
                 return true;
             }
@@ -169,6 +173,7 @@ void EventLoop::run() {
     }
 
     running_.store(false, std::memory_order_release);
+    log::debug("[EventLoop] Event loop finished");
 }
 
 } // namespace aegon::core

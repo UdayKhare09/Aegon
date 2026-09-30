@@ -50,6 +50,16 @@ find_library(LIBDEFLATE_LIB deflate REQUIRED)
 # Core Framework Libraries
 # ==============================================================================
 
+# 0. High-Performance C++26 Telemetry & Logging (aegon_log)
+add_library(aegon_log
+    src/log/ConsoleSink.cpp
+    src/log/FileSink.cpp
+    src/log/Logger.cpp
+)
+target_link_libraries(aegon_log PUBLIC
+    Threads::Threads
+)
+
 # 1. Async io_uring Core (aegon_core)
 add_library(aegon_core
     src/core/BufferPool.cpp
@@ -57,6 +67,7 @@ add_library(aegon_core
     src/core/EventLoop.cpp
 )
 target_link_libraries(aegon_core PUBLIC
+    aegon_log
     uring
     Threads::Threads
 )
@@ -158,14 +169,14 @@ target_link_libraries(aegon_gateway PUBLIC
 # ==============================================================================
 # Include Directories, Aliases & Export Names
 # ==============================================================================
-set(AEGON_MODULES core config redis memory orm http gateway)
+set(AEGON_MODULES log core config redis memory orm http gateway)
 
 foreach(mod ${AEGON_MODULES})
     set_target_properties(aegon_${mod} PROPERTIES EXPORT_NAME ${mod})
     add_library(Aegon::${mod} ALIAS aegon_${mod})
 endforeach()
 
-foreach(tgt aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http aegon_gateway)
+foreach(tgt aegon_log aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http aegon_gateway)
     target_include_directories(${tgt} PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -181,7 +192,7 @@ target_include_directories(aegon_orm PUBLIC
 # Installation & Package Configuration
 # ==============================================================================
 install(
-    TARGETS aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http aegon_gateway
+    TARGETS aegon_log aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http aegon_gateway
     EXPORT AegonTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -265,6 +276,7 @@ target_include_directories(test_version PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME version COMMAND test_version)
 
 aegon_add_test(simd_string aegon_core)
+aegon_add_test(logger aegon_log)
 aegon_add_test(foundational_types)
 aegon_add_test(dto_validation)
 aegon_add_test(advanced_io)

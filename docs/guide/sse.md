@@ -251,7 +251,7 @@ router.post("/v1/chat/completions", [](Context& ctx) -> aegon::core::Task<void> 
 
 ## Live Sample Application
 
-A full runnable demonstration application is included in the Aegon repository under [`samples/sse`](file:///home/uday/Projects/Aegon/samples/sse):
+A full runnable demonstration application is included in the Aegon repository under `samples/sse`:
 
 ```bash
 # Build the sample app

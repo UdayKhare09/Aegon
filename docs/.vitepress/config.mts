@@ -58,8 +58,9 @@ export default defineConfig({
           ]
         },
         {
-          text: 'Services & Validation',
+          text: 'Services & Observability',
           items: [
+            { text: 'Logging System', link: '/guide/logging' },
             { text: 'Configuration (YAML)', link: '/guide/config' },
             { text: 'Service Registry (DI)', link: '/guide/service-registry' },
             { text: 'Data Validation', link: '/guide/validation' },

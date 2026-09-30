@@ -1,4 +1,5 @@
 #include "BufferPool.h"
+#include "log/Logger.h"
 #include <cstdlib>
 #include <system_error>
 #include <cstring>
@@ -12,6 +13,7 @@ BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries,
 
     // Check power-of-two requirement for io_uring_buf_ring
     if ((entries & (entries - 1)) != 0 || entries == 0) {
+        log::error("[BufferPool] BufferPool entries must be a power of 2, got {}", entries);
         throw std::invalid_argument("BufferPool entries must be a power of 2");
     }
 
@@ -20,12 +22,14 @@ BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries,
         buf_ring_ = io_uring_setup_buf_ring(ring_, entries_, bgid_, 0, &ret);
         if (buf_ring_) break;
         if ((ret == -ENOMEM || ret == -EPERM) && entries_ > 1) {
+            log::warn("[BufferPool] io_uring_setup_buf_ring returned {}, halving entries to {}", ret, entries_ / 2);
             entries_ /= 2;
         } else {
             break;
         }
     }
     if (!buf_ring_) {
+        log::error("[BufferPool] io_uring_setup_buf_ring failed: {}", std::strerror(-ret));
         throw std::system_error(-ret, std::generic_category(), "io_uring_setup_buf_ring failed");
     }
 
@@ -80,9 +84,13 @@ BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries,
         io_uring_buf_ring_add(buf_ring_, buf, static_cast<unsigned int>(buffer_size_), i, mask, i);
     }
     io_uring_buf_ring_advance(buf_ring_, entries_);
+
+    log::debug("[BufferPool] Initialized pool bgid={}: entries={}, buf_size={} B, total_payload={} KB, registered={}",
+               bgid_, entries_, buffer_size_, total_payload_ / 1024, buffers_registered_);
 }
 
 BufferPool::~BufferPool() {
+    log::debug("[BufferPool] Destroying pool bgid={}", bgid_);
     if (buffers_registered_ && ring_) {
         io_uring_unregister_buffers(ring_);
         buffers_registered_ = false;

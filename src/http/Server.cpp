@@ -5,6 +5,7 @@
 #include "http/tls/TlsContext.h"
 #include "http/tls/TlsStream.h"
 #include "http/v3/Http3Server.h"
+#include "log/Logger.h"
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
@@ -359,6 +360,11 @@ void Server::run() {
         active_listeners[0].tls = true;
     }
 
+    for (const auto& l : active_listeners) {
+        log::info("Aegon HTTP{} listening on {}:{} [workers=1]",
+                  l.tls ? "S" : "", l.host, l.port);
+    }
+
     run_event_loop(active_listeners, std::nullopt, true);
 }
 
@@ -382,6 +388,11 @@ void Server::run(size_t threads) {
         active_listeners[0].tls = true;
     }
 
+    for (const auto& l : active_listeners) {
+        log::info("Aegon HTTP{} listening on {}:{} [workers={}]",
+                  l.tls ? "S" : "", l.host, l.port, threads);
+    }
+
     workers_.clear();
 
     for (size_t i = 0; i < threads; ++i) {
@@ -401,7 +412,7 @@ void Server::run(size_t threads) {
 
                 run_event_loop(active_listeners, core_id, i == 0);
             } catch (const std::exception& e) {
-                std::cerr << "Worker thread " << i << " error: " << e.what() << "\n";
+                log::error("Worker thread {} error: {}", i, e.what());
             }
         });
     }
@@ -415,6 +426,7 @@ void Server::run(size_t threads) {
 
 void Server::stop() {
     running_ = false;
+    log::info("Aegon server stopping");
 
     // Run asynchronous shutdown lifecycle hooks
     for (const auto& hook : shutdown_hooks_) {
