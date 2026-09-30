@@ -270,7 +270,33 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
             }
 
             Response res;
-            co_await router_.dispatch(req, res, services_);
+            bool sse_headers_sent = false;
+
+            // SSE write-back: each call serializes one chunk and flushes immediately.
+            // Captured by the SseStream returned from ctx.sse().
+            SseWriteFn sse_fn = [&](std::string frame) -> core::Task<void> {
+                if (!sse_headers_sent) {
+                    if (!resp_batch.empty()) {
+                        int sent = co_await loop_.ring().send(client_fd_, resp_batch);
+                        if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
+                            if (sent > 0) {
+                                (void)(co_await loop_.ring().send_all(client_fd_, std::string_view(resp_batch).substr(sent)));
+                            }
+                        }
+                        resp_batch.clear();
+                    }
+                    std::string header_out;
+                    Http1Serializer::serialize_headers(res, header_out);
+                    (void)(co_await loop_.ring().send_all(client_fd_, header_out));
+                    sse_headers_sent = true;
+                }
+                std::string chunk;
+                chunk.reserve(frame.size() + 16);
+                Http1Serializer::serialize_chunk(frame, chunk);
+                co_await loop_.ring().send_all(client_fd_, chunk);
+            };
+
+            co_await router_.dispatch(req, res, services_, std::move(sse_fn));
 
             keep_alive = evaluate_keep_alive(req, res);
 
@@ -290,6 +316,26 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                 if (req.method() != Method::HEAD) {
                     co_await stream_file_zero_copy(loop_, client_fd_, res.file_path(), res.file_size());
                 }
+            } else if (res.is_sse()) {
+                // SSE: headers were already set on res, handler streamed chunks directly.
+                // Flush headers first if not already sent (e.g. handler returned without writing).
+                if (!sse_headers_sent) {
+                    if (!resp_batch.empty()) {
+                        int sent = co_await loop_.ring().send(client_fd_, resp_batch);
+                        if (sent != static_cast<int>(resp_batch.size())) [[unlikely]] {
+                            if (sent <= 0) { keep_alive = false; break; }
+                            (void)(co_await loop_.ring().send_all(client_fd_, std::string_view(resp_batch).substr(sent)));
+                        }
+                        resp_batch.clear();
+                    }
+                    std::string header_out;
+                    Http1Serializer::serialize_headers(res, header_out);
+                    (void)(co_await loop_.ring().send_all(client_fd_, header_out));
+                    sse_headers_sent = true;
+                }
+                // Terminate chunked stream
+                (void)(co_await loop_.ring().send_all(client_fd_, "0\r\n\r\n"));
+                keep_alive = false;  // SSE connections close after the stream ends
             } else {
                 if (req.method() == Method::HEAD) {
                     Http1Serializer::append_headers(res, resp_batch);
@@ -379,7 +425,30 @@ core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::strin
             }
 
             Response res;
-            co_await router_.dispatch(req, res, services_);
+            bool sse_headers_sent = false;
+
+            // SSE write-back over TLS: same chunked pattern, written through TLS stream.
+            SseWriteFn sse_fn = [&](std::string frame) -> core::Task<void> {
+                if (!sse_headers_sent) {
+                    if (!resp_batch.empty()) {
+                        (void)(co_await tls_stream.write_plaintext(resp_batch.data(), resp_batch.size()));
+                        resp_batch.clear();
+                    }
+                    if (!alt_svc_hdr.empty() && !res.headers().contains("alt-svc")) {
+                        res.set_header_owned("alt-svc", std::string(alt_svc_hdr));
+                    }
+                    std::string header_out;
+                    Http1Serializer::serialize_headers(res, header_out);
+                    (void)(co_await tls_stream.write_plaintext(header_out.data(), header_out.size()));
+                    sse_headers_sent = true;
+                }
+                std::string chunk;
+                chunk.reserve(frame.size() + 16);
+                Http1Serializer::serialize_chunk(frame, chunk);
+                (void)(co_await tls_stream.write_plaintext(chunk.data(), chunk.size()));
+            };
+
+            co_await router_.dispatch(req, res, services_, std::move(sse_fn));
 
             keep_alive = evaluate_keep_alive(req, res);
 
@@ -387,7 +456,20 @@ core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::strin
                 res.set_header_owned("alt-svc", std::string(alt_svc_hdr));
             }
 
-            if (req.method() == Method::HEAD) {
+            if (res.is_sse()) {
+                if (!sse_headers_sent) {
+                    if (!resp_batch.empty()) {
+                        (void)(co_await tls_stream.write_plaintext(resp_batch.data(), resp_batch.size()));
+                        resp_batch.clear();
+                    }
+                    std::string header_out;
+                    Http1Serializer::serialize_headers(res, header_out);
+                    (void)(co_await tls_stream.write_plaintext(header_out.data(), header_out.size()));
+                    sse_headers_sent = true;
+                }
+                (void)(co_await tls_stream.write_plaintext("0\r\n\r\n", 5));
+                keep_alive = false;
+            } else if (req.method() == Method::HEAD) {
                 Http1Serializer::append_headers(res, resp_batch);
             } else {
                 Http1Serializer::append_response(res, resp_batch);

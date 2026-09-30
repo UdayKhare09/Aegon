@@ -226,3 +226,20 @@ std::string buffer;
 v1::Http1Serializer::serialize_chunk("data: {\"event\":\"tick\"}\n\n", buffer);
 v1::Http1Serializer::serialize_chunk_end(buffer); // Appends final 0\r\n\r\n
 ```
+
+---
+
+## Server-Sent Events (SSE)
+
+For asynchronous, real-time push streaming over HTTP/1.1, HTTP/2, and HTTP/3, use the dedicated coroutine-native SSE stream API via `co_await ctx.sse()`:
+
+```cpp
+router.get("/events", [](Context& ctx) -> Task<void> {
+    auto stream = co_await ctx.sse();
+    co_await stream.event("status", "running");
+    co_await stream.send_json("metric", MyStats{...});
+    stream.close();
+});
+```
+
+See the full [Server-Sent Events (SSE) Guide](./sse.md) for complete details on typed JSON streaming, heartbeats, and client integration.

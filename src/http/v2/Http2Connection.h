@@ -30,6 +30,11 @@ struct Http2Stream {
     bool request_complete{false};
     bool response_submitted{false};
     bool reset{false};
+
+    // SSE streaming state
+    std::deque<std::string> sse_frames;    // frames queued by SseWriteFn
+    bool is_sse{false};                    // true after ctx.sse() is called
+    bool sse_eof{false};                   // true after SseStream::close()
 };
 
 using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
@@ -88,6 +93,15 @@ public:
 private:
     Http2Stream* get_or_create_stream(int32_t stream_id);
     void submit_response(Http2Stream* stream);
+    /**
+     * @brief Submit HEADERS frame only (no body) for SSE — must be called before dispatch.
+     */
+    void submit_sse_headers(Http2Stream* stream);
+    /**
+     * @brief Push a pre-formatted SSE frame into the stream's outbound queue.
+     * Resumes nghttp2 data sending and flushes to wire.
+     */
+    core::Task<void> push_sse_frame(Http2Stream* stream, std::string frame);
 
     core::EventLoop& loop_;
     int client_fd_;

@@ -54,6 +54,7 @@ export default defineConfig({
             { text: 'HTTP Client', link: '/guide/http-client' },
             { text: 'API Gateway & Reverse Proxy', link: '/guide/gateway' },
             { text: 'WebSocket (RFC 6455)', link: '/guide/websocket' },
+            { text: 'Server-Sent Events (SSE)', link: '/guide/sse' },
           ]
         },
         {

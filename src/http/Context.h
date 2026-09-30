@@ -4,6 +4,7 @@
 #include "http/Response.h"
 #include "http/ServiceRegistry.h"
 #include "http/ProblemDetails.h"
+#include "http/SseStream.h"
 #include <string>
 #include <string_view>
 #include <optional>
@@ -27,6 +28,7 @@ private:
     Response& res_;
     const ServiceRegistry* services_{nullptr};
     std::unordered_map<std::type_index, std::shared_ptr<void>> local_store_;
+    SseWriteFn sse_writer_{nullptr};
 
 public:
     Context(Request& req, Response& res, const ServiceRegistry* services = nullptr) noexcept
@@ -184,6 +186,33 @@ public:
      */
     Response& send_file(const std::string& filepath, std::string_view mime_type = "") {
         return res_.file(filepath, mime_type);
+    }
+
+    /**
+     * @brief Inject the connection-layer SSE write-back function.
+     * Called by the connection before dispatch(). Not part of the developer-facing API.
+     */
+    void set_sse_writer(SseWriteFn fn) noexcept {
+        sse_writer_ = std::move(fn);
+    }
+
+    /**
+     * @brief Upgrade this response to a Server-Sent Events stream.
+     *
+     * Sets Content-Type: text/event-stream and other required headers on the response,
+     * then returns an SseStream the handler can co_await on to push events directly
+     * to the client as they are produced.
+     *
+     * Works identically on HTTP/1.1 (chunked transfer), HTTP/2 (DATA frames),
+     * and HTTP/3 (QUIC stream DATA).
+     *
+     * Example:
+     *   auto stream = co_await ctx.sse();
+     *   co_await stream.event("update", "hello");
+     */
+    core::Task<SseStream> sse() {
+        res_.sse();                              // set headers, mark flag
+        co_return SseStream(sse_writer_);        // hand write channel to handler
     }
 };
 

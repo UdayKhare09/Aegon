@@ -5,6 +5,7 @@
 #include "http/RadixTree.h"
 #include "http/RouteRegistrar.h"
 #include "http/RouteGroup.h"
+#include "http/SseStream.h"
 #include "http/websocket/WebSocket.h"
 #include "core/Task.h"
 #include <string>
@@ -289,8 +290,12 @@ public:
      *
      * Catches unhandled exceptions and invokes error_handler or returns standard RFC 7807 500 JSON.
      * Invokes custom or standard RFC 7807 handlers for 404 (Not Found) and 405 (Method Not Allowed).
+     *
+     * @param sse_writer  Optional write-back function injected by the connection layer for SSE routes.
+     *                    When non-null, ctx.sse() will return an SseStream backed by this function.
      */
-    core::Task<void> dispatch(Request& req, Response& res, const ServiceRegistry* services) const {
+    core::Task<void> dispatch(Request& req, Response& res, const ServiceRegistry* services,
+                              SseWriteFn sse_writer = nullptr) const {
         if (req.method() == Method::OPTIONS && req.path() == "*") {
             res.status(StatusCode::Ok).header("Allow", "GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH").text("");
             co_return;
@@ -298,6 +303,7 @@ public:
 
         auto match_res = match(req);
         Context ctx(req, res, services);
+        if (sse_writer) ctx.set_sse_writer(std::move(sse_writer));
 
         // Fast-path hot path: Exact route found, no global middleware
         if (__builtin_expect(match_res.route_found && match_res.handler != nullptr && global_middleware_.empty(), 1)) {

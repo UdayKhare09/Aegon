@@ -1,4 +1,5 @@
 #include "http/v3/Http3Connection.h"
+#include "http/SseStream.h"
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -485,6 +486,29 @@ nghttp3_ssize Http3Connection::on_stream_read(int64_t stream_id, uint32_t* pflag
     if (it == streams_.end()) return NGHTTP3_ERR_CALLBACK_FAILURE;
 
     auto* stream = it->second.get();
+
+    // SSE streaming path: serve from buffered frames
+    if (stream->is_sse) {
+        size_t available = (stream->sse_offset < stream->sse_buf.size())
+                               ? (stream->sse_buf.size() - stream->sse_offset)
+                               : 0;
+        if (available == 0) {
+            if (stream->sse_eof) {
+                *pflags |= NGHTTP3_DATA_FLAG_EOF;
+                return 0;
+            }
+            return NGHTTP3_ERR_WOULDBLOCK;  // resumed by push_sse_frame
+        }
+        vec[0].base = reinterpret_cast<uint8_t*>(stream->sse_buf.data() + stream->sse_offset);
+        vec[0].len  = available;
+        stream->sse_offset += available;
+        if (stream->sse_offset >= stream->sse_buf.size() && stream->sse_eof) {
+            *pflags |= NGHTTP3_DATA_FLAG_EOF;
+        }
+        return 1;
+    }
+
+    // Normal (non-SSE) path
     if (stream->req.method() == Method::HEAD) {
         *pflags |= NGHTTP3_DATA_FLAG_EOF;
         return 0;
@@ -502,6 +526,79 @@ nghttp3_ssize Http3Connection::on_stream_read(int64_t stream_id, uint32_t* pflag
     }
 
     return 1;
+}
+
+void Http3Connection::submit_sse_headers(Http3Stream* stream) {
+    // Like submit_response but no content-length and no EOF immediately.
+    char status_buf[16];
+    auto [p_status, _s] = std::to_chars(status_buf, status_buf + sizeof(status_buf),
+                                         static_cast<uint16_t>(stream->res.status()));
+    size_t status_len = static_cast<size_t>(p_status - status_buf);
+
+    std::array<nghttp3_nv, 16> nva_stack;
+    std::vector<nghttp3_nv> nva_heap;
+    nghttp3_nv* nva_ptr = nva_stack.data();
+    size_t nva_count = 0;
+
+    auto push_nv = [&](const uint8_t* name, size_t namelen, const uint8_t* val, size_t vallen) {
+        nghttp3_nv nv{
+            .name = const_cast<uint8_t*>(name),
+            .value = const_cast<uint8_t*>(val),
+            .namelen = namelen,
+            .valuelen = vallen,
+            .flags = NGHTTP3_NV_FLAG_NONE
+        };
+        if (nva_count < nva_stack.size() && nva_heap.empty()) {
+            nva_stack[nva_count++] = nv;
+        } else {
+            if (nva_heap.empty()) {
+                nva_heap.reserve(16 + stream->res.headers().size());
+                for (size_t i = 0; i < nva_count; ++i) nva_heap.push_back(nva_stack[i]);
+            }
+            nva_heap.push_back(nv);
+            nva_count = nva_heap.size();
+            nva_ptr = nva_heap.data();
+        }
+    };
+
+    push_nv(reinterpret_cast<const uint8_t*>(":status"), 7,
+            reinterpret_cast<const uint8_t*>(status_buf), status_len);
+
+    if (!stream->res.headers().contains("date") && static_cast<uint16_t>(stream->res.status()) >= 200) {
+        auto d = get_http_date();
+        push_nv(reinterpret_cast<const uint8_t*>("date"), 4,
+                reinterpret_cast<const uint8_t*>(d.data()), d.size());
+    }
+
+    std::vector<std::string> lower_names;
+    lower_names.reserve(stream->res.headers().size());
+    for (const auto& h : stream->res.headers()) {
+        if (is_prohibited_header(h.name)) continue;
+        lower_names.push_back(to_lower_ascii(h.name));
+        const auto& ln = lower_names.back();
+        push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+    }
+
+    nghttp3_data_reader dr{};
+    dr.read_data = h3_read_data;
+
+    nghttp3_conn_submit_response(h3conn_, stream->stream_id, nva_ptr, nva_count, &dr);
+    stream->response_submitted = true;
+}
+
+void Http3Connection::push_sse_frame(Http3Stream* stream, std::string frame) {
+    if (!stream->response_submitted) {
+        stream->is_sse = true;
+        submit_sse_headers(stream);
+    }
+    if (stream->sse_offset >= stream->sse_buf.size()) {
+        stream->sse_buf.clear();
+        stream->sse_offset = 0;
+    }
+    stream->sse_buf.append(frame);
+    nghttp3_conn_resume_stream(h3conn_, stream->stream_id);
+    flush_outbound();
 }
 
 void Http3Connection::submit_response(Http3Stream* stream) {
@@ -597,9 +694,24 @@ core::Task<void> Http3Connection::dispatch_pending_requests() {
             stream->req.set_body(stream->body_accum);
         }
 
-        co_await router_.dispatch(stream->req, stream->res, services_);
+        SseWriteFn sse_fn = [this, stream](std::string frame) -> core::Task<void> {
+            push_sse_frame(stream, std::move(frame));
+            co_return;
+        };
 
-        submit_response(stream);
+        co_await router_.dispatch(stream->req, stream->res, services_, std::move(sse_fn));
+
+        if (stream->res.is_sse()) {
+            if (!stream->response_submitted) {
+                stream->is_sse = true;
+                submit_sse_headers(stream);
+            }
+            stream->sse_eof = true;   // handler done; next on_stream_read -> EOF
+            nghttp3_conn_resume_stream(h3conn_, stream->stream_id);
+            flush_outbound();
+        } else {
+            submit_response(stream);
+        }
     }
 }
 

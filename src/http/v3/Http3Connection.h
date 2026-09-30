@@ -49,6 +49,12 @@ struct Http3Stream {
     bool seen_scheme{false};
     bool seen_authority{false};
     bool seen_regular_headers{false};
+
+    // SSE streaming state
+    std::string sse_buf;                // buffer of serialized frames
+    size_t sse_offset{0};               // bytes transmitted so far
+    bool is_sse{false};                 // true after ctx.sse() is called
+    bool sse_eof{false};                // true after handler returns
 };
 
 class Http3Connection {
@@ -119,6 +125,14 @@ public:
 private:
     Http3Stream* get_or_create_stream(int64_t stream_id);
     void submit_response(Http3Stream* stream);
+    /**
+     * @brief Submit HEADERS frame only (no body) for SSE streaming.
+     */
+    void submit_sse_headers(Http3Stream* stream);
+    /**
+     * @brief Push a pre-formatted SSE frame and flush QUIC packets.
+     */
+    void push_sse_frame(Http3Stream* stream, std::string frame);
     core::Task<void> dispatch_pending_requests();
 
     core::EventLoop& loop_;

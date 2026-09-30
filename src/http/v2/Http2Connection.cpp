@@ -1,5 +1,6 @@
 #include "http/v2/Http2Connection.h"
 #include "http/v2/Http2Frame.h"
+#include "http/SseStream.h"
 #include "core/simd/SimdString.h"
 #include <algorithm>
 #include <array>
@@ -306,6 +307,30 @@ ssize_t Http2Connection::on_data_source_read(int32_t stream_id, uint8_t* buf, si
         return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
     }
 
+    // SSE streaming path: drain from queued frames
+    if (stream->is_sse) {
+        if (stream->sse_frames.empty()) {
+            if (stream->sse_eof) {
+                *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+                return 0;
+            }
+            return NGHTTP2_ERR_DEFERRED;  // no data yet — will be resumed by push_sse_frame
+        }
+        auto& frame = stream->sse_frames.front();
+        size_t to_copy = std::min(frame.size(), length);
+        std::memcpy(buf, frame.data(), to_copy);
+        if (to_copy == frame.size()) {
+            stream->sse_frames.pop_front();
+        } else {
+            frame.erase(0, to_copy);
+        }
+        if (stream->sse_frames.empty() && stream->sse_eof) {
+            *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+        }
+        return static_cast<ssize_t>(to_copy);
+    }
+
+    // Normal (non-SSE) path: read from buffered response body
     if (stream->req.method() == Method::HEAD) {
         *data_flags |= NGHTTP2_DATA_FLAG_EOF;
         return 0;
@@ -405,6 +430,85 @@ void Http2Connection::submit_response(Http2Stream* stream) {
     stream->response_submitted = true;
 }
 
+void Http2Connection::submit_sse_headers(Http2Stream* stream) {
+    // Same header building logic as submit_response but without content-length
+    // and with a deferred data provider (no EOF yet).
+    char status_buf[16];
+    auto [p_status, _s] = std::to_chars(status_buf, status_buf + sizeof(status_buf),
+                                         static_cast<uint16_t>(stream->res.status()));
+    size_t status_len = static_cast<size_t>(p_status - status_buf);
+
+    std::array<nghttp2_nv, 16> nva_stack;
+    std::vector<nghttp2_nv> nva_heap;
+    nghttp2_nv* nva_ptr = nva_stack.data();
+    size_t nva_count = 0;
+
+    auto push_nv = [&](const uint8_t* name, size_t namelen, const uint8_t* val, size_t vallen) {
+        nghttp2_nv nv{
+            .name = const_cast<uint8_t*>(name),
+            .value = const_cast<uint8_t*>(val),
+            .namelen = namelen,
+            .valuelen = vallen,
+            .flags = NGHTTP2_NV_FLAG_NONE
+        };
+        if (nva_count < nva_stack.size() && nva_heap.empty()) {
+            nva_stack[nva_count++] = nv;
+        } else {
+            if (nva_heap.empty()) {
+                nva_heap.reserve(16 + stream->res.headers().size());
+                for (size_t i = 0; i < nva_count; ++i) {
+                    nva_heap.push_back(nva_stack[i]);
+                }
+            }
+            nva_heap.push_back(nv);
+            nva_count = nva_heap.size();
+            nva_ptr = nva_heap.data();
+        }
+    };
+
+    push_nv(reinterpret_cast<const uint8_t*>(":status"), 7,
+            reinterpret_cast<const uint8_t*>(status_buf), status_len);
+
+    if (!stream->res.headers().contains("date") && static_cast<uint16_t>(stream->res.status()) >= 200) {
+        auto d = get_http_date();
+        push_nv(reinterpret_cast<const uint8_t*>("date"), 4,
+                reinterpret_cast<const uint8_t*>(d.data()), d.size());
+    }
+
+    std::vector<std::string> lower_names;
+    lower_names.reserve(stream->res.headers().size());
+    for (const auto& h : stream->res.headers()) {
+        if (is_hop_by_hop_header(h.name)) continue;
+        lower_names.push_back(to_lower_ascii(h.name));
+        const auto& ln = lower_names.back();
+        push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+    }
+
+    if (!alt_svc_.empty() && !stream->res.headers().contains("alt-svc")) {
+        push_nv(reinterpret_cast<const uint8_t*>("alt-svc"), 7,
+                reinterpret_cast<const uint8_t*>(alt_svc_.data()), alt_svc_.size());
+    }
+
+    nghttp2_data_provider prd;
+    prd.source.ptr = stream;
+    prd.read_callback = data_source_read_cb;
+
+    nghttp2_submit_response(session_, stream->stream_id, nva_ptr, nva_count, &prd);
+    stream->response_submitted = true;
+}
+
+core::Task<void> Http2Connection::push_sse_frame(Http2Stream* stream, std::string frame) {
+    if (stream->reset || closed_stream_ids_.contains(stream->stream_id)) co_return;
+    if (!stream->response_submitted) {
+        stream->is_sse = true;
+        submit_sse_headers(stream);
+    }
+    stream->sse_frames.push_back(std::move(frame));
+    nghttp2_session_resume_data(session_, stream->stream_id);
+    co_await flush_outbound();
+}
+
 core::Task<bool> Http2Connection::init() {
     nghttp2_settings_entry iv[] = {
         {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, config_.h2_max_concurrent_streams},
@@ -495,9 +599,28 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
             stream->req.set_body(stream->body_accum);
         }
 
-        co_await router_.dispatch(stream->req, stream->res, services_);
+        // Build SSE write-back: pushes each frame into the stream queue and flushes.
+        // Captured by value for the stream pointer; safe because stream lifetime
+        // is tied to this Http2Connection.
+        SseWriteFn sse_fn = [this, stream](std::string frame) -> core::Task<void> {
+            co_await push_sse_frame(stream, std::move(frame));
+        };
 
-        submit_response(stream);
+        co_await router_.dispatch(stream->req, stream->res, services_, std::move(sse_fn));
+
+        if (stream->res.is_sse()) {
+            // Headers were marked by ctx.sse(); submit HEADERS frame if not yet done.
+            // Data was already streamed event-by-event via push_sse_frame.
+            if (!stream->response_submitted) {
+                stream->is_sse = true;
+                submit_sse_headers(stream);
+            }
+            stream->sse_eof = true;  // handler finished; next data_source_read -> EOF
+            nghttp2_session_resume_data(session_, stream->stream_id);
+            co_await flush_outbound();
+        } else {
+            submit_response(stream);
+        }
     }
 }
 

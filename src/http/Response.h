@@ -157,6 +157,21 @@ public:
 
     [[nodiscard]] bool is_chunked() const noexcept { return is_chunked_; }
 
+    /**
+     * @brief Mark response as an SSE stream.
+     * Sets required SSE headers. H1 serializer will also add Transfer-Encoding: chunked
+     * and suppress Content-Length. H2/H3 use native DATA frames instead.
+     */
+    Response& sse() {
+        is_sse_ = true;
+        headers_.set("Content-Type",       "text/event-stream");
+        headers_.set("Cache-Control",       "no-cache");
+        headers_.set("X-Accel-Buffering",   "no");
+        return *this;
+    }
+
+    [[nodiscard]] bool is_sse() const noexcept { return is_sse_; }
+
     // Getters
     [[nodiscard]] StatusCode status() const noexcept { return status_; }
     [[nodiscard]] uint16_t status_code() const noexcept { return static_cast<uint16_t>(status_); }
@@ -184,6 +199,7 @@ private:
     HeaderMap headers_{};
     std::string body_{};
     bool is_chunked_{false};
+    bool is_sse_{false};
     bool is_file_{false};
     std::string file_path_{};
     size_t file_size_{0};

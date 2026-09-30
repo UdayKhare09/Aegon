@@ -340,7 +340,12 @@ target_link_libraries(test_spec_server PRIVATE aegon_http aegon_core)
 add_executable(autobahn_server tests/autobahn/server.cpp)
 target_link_libraries(autobahn_server PRIVATE aegon_http aegon_core)
 
+add_executable(test_sse tests/test_sse.cpp)
+target_link_libraries(test_sse PRIVATE aegon_http aegon_core)
+add_test(NAME sse COMMAND test_sse)
+
 # ==============================================================================
 # Samples
 # ==============================================================================
 add_subdirectory(samples/adv)
+add_subdirectory(samples/sse)

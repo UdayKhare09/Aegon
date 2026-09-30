@@ -44,7 +44,12 @@ void Http1Serializer::append_headers(const Response& res, std::string& out) {
     const auto& headers = res.headers();
     bool no_content_body = should_suppress_content_length(res.status());
 
-    if (res.is_chunked()) {
+    if (res.is_sse()) {
+        // SSE over H1: chunked framing, no Content-Length
+        if (!headers.contains("Transfer-Encoding")) {
+            out.append("Transfer-Encoding: chunked\r\n");
+        }
+    } else if (res.is_chunked()) {
         if (!headers.contains("Transfer-Encoding")) {
             out.append("Transfer-Encoding: chunked\r\n");
         }
