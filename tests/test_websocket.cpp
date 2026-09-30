@@ -160,7 +160,7 @@ void test_websocket_session_mock() {
     assert(resp_hdr.opcode == Opcode::Text);
     assert(!resp_hdr.masked);
     assert(resp_hdr.payload_len == 7);
-    std::string_view echoed = mock.written_frames_.substr(resp_hdr.header_len, resp_hdr.payload_len);
+    std::string_view echoed = std::string_view(mock.written_frames_).substr(resp_hdr.header_len, resp_hdr.payload_len);
     assert(echoed == "EchoMe!");
 
     std::cout << "  -> Passed: MockTransport session echoed '" << echoed << "'\n";
@@ -434,7 +434,7 @@ void test_websocket_config_limits_and_masking() {
         auto parse_res = parse_frame_header(mock.written_frames_, resp_hdr);
         assert(parse_res == FrameParseResult::Complete);
         assert(resp_hdr.opcode == Opcode::Text);
-        std::string_view echoed = mock.written_frames_.substr(resp_hdr.header_len, resp_hdr.payload_len);
+        std::string_view echoed = std::string_view(mock.written_frames_).substr(resp_hdr.header_len, resp_hdr.payload_len);
         assert(echoed == "UnmaskedOK");
         std::cout << "  -> Passed: require_masked_frames = false successfully accepted unmasked frame\n";
     }

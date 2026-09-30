@@ -546,7 +546,7 @@ core::Task<std::vector<StreamReadResult>> RedisClient::xread(const std::vector<s
     for (const auto& s : streams) args.push_back(s);
     for (const auto& id : ids) args.push_back(id);
 
-    std::string_view route_key = streams.empty() ? "" : streams[0];
+    std::string_view route_key = streams.empty() ? std::string_view{} : std::string_view(streams[0]);
     auto resp = co_await execute(route_key, args);
     co_return parse_stream_read_results(resp);
 }
@@ -606,7 +606,7 @@ core::Task<std::vector<StreamReadResult>> RedisClient::xreadgroup(std::string_vi
     for (const auto& s : streams) args.push_back(s);
     for (const auto& id : ids) args.push_back(id);
 
-    std::string_view route_key = streams.empty() ? "" : streams[0];
+    std::string_view route_key = streams.empty() ? std::string_view{} : std::string_view(streams[0]);
     auto resp = co_await execute(route_key, args);
     co_return parse_stream_read_results(resp);
 }

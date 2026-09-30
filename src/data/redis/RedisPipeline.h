@@ -88,7 +88,7 @@ public:
             std::unordered_map<RedisConnectionPool*, PoolBatch> batches;
             for (size_t i = 0; i < commands_.size(); ++i) {
                 const auto& cmd = commands_[i];
-                std::string_view key = cmd.size() > 1 ? cmd[1] : "";
+                std::string_view key = cmd.size() > 1 ? std::string_view(cmd[1]) : std::string_view{};
                 auto pool = cluster_router_->pool_for_key(key);
                 if (!pool) {
                     RespValue err;

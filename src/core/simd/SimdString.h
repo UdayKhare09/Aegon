@@ -311,45 +311,49 @@ public:
         // All branches above return — scalar loop below is dead code for AVX-512 path
 #elif defined(__AVX2__)
         size_t i = 0;
-        const __m256i upper_a = _mm256_set1_epi8('A' - 1);
-        const __m256i upper_z = _mm256_set1_epi8('Z' + 1);
-        const __m256i to_lower = _mm256_set1_epi8(32);
+        if (len >= 32) {
+            const __m256i upper_a = _mm256_set1_epi8('A' - 1);
+            const __m256i upper_z = _mm256_set1_epi8('Z' + 1);
+            const __m256i to_lower = _mm256_set1_epi8(32);
 
-        for (; i + 32 <= len; i += 32) {
-            __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p1 + i));
-            __m256i v2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p2 + i));
+            for (; i + 32 <= len; i += 32) {
+                __m256i v1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p1 + i));
+                __m256i v2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(p2 + i));
 
-            __m256i is_u1 = _mm256_and_si256(_mm256_cmpgt_epi8(v1, upper_a), _mm256_cmpgt_epi8(upper_z, v1));
-            __m256i is_u2 = _mm256_and_si256(_mm256_cmpgt_epi8(v2, upper_a), _mm256_cmpgt_epi8(upper_z, v2));
+                __m256i is_u1 = _mm256_and_si256(_mm256_cmpgt_epi8(v1, upper_a), _mm256_cmpgt_epi8(upper_z, v1));
+                __m256i is_u2 = _mm256_and_si256(_mm256_cmpgt_epi8(v2, upper_a), _mm256_cmpgt_epi8(upper_z, v2));
 
-            v1 = _mm256_or_si256(v1, _mm256_and_si256(is_u1, to_lower));
-            v2 = _mm256_or_si256(v2, _mm256_and_si256(is_u2, to_lower));
+                v1 = _mm256_or_si256(v1, _mm256_and_si256(is_u1, to_lower));
+                v2 = _mm256_or_si256(v2, _mm256_and_si256(is_u2, to_lower));
 
-            __m256i cmp = _mm256_cmpeq_epi8(v1, v2);
-            if (static_cast<uint32_t>(_mm256_movemask_epi8(cmp)) != 0xFFFFFFFFU) {
-                return false;
+                __m256i cmp = _mm256_cmpeq_epi8(v1, v2);
+                if (static_cast<uint32_t>(_mm256_movemask_epi8(cmp)) != 0xFFFFFFFFU) {
+                    return false;
+                }
             }
         }
 #elif defined(__SSE4_2__)
         size_t i = 0;
-        const __m128i upper_a = _mm_set1_epi8('A' - 1);
-        const __m128i upper_z = _mm_set1_epi8('Z' + 1);
-        const __m128i to_lower = _mm_set1_epi8(32);
+        if (len >= 16) {
+            const __m128i upper_a = _mm_set1_epi8('A' - 1);
+            const __m128i upper_z = _mm_set1_epi8('Z' + 1);
+            const __m128i to_lower = _mm_set1_epi8(32);
 
-        for (; i + 16 <= len; i += 16) {
-            __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p1 + i));
-            __m128i v2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p2 + i));
+            for (; i + 16 <= len; i += 16) {
+                __m128i v1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p1 + i));
+                __m128i v2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p2 + i));
 
-            __m128i is_u1 = _mm_and_si128(_mm_cmpgt_epi8(v1, upper_a), _mm_cmpgt_epi8(upper_z, v1));
-            __m128i is_u2 = _mm_and_si128(_mm_cmpgt_epi8(v2, upper_a), _mm_cmpgt_epi8(upper_z, v2));
+                __m128i is_u1 = _mm_and_si128(_mm_cmpgt_epi8(v1, upper_a), _mm_cmpgt_epi8(upper_z, v1));
+                __m128i is_u2 = _mm_and_si128(_mm_cmpgt_epi8(v2, upper_a), _mm_cmpgt_epi8(upper_z, v2));
 
-            v1 = _mm_or_si128(v1, _mm_and_si128(is_u1, to_lower));
-            v2 = _mm_or_si128(v2, _mm_and_si128(is_u2, to_lower));
+                v1 = _mm_or_si128(v1, _mm_and_si128(is_u1, to_lower));
+                v2 = _mm_or_si128(v2, _mm_and_si128(is_u2, to_lower));
 
-            __m128i cmp = _mm_cmpeq_epi8(v1, v2);
-            // FIX: mask to 16 bits before comparison to avoid sign-extension artifacts
-            if ((_mm_movemask_epi8(cmp) & 0xFFFF) != 0xFFFF) {
-                return false;
+                __m128i cmp = _mm_cmpeq_epi8(v1, v2);
+                // FIX: mask to 16 bits before comparison to avoid sign-extension artifacts
+                if ((_mm_movemask_epi8(cmp) & 0xFFFF) != 0xFFFF) {
+                    return false;
+                }
             }
         }
 #else

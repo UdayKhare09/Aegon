@@ -224,13 +224,13 @@ core::Task<void> Http3Server::dispatch_datagram(std::span<const uint8_t> pkt,
 }
 
 core::Task<void> Http3Server::run_receive_loop() {
-    alignas(64) uint8_t buf[65536];
+    uint8_t buf[65536];
     sockaddr_storage remote_addr{};
     iovec iov{.iov_base = buf, .iov_len = sizeof(buf)};
     msghdr msg{};
 
     constexpr size_t BURST_BATCH = 16;
-    alignas(64) uint8_t burst_bufs[BURST_BATCH][2048];
+    uint8_t burst_bufs[BURST_BATCH][2048];
     sockaddr_storage burst_addrs[BURST_BATCH];
     iovec burst_iovs[BURST_BATCH];
     mmsghdr burst_msgs[BURST_BATCH];

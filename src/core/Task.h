@@ -6,7 +6,8 @@
 #include <cassert>
 #include <optional>
 #include <stdexcept>
-#include <type_traits>
+#include <cstdlib>
+#include <new>
 
 namespace aegon::core {
 
@@ -16,6 +17,18 @@ class [[nodiscard]] Task;
 namespace detail {
 
 struct TaskPromiseBase {
+    static void* operator new(size_t size) {
+        void* ptr = nullptr;
+        if (::posix_memalign(&ptr, 64, size) != 0) {
+            throw std::bad_alloc();
+        }
+        return ptr;
+    }
+
+    static void operator delete(void* ptr) noexcept {
+        ::free(ptr);
+    }
+
     std::coroutine_handle<> continuation_{nullptr};
     std::exception_ptr exception_{nullptr};
 
