@@ -3,8 +3,8 @@
 #include "http/Protocol.h"
 #include "http/Context.h"
 #include "http/RadixTree.h"
+#include "http/RouteRegistrar.h"
 #include "http/RouteGroup.h"
-#include "http/Middleware.h"
 #include "http/websocket/WebSocket.h"
 #include "core/Task.h"
 #include <string>
@@ -14,11 +14,7 @@
 #include <functional>
 #include <unordered_map>
 #include <vector>
-#include <shared_mutex>
-#include <mutex>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
+#include <array>
 
 namespace aegon::http {
 
@@ -42,7 +38,7 @@ struct StringEq {
     }
 };
 
-class Router {
+class Router : public RouteRegistrar<Router> {
     struct StaticRouteEntry {
         std::array<Handler, 9> handlers{};
         std::array<bool, 9> has_handler{};
@@ -78,16 +74,7 @@ public:
      */
     template <typename F>
     static Handler make_handler(F&& f) {
-        if constexpr (std::is_invocable_r_v<core::Task<void>, F, Context&>) {
-            return std::forward<F>(f);
-        } else if constexpr (std::is_invocable_r_v<void, F, Context&>) {
-            return [func = std::forward<F>(f)](Context& ctx) -> core::Task<void> {
-                func(ctx);
-                co_return;
-            };
-        } else {
-            static_assert(sizeof(F) == 0, "Handler must be callable as (Context&) returning void or Task<void>");
-        }
+        return detail::make_handler(std::forward<F>(f));
     }
 
     /**
@@ -108,7 +95,7 @@ public:
                       const std::vector<MiddlewareFn>& group_mw,
                       const std::vector<MiddlewareFn>& route_mw,
                       F&& handler) {
-        Handler raw = make_handler(std::forward<F>(handler));
+        Handler raw = detail::make_handler(std::forward<F>(handler));
         Handler h;
 
         if (group_mw.empty() && route_mw.empty()) {
@@ -142,98 +129,13 @@ public:
     }
 
     template <typename F>
-    Router& add_route(Method method, std::string_view pattern, F&& handler) {
-        return add_route(method, pattern, {}, {}, std::forward<F>(handler));
-    }
-
-    template <typename F>
     Router& add_route(Method method, std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
         return add_route(method, pattern, {}, std::move(route_mw), std::forward<F>(handler));
     }
 
     template <typename F>
-    Router& get(std::string_view pattern, F&& handler) {
-        return add_route(Method::GET, pattern, {}, {}, std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& get(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
-        return add_route(Method::GET, pattern, {}, std::move(route_mw), std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& post(std::string_view pattern, F&& handler) {
-        return add_route(Method::POST, pattern, {}, {}, std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& post(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
-        return add_route(Method::POST, pattern, {}, std::move(route_mw), std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& put(std::string_view pattern, F&& handler) {
-        return add_route(Method::PUT, pattern, {}, {}, std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& put(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
-        return add_route(Method::PUT, pattern, {}, std::move(route_mw), std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& del(std::string_view pattern, F&& handler) {
-        return add_route(Method::DELETE, pattern, {}, {}, std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& del(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
-        return add_route(Method::DELETE, pattern, {}, std::move(route_mw), std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& patch(std::string_view pattern, F&& handler) {
-        return add_route(Method::PATCH, pattern, {}, {}, std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& patch(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
-        return add_route(Method::PATCH, pattern, {}, std::move(route_mw), std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& all(std::string_view pattern,
-                const std::vector<MiddlewareFn>& group_mw,
-                const std::vector<MiddlewareFn>& route_mw,
-                F&& handler) {
-        static constexpr Method all_methods[] = {
-            Method::GET, Method::POST, Method::PUT, Method::DELETE,
-            Method::PATCH, Method::HEAD, Method::OPTIONS
-        };
-        Handler h = make_handler(std::forward<F>(handler));
-        for (Method m : all_methods) {
-            add_route(m, pattern, group_mw, route_mw, h);
-        }
-        return *this;
-    }
-
-    template <typename F>
-    Router& all(std::string_view pattern, F&& handler) {
-        return all(pattern, {}, {}, std::forward<F>(handler));
-    }
-
-    template <typename F>
-    Router& all(std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
-        return all(pattern, {}, std::move(route_mw), std::forward<F>(handler));
-    }
-
-    template <typename ClusterT, typename OptionsT>
-    Router& proxy(std::string_view pattern,
-                  ClusterT cluster,
-                  OptionsT options,
-                  std::vector<MiddlewareFn> middlewares = {}) {
-        return all(pattern, {}, std::move(middlewares),
-                   make_proxy_handler(std::move(cluster), std::move(options)));
+    Router& add_route(Method method, std::string_view pattern, F&& handler) {
+        return add_route(method, pattern, {}, {}, std::forward<F>(handler));
     }
 
     /**
@@ -368,13 +270,13 @@ public:
 
     template <typename F>
     Router& set_not_found_handler(F&& handler) {
-        not_found_handler_ = make_handler(std::forward<F>(handler));
+        not_found_handler_ = detail::make_handler(std::forward<F>(handler));
         return *this;
     }
 
     template <typename F>
     Router& set_method_not_allowed_handler(F&& handler) {
-        method_not_allowed_handler_ = make_handler(std::forward<F>(handler));
+        method_not_allowed_handler_ = detail::make_handler(std::forward<F>(handler));
         return *this;
     }
 
@@ -528,251 +430,15 @@ private:
     FallbackHandler method_not_allowed_handler_{nullptr};
 };
 
-// RouteGroup inline implementations
-inline std::string join_paths(std::string_view a, std::string_view b) {
-    if (a.empty() || a == "/") {
-        if (b.empty()) return "/";
-        if (b.starts_with('/')) return std::string(b);
-        return "/" + std::string(b);
-    }
-    if (a.ends_with('/')) {
-        if (b.starts_with('/')) return std::string(a) + std::string(b.substr(1));
-        return std::string(a) + std::string(b);
-    }
-    if (b.starts_with('/')) return std::string(a) + std::string(b);
-    return std::string(a) + "/" + std::string(b);
+// RouteGroup template implementations (now that Router is fully defined)
+template <typename F>
+RouteGroup& RouteGroup::add_route(Method method, std::string_view pattern, std::vector<MiddlewareFn> route_mw, F&& handler) {
+    router_.add_route(method, join_paths(prefix_, pattern), middleware_, std::move(route_mw), std::forward<F>(handler));
+    return *this;
 }
 
 inline RouteGroup RouteGroup::group(std::string_view sub_prefix) {
     return RouteGroup(router_, join_paths(prefix_, sub_prefix), middleware_);
-}
-
-template <typename F>
-RouteGroup& RouteGroup::get(std::string_view path, F&& handler) {
-    router_.add_route(Method::GET, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::get(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
-    router_.add_route(Method::GET, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::post(std::string_view path, F&& handler) {
-    router_.add_route(Method::POST, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::post(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
-    router_.add_route(Method::POST, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::put(std::string_view path, F&& handler) {
-    router_.add_route(Method::PUT, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::put(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
-    router_.add_route(Method::PUT, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::del(std::string_view path, F&& handler) {
-    router_.add_route(Method::DELETE, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::del(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
-    router_.add_route(Method::DELETE, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::patch(std::string_view path, F&& handler) {
-    router_.add_route(Method::PATCH, join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::patch(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
-    router_.add_route(Method::PATCH, join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::all(std::string_view path, F&& handler) {
-    router_.all(join_paths(prefix_, path), middleware_, {}, std::forward<F>(handler));
-    return *this;
-}
-
-template <typename F>
-RouteGroup& RouteGroup::all(std::string_view path, std::vector<MiddlewareFn> per_route, F&& handler) {
-    router_.all(join_paths(prefix_, path), middleware_, std::move(per_route), std::forward<F>(handler));
-    return *this;
-}
-
-template <typename ClusterT, typename OptionsT>
-RouteGroup& RouteGroup::proxy(std::string_view path,
-                              ClusterT cluster,
-                              OptionsT options,
-                              std::vector<MiddlewareFn> per_route) {
-    router_.all(join_paths(prefix_, path), middleware_, std::move(per_route),
-        make_proxy_handler(std::move(cluster), std::move(options)));
-    return *this;
-}
-
-struct CachedStaticFile {
-    time_t mtime{0};
-    long mtime_nsec{0};
-    std::string content;
-    std::string content_type;
-    std::string content_encoding;
-};
-
-inline Router& Router::static_files(std::string_view prefix, std::string_view directory, StaticFilesOptions options) {
-    std::string base_dir(directory);
-    while (base_dir.size() > 1 && base_dir.back() == '/') {
-        base_dir.pop_back();
-    }
-
-    std::string clean_prefix(prefix);
-    if (!clean_prefix.empty() && !clean_prefix.starts_with('/')) {
-        clean_prefix = "/" + clean_prefix;
-    }
-    while (clean_prefix.size() > 1 && clean_prefix.back() == '/') {
-        clean_prefix.pop_back();
-    }
-    if (clean_prefix == "/") clean_prefix = "";
-
-    auto cache = std::make_shared<std::unordered_map<std::string, CachedStaticFile>>();
-    auto mtx = std::make_shared<std::shared_mutex>();
-
-    auto handler = [base_dir, options, cache, mtx](Context& ctx) {
-        std::string_view rel;
-        if (auto p = ctx.req().param("filepath")) {
-            rel = *p;
-        }
-        while (!rel.empty() && rel.front() == '/') {
-            rel.remove_prefix(1);
-        }
-        if (rel.empty()) {
-            if (!options.index_file.empty()) {
-                rel = options.index_file;
-            } else {
-                ctx.res().status(StatusCode::NotFound).text("Not Found");
-                return;
-            }
-        }
-
-        // Path traversal guard
-        if (rel.find("..") != std::string_view::npos || 
-            rel.find('\\') != std::string_view::npos ||
-            rel.find('\0') != std::string_view::npos) {
-            ctx.res().status(StatusCode::NotFound).text("Not Found");
-            return;
-        }
-
-        std::string full_path = base_dir + "/" + std::string(rel);
-        std::string_view content_type = Response::infer_mime_type(full_path);
-
-        auto accept_enc = ctx.req().header("accept-encoding");
-        bool accept_br = options.precompressed && accept_enc && accept_enc->find("br") != std::string_view::npos;
-        bool accept_gz = options.precompressed && accept_enc && (accept_enc->find("gzip") != std::string_view::npos || accept_enc->find("deflate") != std::string_view::npos);
-
-        auto try_serve = [&](const std::string& path, std::string_view encoding) -> bool {
-            struct stat st{};
-            if (::stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
-                return false;
-            }
-
-#if defined(__linux__)
-            long current_nsec = st.st_mtim.tv_nsec;
-#elif defined(__APPLE__)
-            long current_nsec = st.st_mtimespec.tv_nsec;
-#else
-            long current_nsec = 0;
-#endif
-
-            if (options.cache_in_memory) {
-                std::shared_lock lock(*mtx);
-                auto it = cache->find(path);
-                if (it != cache->end()) {
-                    const auto& entry = it->second;
-                    if (entry.mtime == st.st_mtime && entry.mtime_nsec == current_nsec) {
-                        ctx.res().header("Content-Type", entry.content_type);
-                        if (!entry.content_encoding.empty()) {
-                            ctx.res().header("Content-Encoding", entry.content_encoding);
-                        }
-                        ctx.res().body(entry.content);
-                        return true;
-                    }
-                }
-            }
-
-            int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-            if (fd < 0) return false;
-
-            std::string data;
-            data.resize(static_cast<size_t>(st.st_size));
-            size_t total_read = 0;
-            while (total_read < data.size()) {
-                ssize_t n = ::read(fd, data.data() + total_read, data.size() - total_read);
-                if (n <= 0) break;
-                total_read += static_cast<size_t>(n);
-            }
-            ::close(fd);
-
-            if (total_read != data.size()) return false;
-
-            if (options.cache_in_memory) {
-                std::unique_lock lock(*mtx);
-                (*cache)[path] = CachedStaticFile{
-                    .mtime = st.st_mtime,
-                    .mtime_nsec = current_nsec,
-                    .content = data,
-                    .content_type = std::string(content_type),
-                    .content_encoding = std::string(encoding)
-                };
-            }
-
-            ctx.res().header("Content-Type", content_type);
-            if (!encoding.empty()) {
-                ctx.res().header("Content-Encoding", encoding);
-            }
-            ctx.res().body(std::move(data));
-            return true;
-        };
-
-        if (accept_br && try_serve(full_path + ".br", "br")) return;
-        if (accept_gz && try_serve(full_path + ".gz", "gzip")) return;
-        if (try_serve(full_path, "")) return;
-
-        ctx.res().status(StatusCode::NotFound).text("Not Found");
-    };
-
-    std::string wildcard_pattern = clean_prefix + "/*filepath";
-    add_route(Method::GET, wildcard_pattern, handler);
-    add_route(Method::HEAD, wildcard_pattern, handler);
-
-    if (!clean_prefix.empty()) {
-        add_route(Method::GET, clean_prefix, handler);
-        add_route(Method::HEAD, clean_prefix, handler);
-        add_route(Method::GET, clean_prefix + "/", handler);
-        add_route(Method::HEAD, clean_prefix + "/", handler);
-    } else {
-        add_route(Method::GET, "/", handler);
-        add_route(Method::HEAD, "/", handler);
-    }
-
-    return *this;
 }
 
 inline RouteGroup& RouteGroup::static_files(std::string_view path, std::string_view directory, StaticFilesOptions options) {

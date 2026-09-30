@@ -220,7 +220,7 @@ struct CurrentUser {
 };
 
 // 1. Set by an authentication middleware
-server.use([](Context& ctx, Next next) -> Task<void> {
+server.router().use([](Context& ctx, Next next) -> Task<void> {
     ctx.set<CurrentUser>(CurrentUser{
         .user_id = "usr_42",
         .role = "admin"

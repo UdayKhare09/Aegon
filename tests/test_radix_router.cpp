@@ -8,6 +8,7 @@
 #include <iostream>
 #include <cassert>
 #include <string>
+#include <unistd.h>
 
 #define TEST_CHECK(expr) do { \
     if (!(expr)) { \

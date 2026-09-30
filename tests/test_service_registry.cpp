@@ -248,7 +248,7 @@ void test_concurrent_multithreaded_hot_path() {
     std::atomic<size_t> success_count{0};
 
     for (size_t t = 0; t < THREADS; ++t) {
-        workers.emplace_back([&, t]() {
+        workers.emplace_back([&]() {
             while (!start_gate.load(std::memory_order_acquire)) {
                 std::this_thread::yield();
             }

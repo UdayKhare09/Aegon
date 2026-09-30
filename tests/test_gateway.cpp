@@ -309,13 +309,13 @@ void test_server_and_middleware_vector() {
         }
     };
 
-    // Mount proxy directly on server
-    server.proxy("/api/v1/billing/*", cluster, ProxyOptions{
+    // Mount proxy directly on server router
+    server.router().proxy("/api/v1/billing/*", cluster, ProxyOptions{
         .strip_prefix = "/api/v1/billing"
     }, middlewares);
 
     // Route Group proxy mounting
-    auto api = server.group("/api/v2");
+    auto api = server.router().group("/api/v2");
     api.proxy("/orders/*", cluster, ProxyOptions{
         .strip_prefix = "/api/v2/orders"
     }, middlewares);
@@ -364,7 +364,7 @@ void test_middleware_rejection_short_circuit() {
         }
     };
 
-    server.proxy("/secure/*", cluster, ProxyOptions{}, auth_mw);
+    server.router().proxy("/secure/*", cluster, ProxyOptions{}, auth_mw);
 
     // 1. Unauthorized request
     Request req1;

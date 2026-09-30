@@ -68,14 +68,14 @@ All listener ports are tracked and passed into connection accept loops directly,
 
 ### WebSocket (RFC 6455) Routing
 
-Aegon allows binding WebSocket routes directly onto the `Server` instance:
+Aegon allows binding WebSocket routes onto the router:
 
 ```cpp
 // 1. High-throughput echo endpoint
-server.ws_echo("/ws/echo");
+server.router().ws_echo("/ws/echo");
 
 // 2. Interactive WebSocket handler
-server.ws("/ws/chat", [](WebSocket& ws) -> aegon::core::Task<void> {
+server.router().ws("/ws/chat", [](WebSocket& ws) -> aegon::core::Task<void> {
     ws.on_text([](WebSocket& ws, std::string_view msg) -> aegon::core::Task<void> {
         co_await ws.send_text(msg);
     });

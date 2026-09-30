@@ -26,11 +26,11 @@ static Response dispatch_offline(Router& router, std::string_view raw_req) {
 void test_1_global_middleware_sync_async() {
     std::cout << "[TEST 1] Testing global middleware (sync + async)...\n";
     Server server;
-    server.use([](Context& ctx, Next next) -> core::Task<void> {
+    server.router().use([](Context& ctx, Next next) -> core::Task<void> {
         ctx.res().header("x-async-global", "true");
         co_await next(ctx);
     });
-    server.use([](Context& ctx) {
+    server.router().use([](Context& ctx) {
         ctx.res().header("x-sync-global", "true");
     });
 
@@ -52,7 +52,7 @@ void test_2_short_circuit() {
     Router router;
     bool handler_ran = false;
 
-    router.use([&handler_ran](Context& ctx, Next next) -> core::Task<void> {
+    router.use([](Context& ctx, Next next) -> core::Task<void> {
         auto auth = ctx.req().header("authorization");
         if (auth != "Bearer secret_token") {
             ctx.res().status(StatusCode::Unauthorized).body("Unauthorized");

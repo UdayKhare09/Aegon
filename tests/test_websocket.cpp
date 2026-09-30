@@ -173,7 +173,7 @@ void test_live_websocket_server() {
     uint16_t port = 19890;
     Server server;
     // Register echo route
-    server.ws("/ws");
+    server.router().ws("/ws");
     server.listen(port, "127.0.0.1");
 
     std::thread server_thread([&]() {
@@ -292,7 +292,7 @@ void test_live_websocket_server() {
 void test_pipelined_handshake_and_reconnection() {
     std::cout << "[TEST 5] Testing Pipelined Handshake + Frame and Rapid Reconnections...\n";
     Server server;
-    server.ws("/ws");
+    server.router().ws("/ws");
     server.listen(19891, "127.0.0.1");
 
     std::thread server_thread([&]() {

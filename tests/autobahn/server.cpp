@@ -8,7 +8,7 @@ int main() {
     std::signal(SIGPIPE, SIG_IGN);
 
     Server server;
-    server.ws_echo("/");
+    server.router().ws_echo("/");
     server.listen(9001, "0.0.0.0");
     server.ws_max_message_size(16 * 1024 * 1024)
           .ws_max_frame_size(16 * 1024 * 1024);

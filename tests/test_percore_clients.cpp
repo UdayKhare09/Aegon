@@ -29,7 +29,7 @@ void test_percore_connection_pool_multithreading() {
     std::atomic<int> completed{0};
 
     for (int t = 0; t < NUM_THREADS; ++t) {
-        workers.emplace_back([&, t]() {
+        workers.emplace_back([&]() {
             for (int i = 0; i < ITERATIONS; ++i) {
                 auto guard = pool.acquire();
                 assert(guard.valid());

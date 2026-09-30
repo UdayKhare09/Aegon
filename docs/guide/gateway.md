@@ -87,8 +87,8 @@ int main() {
         rbac_guard("billing:admin")
     };
 
-    // Mount proxy route directly on Server
-    server.proxy(
+    // Mount proxy route directly on Server router
+    server.router().proxy(
         "/api/v1/billing/*",
         billing_cluster,
         ProxyOptions{
@@ -124,7 +124,7 @@ int main() {
     );
 
     // Route Group Mounting
-    auto v2 = server.group("/api/v2");
+    auto v2 = server.router().group("/api/v2");
     v2.proxy("/sessions/*", session_cluster, ProxyOptions{
         .strip_prefix = "/api/v2/sessions"
     });

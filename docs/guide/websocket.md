@@ -15,15 +15,15 @@ When no handler is passed, Aegon automatically registers an ultra-low latency, z
 
 ```cpp
 // Both forms are identical:
-server.ws("/ws");
-server.ws_echo("/echo");
+server.router().ws("/ws");
+server.router().ws_echo("/echo");
 ```
 
 ### 2. Message-Level Echo Callback (`WebSocketEchoHandler`)
 Use this when you want to intercept every incoming message and run lightweight asynchronous transformations before echoing:
 
 ```cpp
-server.ws("/transform", [](WebSocket& ws, Message msg) -> aegon::core::Task<void> {
+server.router().ws("/transform", [](WebSocket& ws, Message msg) -> aegon::core::Task<void> {
     if (msg.is_text()) {
         std::string reply = "Received: " + std::string(msg.text());
         co_await ws.send_text(reply);
@@ -37,7 +37,7 @@ server.ws("/transform", [](WebSocket& ws, Message msg) -> aegon::core::Task<void
 For interactive applications (chat rooms, notifications, telemetry, gaming), register a connection handler where you bind individual event callbacks:
 
 ```cpp
-server.ws("/chat", [](WebSocket& ws) -> aegon::core::Task<void> {
+server.router().ws("/chat", [](WebSocket& ws) -> aegon::core::Task<void> {
     // 1. Connection established
     std::cout << "Client joined " << ws.path() << " on fd " << ws.fd() << "\n";
 

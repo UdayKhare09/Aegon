@@ -50,10 +50,10 @@ If no custom error handler is registered, any unhandled `std::exception` produce
 
 ## Custom Global Error Handler
 
-You can customize error mapping across your entire application by attaching an `ErrorHandler` to `server.set_error_handler()` or `router.set_error_handler()`:
+You can customize error mapping across your entire application by attaching an `ErrorHandler` to `server.router().set_error_handler()`:
 
 ```cpp
-server.set_error_handler([](Context& ctx, std::exception_ptr ex) -> Task<void> {
+server.router().set_error_handler([](Context& ctx, std::exception_ptr ex) -> Task<void> {
     try {
         if (ex) std::rethrow_exception(ex);
     } 
@@ -94,7 +94,7 @@ server.set_error_handler([](Context& ctx, std::exception_ptr ex) -> Task<void> {
 To customize the response when a requested path does not exist:
 
 ```cpp
-server.set_not_found_handler([](Context& ctx) -> Task<void> {
+server.router().set_not_found_handler([](Context& ctx) -> Task<void> {
     ctx.problem(
         StatusCode::NotFound,
         "Resource Not Found",
@@ -109,7 +109,7 @@ server.set_not_found_handler([](Context& ctx) -> Task<void> {
 When a path exists for another HTTP method (for example, `/orders` exists for `POST` but the client sent `DELETE`), Aegon triggers the `method_not_allowed_handler`:
 
 ```cpp
-server.set_method_not_allowed_handler([](Context& ctx) -> Task<void> {
+server.router().set_method_not_allowed_handler([](Context& ctx) -> Task<void> {
     ctx.problem(
         StatusCode::MethodNotAllowed,
         "Method Not Allowed",
