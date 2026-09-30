@@ -13,7 +13,7 @@ It solves the two most notorious problems in database caching:
 Aegon decouples cache storage from cache semantics via the `CacheBackend` interface:
 
 ```cpp
-#include <aegon/data/cache/RedisCacheBackend.h>
+#include <aegon/data/redis/RedisCacheBackend.h>
 #include <aegon/data/redis/PerCoreRedisClient.h>
 
 using namespace aegon::data;
@@ -25,7 +25,7 @@ auto per_core_redis = std::make_shared<redis::PerCoreRedisClient>(
     redis::RedisNodeConfig{ .host = "127.0.0.1", .port = 6379 }
 );
 
-auto redis_cache = std::make_shared<cache::RedisCacheBackend>(
+auto redis_cache = std::make_shared<redis::RedisCacheBackend>(
     per_core_redis->provider(), "cache:"
 );
 

@@ -13,7 +13,7 @@
 #include "handlers/StreamHandler.h"
 
 #include "http/Server.h"
-#include "data/cache/RedisCacheBackend.h"
+#include "data/redis/RedisCacheBackend.h"
 #include "data/redis/PerCoreRedisClient.h"
 #include "data/orm/sql/drivers/SqliteDriver.h"
 #include "data/orm/sql/drivers/PostgresDriver.h"
@@ -47,7 +47,7 @@ int main(int argc, char* argv[]) {
         .port = 6379,
         .password = "redis_secret"
     }, 4);
-    auto sql_cache = std::make_shared<data::cache::RedisCacheBackend>(redis_client->provider());
+    auto sql_cache = std::make_shared<data::redis::RedisCacheBackend>(redis_client->provider());
     sql_client->set_cache(sql_cache);
 
     // 3. Domain Services (injected with SQL client and PerCoreRedisClient)

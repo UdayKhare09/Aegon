@@ -1,18 +1,18 @@
 #pragma once
 
-#include "CacheBackend.h"
-#include "data/redis/RedisClient.h"
+#include "data/cache/CacheBackend.h"
+#include "RedisClient.h"
 #include <functional>
 #include <memory>
 #include <utility>
 
-namespace aegon::data::cache {
+namespace aegon::data::redis {
 
-class RedisCacheBackend : public CacheBackend {
+class RedisCacheBackend : public cache::CacheBackend {
 public:
-    using ClientProvider = std::function<redis::RedisClient*()>;
+    using ClientProvider = std::function<RedisClient*()>;
 
-    explicit RedisCacheBackend(std::shared_ptr<redis::RedisClient> client, std::string prefix = "")
+    explicit RedisCacheBackend(std::shared_ptr<RedisClient> client, std::string prefix = "")
         : client_(std::move(client)), prefix_(std::move(prefix)) {}
 
     explicit RedisCacheBackend(ClientProvider provider, std::string prefix = "")
@@ -80,10 +80,10 @@ public:
         co_return co_await c->incr(full_key);
     }
 
-    [[nodiscard]] const std::shared_ptr<redis::RedisClient>& client() const noexcept { return client_; }
+    [[nodiscard]] const std::shared_ptr<RedisClient>& client() const noexcept { return client_; }
 
 private:
-    [[nodiscard]] redis::RedisClient* get_client() const noexcept {
+    [[nodiscard]] RedisClient* get_client() const noexcept {
         if (provider_) return provider_();
         return client_.get();
     }
@@ -97,9 +97,9 @@ private:
         return res;
     }
 
-    std::shared_ptr<redis::RedisClient> client_;
+    std::shared_ptr<RedisClient> client_;
     ClientProvider provider_{nullptr};
     std::string prefix_;
 };
 
-} // namespace aegon::data::cache
+} // namespace aegon::data::redis

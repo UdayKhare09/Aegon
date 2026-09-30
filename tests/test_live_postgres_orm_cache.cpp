@@ -1,4 +1,4 @@
-#include "data/cache/RedisCacheBackend.h"
+#include "data/redis/RedisCacheBackend.h"
 #include "data/redis/RedisClient.h"
 #include "data/orm/sql/SqlConfig.h"
 #include "data/orm/sql/SqlDatabaseClient.h"
