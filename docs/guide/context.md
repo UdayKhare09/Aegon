@@ -122,6 +122,57 @@ server.router().get("/users/:id", [](Context& ctx) -> Task<void> {
 
 ---
 
+### 4. Form Body Binding (`bind_form<T>`)
+
+Automatically parse, decode, and validate HTML form submissions (`application/x-www-form-urlencoded`):
+
+```cpp
+struct LoginForm {
+    std::string username;
+    std::string password;
+    bool remember{false};
+
+    void validate(aegon::validation::ValidationRules& v) const {
+        v.field("username", username).min_len(3).max_len(30);
+        v.field("password", password).min_len(8);
+    }
+};
+
+server.router().post("/login", [](Context& ctx) -> Task<void> {
+    auto form = ctx.bind_form<LoginForm>();
+    if (!form) co_return; // Automatic 400 or 422 response populated!
+
+    ctx.res().text("Logged in as " + form->username);
+    co_return;
+});
+```
+
+---
+
+### 5. Multipart Form Access (`multipart()`)
+
+For file uploads and mixed multipart forms (`multipart/form-data`), call `ctx.multipart()`:
+
+```cpp
+server.router().post("/upload", [](Context& ctx) -> Task<void> {
+    auto form = ctx.multipart();
+    if (!form) {
+        ctx.res().status(StatusCode::BadRequest).text("Invalid multipart body");
+        co_return;
+    }
+
+    if (auto avatar = form->file("avatar")) {
+        std::cout << "Received " << avatar->filename << " (" << avatar->size() << " bytes)\n";
+        avatar->save_to("/var/uploads/" + std::string(avatar->filename));
+    }
+
+    ctx.res().status(StatusCode::Created).json(R"({"status":"uploaded"})");
+    co_return;
+});
+```
+
+---
+
 ## Dependency Injection & Services
 
 Handlers access shared application dependencies (like databases, Redis clients, or configuration objects) directly through `Context`:

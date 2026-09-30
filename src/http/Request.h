@@ -3,6 +3,7 @@
 #include "http/Protocol.h"
 #include "http/HeaderMap.h"
 #include "http/Response.h"
+#include "http/MultipartParser.h"
 #include "data/validation/Validator.h"
 #include <glaze/glaze.hpp>
 #include <string_view>
@@ -154,6 +155,49 @@ public:
     }
 
     /**
+     * @brief Parse a single form parameter from an application/x-www-form-urlencoded body.
+     */
+    [[nodiscard]] std::optional<std::string> form_param(std::string_view key) const noexcept {
+        if (body_.empty()) return std::nullopt;
+        std::string_view b = body_;
+        while (!b.empty()) {
+            size_t amp = core::simd::SimdString::find_char(b, '&');
+            std::string_view pair = (amp != std::string_view::npos) ? b.substr(0, amp) : b;
+            size_t eq = core::simd::SimdString::find_char(pair, '=');
+            if (eq != std::string_view::npos) {
+                std::string k = url_decode_string(pair.substr(0, eq));
+                if (k == key) {
+                    return url_decode_string(pair.substr(eq + 1));
+                }
+            } else {
+                std::string k = url_decode_string(pair);
+                if (k == key) return "";
+            }
+            if (amp == std::string_view::npos) break;
+            b.remove_prefix(amp + 1);
+        }
+        return std::nullopt;
+    }
+
+    /**
+     * @brief Convenient alias for form_param(key).
+     */
+    [[nodiscard]] std::optional<std::string> form(std::string_view key) const noexcept {
+        return form_param(key);
+    }
+
+    /**
+     * @brief Parses an inbound multipart/form-data payload.
+     * All file and field pointers point directly into the connection body buffer (zero-copy).
+     * @return MultipartFormData on success, or std::nullopt if missing boundary or malformed.
+     */
+    [[nodiscard]] std::optional<MultipartFormData> multipart() const {
+        auto ct = header("content-type");
+        if (!ct) return std::nullopt;
+        return MultipartParser::parse(*ct, body_);
+    }
+
+    /**
      * @brief Binds inbound JSON body into typed DTO T with automatic validation & error response.
      */
     template <typename T>
@@ -298,6 +342,76 @@ public:
                 .status = 400,
                 .error = "Bad Request",
                 .message = "Invalid path parameters: " + glz::format_error(parse_err, json_doc)
+            };
+            std::string err_json;
+            std::ignore = glz::write_json(err, err_json);
+            res.status(StatusCode::BadRequest).json(err_json);
+            return std::nullopt;
+        }
+
+        if constexpr (validation::HasValidate<T>) {
+            validation::ValidationRules v;
+            val.validate(v);
+            if (v.has_violations()) {
+                res.status(StatusCode::UnprocessableEntity).json(v.to_json());
+                return std::nullopt;
+            }
+        }
+
+        return val;
+    }
+
+    /**
+     * @brief Binds inbound URL-encoded form body into typed DTO T with automatic validation & error response.
+     */
+    template <typename T>
+    [[nodiscard]] std::optional<T> bind_form(Response& res) const {
+        glz::generic doc;
+        doc.data = glz::generic::object_t{};
+        if (!body_.empty()) {
+            std::string_view b = body_;
+            while (!b.empty()) {
+                size_t amp = b.find('&');
+                std::string_view pair = (amp != std::string_view::npos) ? b.substr(0, amp) : b;
+                size_t eq = pair.find('=');
+                if (eq != std::string_view::npos) {
+                    std::string k = url_decode_string(pair.substr(0, eq));
+                    std::string v = url_decode_string(pair.substr(eq + 1));
+                    if (!k.empty()) {
+                        if (v == "true") {
+                            doc[k] = true;
+                        } else if (v == "false") {
+                            doc[k] = false;
+                        } else if (is_numeric_literal(v)) {
+                            if (v.find('.') != std::string_view::npos) {
+                                doc[k] = std::strtod(v.c_str(), nullptr);
+                            } else {
+                                doc[k] = static_cast<int64_t>(std::strtoll(v.c_str(), nullptr, 10));
+                            }
+                        } else {
+                            doc[k] = v;
+                        }
+                    }
+                }
+                if (amp == std::string_view::npos) break;
+                b.remove_prefix(amp + 1);
+            }
+        }
+        std::string json_doc;
+        std::ignore = glz::write_json(doc, json_doc);
+
+        T val{};
+        auto parse_err = glz::read<glz::opts{.error_on_unknown_keys = false}>(val, json_doc);
+        if (parse_err) {
+            struct HttpError {
+                int status{400};
+                std::string error{"Bad Request"};
+                std::string message;
+            };
+            HttpError err{
+                .status = 400,
+                .error = "Bad Request",
+                .message = "Invalid form body: " + glz::format_error(parse_err, json_doc)
             };
             std::string err_json;
             std::ignore = glz::write_json(err, err_json);

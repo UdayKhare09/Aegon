@@ -149,6 +149,71 @@ Key features:
 
 ---
 
+## Form Parameters (`application/x-www-form-urlencoded`)
+
+Inbound HTML form submissions sent via standard `POST` or `PUT` with `Content-Type: application/x-www-form-urlencoded` can be read using `req.form(key)`:
+
+```cpp
+server.router().post("/login", [](Context& ctx) -> Task<void> {
+    std::optional<std::string> user = ctx.req().form("username");
+    std::optional<std::string> pass = ctx.req().form("password");
+
+    if (!user || !pass) {
+        ctx.res().status(StatusCode::BadRequest).text("Missing credentials");
+        co_return;
+    }
+
+    ctx.res().text("Welcome back, " + *user);
+    co_return;
+});
+```
+
+Key features:
+* **Automatic URL-Decoding**: Decodes percent-encoded characters (`%20`, `+`, `%21`, etc.) into valid UTF-8 strings.
+* **DTO Binding**: For binding entire forms directly into validated C++ structs, see [`ctx.bind_form<T>()`](/guide/context#4-form-body-binding-bind_form).
+
+---
+
+## Multipart Uploads (`multipart/form-data`)
+
+For forms containing file attachments or mixed text/binary fields (RFC 7578), use `req.multipart()`:
+
+```cpp
+server.router().post("/upload", [](Context& ctx) -> Task<void> {
+    auto form = ctx.req().multipart();
+    if (!form) {
+        ctx.res().status(StatusCode::BadRequest).text("Malformed multipart payload");
+        co_return;
+    }
+
+    // 1. Access textual fields
+    std::optional<std::string_view> desc = form->get("description");
+
+    // 2. Access uploaded file(s)
+    if (auto avatar = form->file("avatar")) {
+        std::cout << "Received: " << avatar->filename << " (" << avatar->size() << " bytes)\n";
+        std::cout << "MIME type: " << avatar->content_type << "\n";
+
+        // Persist to disk
+        avatar->save_to("/var/uploads/" + std::string(avatar->filename));
+    }
+
+    ctx.res().status(StatusCode::Created).json(R"({"status":"saved"})");
+    co_return;
+});
+```
+
+### The `FormFile` Object
+Each uploaded file in `multipart/form-data` is represented as a zero-copy [`FormFile`](/guide/request):
+* `file.name` (`std::string_view`): Field name in the form (e.g. `"avatar"`).
+* `file.filename` (`std::string_view`): Original client filename (e.g. `"profile.png"`).
+* `file.content_type` (`std::string_view`): Detected or client-provided MIME type (e.g. `"image/png"`).
+* `file.data` (`std::string_view`): **Zero-copy** view into the connection's receive buffer.
+* `file.size()`: File length in bytes.
+* `file.save_to(filepath)`: Saves the binary file directly to disk.
+
+---
+
 ## HTTP Protocol & RFC Compliance
 
 The `Request` object exposes helper methods for HTTP/1.1 and HTTP/2 protocol negotiation:

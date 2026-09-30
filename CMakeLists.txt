@@ -285,6 +285,7 @@ aegon_add_test(compress aegon_http aegon_core ${LIBDEFLATE_LIB})
 aegon_add_test(http_client)
 aegon_add_test(service_registry)
 aegon_add_test(websocket)
+aegon_add_test(forms)
 aegon_add_test(gateway aegon_gateway aegon_http aegon_core)
 aegon_add_test(config aegon_config)
 

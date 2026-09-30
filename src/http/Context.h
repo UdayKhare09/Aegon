@@ -166,6 +166,22 @@ public:
     }
 
     /**
+     * @brief Binds URL-encoded form body into typed DTO T with automatic validation & 422 error response.
+     */
+    template <typename T>
+    [[nodiscard]] std::optional<T> bind_form() {
+        return req_.bind_form<T>(res_);
+    }
+
+    /**
+     * @brief Parses an inbound multipart/form-data payload.
+     * All file and field pointers point directly into the connection body buffer (zero-copy).
+     */
+    [[nodiscard]] std::optional<MultipartFormData> multipart() const {
+        return req_.multipart();
+    }
+
+    /**
      * @brief Emits a standardized RFC 7807 Problem Details response.
      */
     Response& problem(StatusCode status, std::string_view title, std::string_view detail = "", std::string_view type = "about:blank") {
