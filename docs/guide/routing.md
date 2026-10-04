@@ -154,7 +154,15 @@ You can customize static file handling by passing a `StaticFilesOptions` struct:
 server.router().static_files("/assets", "/var/www/assets", StaticFilesOptions{
     .precompressed = true,          // Negotiate .br and .gz sidecars (default: true)
     .cache_in_memory = true,        // RAM cache with mtime revalidation (default: true)
-    .index_file = "index.html"      // Directory index fallback (default: "index.html")
+    .index_file = "index.html",     // Directory index file (default: "index.html")
+    .spa = true,                    // Enable SPA HTML5 History Mode routing (default: false)
+    .fallback_file = "index.html",  // File to serve on client-side route fallback (default: "index.html")
+    .etag = true,                   // Generate ETag and handle If-None-Match (default: true)
+    .last_modified = true,          // Send Last-Modified and handle If-Modified-Since (default: true)
+    .cache_control = [](std::string_view path, bool is_fallback) {
+        if (is_fallback || path.ends_with(".html")) return "no-cache";
+        return "public, max-age=31536000, immutable";
+    }
 });
 ```
 
@@ -163,6 +171,34 @@ server.router().static_files("/assets", "/var/www/assets", StaticFilesOptions{
 | `precompressed` | `bool` | `true` | When `true`, checks `Accept-Encoding` header and prioritizes precompressed `.br` (Brotli) and `.gz` (Gzip) sidecars if present on disk. |
 | `cache_in_memory` | `bool` | `true` | Caches file content in RAM with nanosecond `st_mtime` validation. Modifying or replacing a file on disk immediately invalidates the cache and serves fresh content on the very next request. |
 | `index_file` | `std::string` | `"index.html"` | Default file served when a client requests the base directory prefix or a folder. |
+| `spa` | `bool` | `false` | Enables SPA HTML5 History Mode fallback. Any client-side route that does not exist on disk falls back to `fallback_file` with `200 OK`. |
+| `fallback_file` | `std::string` | `"index.html"` | Target fallback file served for client-side SPA routes. |
+| `etag` | `bool` | `true` | Generates strong `ETag` headers and evaluates `If-None-Match` to return `304 Not Modified`. |
+| `last_modified` | `bool` | `true` | Sends RFC 7231 `Last-Modified` timestamps and evaluates `If-Modified-Since` to return `304 Not Modified`. |
+| `cache_control` | `std::function` | `nullptr` | Hook taking `(path, is_fallback)` to set custom `Cache-Control` header per file or SPA entry. |
+
+### Single-Page Application (SPA) Serving
+
+Modern SPAs (React, Vue, Svelte, Vite, Angular, Next.js static exports) use client-side routing (HTML5 History API). When users refresh or directly load deep URLs like `/dashboard` or `/users/42`, the static file server must fall back to `index.html` rather than returning `404 Not Found`.
+
+Aegon's SPA mode includes smart asset discrimination:
+- Deep client-side routes (e.g. `/dashboard`, `/users/profile`) automatically serve `index.html` with `200 OK`.
+- Missing physical assets (e.g. `/assets/broken-logo.png` or `/app.js`) properly return `404 Not Found` without masking asset errors with HTML.
+
+```cpp
+// Production SPA deployment with optimal cache headers
+server.router().static_files("/", "./dist", StaticFilesOptions{
+    .spa = true,
+    .cache_control = [](std::string_view path, bool is_fallback) {
+        // Dynamic HTML entry: always validate with server
+        if (is_fallback || path.ends_with(".html")) {
+            return "no-cache";
+        }
+        // Hashed JS/CSS/image bundles: cache forever
+        return "public, max-age=31536000, immutable";
+    }
+});
+```
 
 ### Security & Path Traversal Protection
 

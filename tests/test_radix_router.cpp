@@ -592,6 +592,139 @@ void test_http_subsystem_fixes() {
     std::cout << "  -> PASS: All HTTP subsystem fixes & RFC compliance checks verified.\n";
 }
 
+void test_spa_static_files() {
+    std::cout << "[Test 9] Testing SPA HTML5 History Mode routing, ETags, 304 revalidation & Cache-Control...\n";
+
+    std::string tmp_dir = "/tmp/aegon_spa_test_" + std::to_string(::getpid());
+    ::mkdir(tmp_dir.c_str(), 0755);
+    std::string assets_dir = tmp_dir + "/assets";
+    ::mkdir(assets_dir.c_str(), 0755);
+
+    std::string index_file = tmp_dir + "/index.html";
+    std::string js_file = assets_dir + "/main.js";
+    std::string css_file = assets_dir + "/style.css";
+
+    {
+        std::ofstream f(index_file);
+        f << "<!DOCTYPE html><html><body><div id=\"root\">Aegon SPA</div></body></html>";
+    }
+    {
+        std::ofstream f(js_file);
+        f << "console.log('SPA loaded');";
+    }
+    {
+        std::ofstream f(css_file);
+        f << "body { background: #000; }";
+    }
+
+    Router router;
+    router.static_files("/", tmp_dir, StaticFilesOptions{
+        .spa = true,
+        .fallback_file = "index.html",
+        .etag = true,
+        .last_modified = true,
+        .cache_control = [](std::string_view path, bool is_fallback) -> std::string {
+            if (is_fallback || path.ends_with(".html")) {
+                return "no-cache";
+            }
+            return "public, max-age=31536000, immutable";
+        }
+    });
+
+    // 1. Direct index request GET /
+    std::string index_etag;
+    {
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/");
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.status() == StatusCode::Ok);
+        TEST_CHECK(resp.body().find("Aegon SPA") != std::string::npos);
+        TEST_CHECK(resp.headers().get("Content-Type") == "text/html; charset=utf-8");
+        TEST_CHECK(resp.headers().get("Cache-Control") == "no-cache");
+        TEST_CHECK(resp.headers().contains("ETag"));
+        TEST_CHECK(resp.headers().contains("Last-Modified"));
+        index_etag = std::string(*resp.headers().get("ETag"));
+    }
+
+    // 2. Physical asset request GET /assets/main.js
+    std::string js_etag;
+    {
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/assets/main.js");
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.status() == StatusCode::Ok);
+        TEST_CHECK(resp.body() == "console.log('SPA loaded');");
+        TEST_CHECK(resp.headers().get("Content-Type") == "application/javascript; charset=utf-8");
+        TEST_CHECK(resp.headers().get("Cache-Control") == "public, max-age=31536000, immutable");
+        TEST_CHECK(resp.headers().contains("ETag"));
+        js_etag = std::string(*resp.headers().get("ETag"));
+    }
+
+    // 3. Conditional 304 Not Modified request with If-None-Match
+    {
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/assets/main.js");
+        req.headers().set("If-None-Match", js_etag);
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.status() == StatusCode::NotModified);
+        TEST_CHECK(resp.body().empty());
+        TEST_CHECK(resp.headers().get("ETag") == js_etag);
+    }
+
+    // 4. SPA HTML5 History fallback for client-side route: GET /dashboard/settings
+    {
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/dashboard/settings");
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.status() == StatusCode::Ok);
+        TEST_CHECK(resp.body().find("Aegon SPA") != std::string::npos);
+        TEST_CHECK(resp.headers().get("Content-Type") == "text/html; charset=utf-8");
+        TEST_CHECK(resp.headers().get("Cache-Control") == "no-cache");
+    }
+
+    // 5. Missing static asset must return 404, not mask with index.html
+    {
+        Request req;
+        req.set_method(Method::GET);
+        req.set_path("/assets/missing-bundle.js");
+        auto res = router.match(req);
+        TEST_CHECK(res.route_found);
+        Response resp;
+        Context ctx(req, resp);
+        invoke_handler(*res.handler, ctx);
+        TEST_CHECK(resp.status() == StatusCode::NotFound);
+    }
+
+    // Cleanup
+    ::unlink(index_file.c_str());
+    ::unlink(js_file.c_str());
+    ::unlink(css_file.c_str());
+    ::rmdir(assets_dir.c_str());
+    ::rmdir(tmp_dir.c_str());
+
+    std::cout << "  -> PASS: SPA history fallback, conditional 304 & Cache-Control policies verified.\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "   AEGON RADIX TREE ROUTER & ROUTE GROUP TEST SUITE    \n";
@@ -605,6 +738,7 @@ int main() {
     test_async_and_sync_handlers();
     test_static_files();
     test_http_subsystem_fixes();
+    test_spa_static_files();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL RADIX ROUTER TESTS PASSED SUCCESSFULLY! <<<\n";

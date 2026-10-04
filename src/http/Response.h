@@ -112,17 +112,25 @@ public:
         if (ext == ".css") return "text/css; charset=utf-8";
         if (ext == ".js" || ext == ".mjs") return "application/javascript; charset=utf-8";
         if (ext == ".json") return "application/json; charset=utf-8";
+        if (ext == ".map") return "application/json; charset=utf-8";
+        if (ext == ".webmanifest" || ext == ".manifest") return "application/manifest+json; charset=utf-8";
         if (ext == ".png") return "image/png";
         if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
         if (ext == ".gif") return "image/gif";
         if (ext == ".svg") return "image/svg+xml";
         if (ext == ".ico") return "image/x-icon";
+        if (ext == ".webp") return "image/webp";
+        if (ext == ".avif") return "image/avif";
         if (ext == ".txt") return "text/plain; charset=utf-8";
         if (ext == ".pdf") return "application/pdf";
         if (ext == ".wasm") return "application/wasm";
-        if (ext == ".webp") return "image/webp";
         if (ext == ".woff2") return "font/woff2";
+        if (ext == ".woff") return "font/woff";
+        if (ext == ".ttf") return "font/ttf";
+        if (ext == ".otf") return "font/otf";
         if (ext == ".xml") return "application/xml; charset=utf-8";
+        if (ext == ".mp4") return "video/mp4";
+        if (ext == ".webm") return "video/webm";
         return "application/octet-stream";
     }
 

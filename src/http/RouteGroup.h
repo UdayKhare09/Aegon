@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <functional>
 
 namespace aegon::http {
 
@@ -11,6 +12,15 @@ struct StaticFilesOptions {
     bool precompressed{true};
     bool cache_in_memory{true};
     std::string index_file{"index.html"};
+
+    // SPA & HTML5 History Mode Fallback
+    bool spa{false};
+    std::string fallback_file{"index.html"};
+
+    // HTTP Caching & Conditional Validation
+    bool etag{true};
+    bool last_modified{true};
+    std::function<std::string(std::string_view path, bool is_fallback)> cache_control{nullptr};
 };
 
 inline std::string join_paths(std::string_view a, std::string_view b) {
