@@ -7,6 +7,12 @@ services:
       POSTGRES_USER: aegon
       POSTGRES_PASSWORD: aegon_secret
       POSTGRES_DB: aegon_test
+    command: >
+      sh -c "
+        mkdir -p /docker-entrypoint-initdb.d
+        echo \"CREATE ROLE postgres WITH SUPERUSER LOGIN PASSWORD 'postgres'; GRANT ALL PRIVILEGES ON DATABASE aegon_test TO postgres; ALTER DATABASE aegon_test OWNER TO postgres;\" > /docker-entrypoint-initdb.d/init-postgres.sql
+        exec docker-entrypoint.sh postgres
+      "
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aegon -d aegon_test"]
       interval: 1s
