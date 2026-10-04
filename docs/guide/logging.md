@@ -152,6 +152,91 @@ assert(mem_sink->contains("Order #1001 confirmed"));
 
 ---
 
+## HTTP Access Log Middleware
+
+Aegon provides a built-in HTTP access logging middleware in `#include <http/middleware/AccessLog.h>` to log every inbound HTTP request across HTTP/1.1, HTTP/2, and HTTP/3. For the complete reference, see the dedicated [Access Log Middleware Guide](/guide/access-log).
+
+### Basic Usage
+
+Attach the middleware globally to your router:
+
+```cpp
+#include <http/middleware/AccessLog.h>
+
+router.use(aegon::http::middleware::access_log());
+// Or using the semantic alias:
+// router.use(aegon::http::middleware::logger());
+```
+
+By default, access logs format as:
+```text
+[2026-10-04 19:10:00.123] [INFO ] [AccessLog.h:120] GET /api/v1/users?page=1 200 OK 1.45ms - 127.0.0.1 (1.2 KB) [HTTP/2.0]
+```
+
+### Full Customization Options
+
+The middleware accepts an `AccessLogConfig` struct with rich tuning options:
+
+```cpp
+#include <http/middleware/AccessLog.h>
+
+using namespace aegon::http::middleware;
+
+router.use(access_log(AccessLogConfig{
+    // 1. Output Format (Combined, Common, Json, or Custom)
+    .format = AccessLogFormat::Combined,
+
+    // 2. Severity level mapping per status code class
+    .normal_level       = aegon::log::Level::Info,  // 1xx, 2xx, 3xx
+    .client_error_level = aegon::log::Level::Warn,  // 4xx
+    .server_error_level = aegon::log::Level::Error, // 5xx
+
+    // 3. Slow Request Highlighting (logs with [SLOW] tag at slow_level)
+    .slow_threshold = std::chrono::milliseconds(50),
+    .slow_level     = aegon::log::Level::Warn,
+
+    // 4. Field Inclusion Flags
+    .log_query    = true,  // Append ?query if present
+    .log_client_ip = true,  // Extract from x-forwarded-for or x-real-ip
+    .log_bytes    = true,  // Append response payload size
+    .log_protocol = true,  // Append [HTTP/1.1], [HTTP/2.0], or [HTTP/3.0]
+
+    // 5. Selected Headers to Capture and Log
+    .request_headers  = {"x-request-id", "user-agent"},
+    .response_headers = {"content-type"},
+
+    // 6. Path-based Filtering (skips logging matching exact paths)
+    .skip_paths = {"/health", "/healthz", "/metrics", "/favicon.ico"},
+
+    // 7. Dynamic Predicate Filtering (return true to skip logging)
+    .skip_if = [](const aegon::http::Context& ctx) {
+        return ctx.req().header("x-internal-probe") == "true";
+    },
+
+    // 8. Custom Formatter (overrides standard output format)
+    .custom_formatter = [](const aegon::http::Context& ctx, std::chrono::nanoseconds duration) {
+        return std::format("{} {} -> {} ({}µs)",
+            to_string(ctx.req().method()),
+            ctx.req().path(),
+            ctx.res().status_code(),
+            duration.count() / 1000);
+    }
+}));
+```
+
+### Format Styles
+
+- **`AccessLogFormat::Combined`** (Default):
+  `GET /search?q=aegon 200 OK 1.20ms - 203.0.113.195 (4.2 KB) [HTTP/2.0] [x-request-id: abc]`
+- **`AccessLogFormat::Common`** (Apache/CLF-inspired):
+  `203.0.113.195 - "GET /search?q=aegon HTTP/2.0" 200 4300 (1.20ms)`
+- **`AccessLogFormat::Json`** (Structured ndjson for Cloud/Datadog/Loki):
+  `{"method":"GET","path":"/search","status":200,"phrase":"OK","duration_ns":1200450,"bytes":4300}`
+- **`AccessLogFormat::Custom`**:
+  Uses your provided `custom_formatter` function.
+
+---
+
 ## Core Engine Telemetry
 
 Aegon's subsystems use `aegon_log` internally to provide deep operational visibility without external overhead:

@@ -1,0 +1,232 @@
+# Access Log Middleware
+
+Aegon provides a built-in, asynchronous **Access Log** middleware in `#include "http/middleware/AccessLog.h"`. It measures HTTP request latency, captures response status codes, extracts client IP and headers, and formats structured telemetry emitted through `aegon_log`.
+
+```cpp
+#include "http/middleware/AccessLog.h"
+using namespace aegon::http::middleware;
+```
+
+---
+
+## Quick Start
+
+### 1. Default Access Logger
+
+Attach the middleware globally to your router:
+
+```cpp
+Server server;
+
+// Attach globally
+server.router().use(access_log());
+// Or using the semantic alias:
+// server.router().use(logger());
+
+server.router().get("/api/v1/users", [](Context& ctx) {
+    ctx.res().json(R"([{"id": 1, "name": "Aegon"}])");
+});
+```
+
+By default, every incoming request produces a colorized, high-precision log entry:
+```text
+[2026-10-04 19:10:00.123] [INFO ] [AccessLog.h:130] GET /api/v1/users 200 OK 1.45ms - 127.0.0.1 (38 B) [HTTP/2.0]
+```
+
+### 2. Slow Request Alerting & Header Tracing
+
+Highlight slow endpoints taking longer than a specific threshold (e.g., 50ms) and capture correlation tracing headers:
+
+```cpp
+server.router().use(access_log(AccessLogConfig{
+    .slow_threshold  = std::chrono::milliseconds(50),
+    .slow_level      = aegon::log::Level::Warn,
+    .request_headers = {"x-request-id", "user-agent"}
+}));
+```
+
+Output for a slow request:
+```text
+[2026-10-04 19:10:05.450] [WARN ] [AccessLog.h:130] [SLOW] GET /heavy-task 200 OK 78.40ms - 10.0.0.12 (4.2 KB) [HTTP/1.1] [x-request-id: req_99x] [user-agent: curl/8.5.0]
+```
+
+---
+
+## Configuration Reference (`AccessLogConfig`)
+
+`AccessLogConfig` allows declarative customization using modern C++ designated initializers:
+
+```cpp
+struct AccessLogConfig {
+    // 1. Output format style
+    AccessLogFormat format{AccessLogFormat::Combined};
+
+    // 2. Severity level mapping per status code class
+    log::Level normal_level{log::Level::Info};         // 1xx, 2xx, 3xx
+    log::Level client_error_level{log::Level::Warn};    // 4xx
+    log::Level server_error_level{log::Level::Error};   // 5xx
+
+    // 3. Performance & Slow Request Highlighting
+    std::chrono::nanoseconds slow_threshold{0};        // 0 = disabled. If duration > slow_threshold, logs at slow_level
+    log::Level slow_level{log::Level::Warn};            // Level to emit when slow_threshold is exceeded
+
+    // 4. Field Inclusion Controls
+    bool log_query{true};          // Append query string if present (e.g. /search?q=term)
+    bool log_client_ip{true};      // Append client IP address (from headers or remote)
+    bool log_bytes{true};          // Append formatted response payload size (e.g. 1.2 KB)
+    bool log_protocol{true};       // Append HTTP protocol version (e.g. HTTP/1.1, HTTP/2.0, HTTP/3.0)
+
+    // 5. Selected Headers to Capture
+    std::vector<std::string> request_headers{};        // Request headers to append (e.g. {"user-agent", "x-request-id"})
+    std::vector<std::string> response_headers{};       // Response headers to append (e.g. {"content-type"})
+
+    // 6. Path-based Filtering
+    std::vector<std::string> skip_paths{};             // Exact paths to skip (e.g. {"/health", "/metrics", "/favicon.ico"})
+
+    // 7. Dynamic Filtering Predicate (return true to skip logging)
+    std::function<bool(const Context&)> skip_if{nullptr};
+
+    // 8. Custom Formatter (used when format == AccessLogFormat::Custom or when provided)
+    std::function<std::string(const Context&, std::chrono::nanoseconds)> custom_formatter{nullptr};
+};
+```
+
+---
+
+## Output Formats
+
+### 1. `AccessLogFormat::Combined` (Default)
+Emits a concise, human-readable line containing HTTP method, path, query string, status code, reason phrase, duration, client IP, response size, protocol version, and captured headers:
+```text
+GET /search?q=aegon 200 OK 1.20ms - 203.0.113.195 (4.2 KB) [HTTP/2.0] [x-request-id: abc]
+```
+
+### 2. `AccessLogFormat::Common`
+Apache/Nginx CLF-inspired format:
+```text
+203.0.113.195 - "GET /search?q=aegon HTTP/2.0" 200 4300 (1.20ms)
+```
+
+### 3. `AccessLogFormat::Json`
+Structured newline-delimited JSON (`ndjson`) ideal for containerized production environments (Kubernetes, AWS CloudWatch, Datadog, Grafana Loki):
+```json
+{"method":"GET","path":"/search","status":200,"phrase":"OK","duration_ns":1200450,"bytes":4300}
+```
+
+```cpp
+server.router().use(access_log({
+    .format = AccessLogFormat::Json
+}));
+```
+
+### 4. `AccessLogFormat::Custom`
+Provide a custom formatting lambda for total control over log output:
+
+```cpp
+server.router().use(access_log({
+    .custom_formatter = [](const Context& ctx, std::chrono::nanoseconds duration) {
+        return std::format("{} {} -> {} (in {:.2f}ms)",
+            to_string(ctx.req().method()),
+            ctx.req().path(),
+            ctx.res().status_code(),
+            duration.count() / 1'000'000.0);
+    }
+}));
+```
+
+---
+
+## Selective Filtering & Skip Rules
+
+In production, health checks and metrics scrapers often flood logs. You can suppress them using either static path lists or dynamic predicates:
+
+```cpp
+server.router().use(access_log({
+    // 1. Skip exact paths
+    .skip_paths = {"/health", "/healthz", "/metrics", "/favicon.ico"},
+
+    // 2. Skip dynamic conditions (e.g. internal monitoring probes)
+    .skip_if = [](const Context& ctx) {
+        return ctx.req().header("x-internal-probe") == "true";
+    }
+}));
+```
+
+---
+
+## Scoped Access Logging (Route Groups)
+
+Because Aegon supports onion middleware scoping, you can apply access logging only to specific sub-routes or configure different log rules per group:
+
+```cpp
+Router router;
+
+// Global API routes logged with JSON
+auto api = router.group("/api");
+api.use(access_log({.format = AccessLogFormat::Json}));
+
+api.get("/users", [](Context& ctx) {
+    ctx.res().json(R"([])");
+});
+
+// Admin routes logged with slow request detection
+auto admin = router.group("/admin");
+admin.use(access_log({
+    .slow_threshold = std::chrono::milliseconds(20),
+    .request_headers = {"x-admin-token"}
+}));
+```
+
+---
+
+## Contextual Logging in Route Handlers (`RequestLogger`)
+
+When `access_log()` is active, it automatically injects a contextual `RequestLogger` into the per-request `Context`.
+
+Any downstream handler can retrieve it using the standard Aegon context store pattern:
+
+```cpp
+#include "http/middleware/AccessLog.h"
+
+router.post("/orders", [](Context& ctx) {
+    // 1. Safe pointer style (nullable check)
+    if (auto* log = ctx.get<RequestLogger>()) {
+        log->info("Processing order for user {}", user_id);
+    }
+
+    // 2. Direct reference style (throws std::runtime_error if middleware missing)
+    ctx.local<RequestLogger>().warn("Inventory running low: {} left", stock);
+
+    ctx.res().status(StatusCode::Created).text("Order placed");
+});
+```
+
+### Correlation Prefix Format
+
+All log records emitted via `RequestLogger` automatically include the request's correlation ID (from `x-request-id` by default), HTTP method, and route path:
+
+- **With correlation header** (`x-request-id: req-99x`):
+  ```text
+  [2026-10-04 19:10:01.002] [INFO ] [OrderHandler.cpp:42] [req-99x] [POST /orders] Processing order for user 1001
+  [2026-10-04 19:10:01.005] [WARN ] [OrderHandler.cpp:45] [req-99x] [POST /orders] Inventory running low: 3 left
+  [2026-10-04 19:10:01.010] [INFO ] [AccessLog.h:130] POST /orders 201 Created 8.12ms - 192.168.1.10 (12 B) [HTTP/1.1]
+  ```
+- **Without correlation header**:
+  ```text
+  [2026-10-04 19:10:01.002] [INFO ] [OrderHandler.cpp:42] [POST /orders] Processing order for user 1001
+  ```
+
+### Custom Correlation Header
+
+You can customize which incoming request header is extracted as the correlation ID via `correlation_header`:
+
+```cpp
+server.router().use(access_log({
+    .correlation_header = "x-trace-id" // Default is "x-request-id"
+}));
+```
+
+### Zero-Allocation Disabled Levels
+
+Like `aegon_log`, `RequestLogger` evaluates `log::get_level()` before performing any formatting or string concatenation. If the logger level is set to `Info`, calling `log->debug(...)` or `log->trace(...)` incurs zero heap allocations.
+

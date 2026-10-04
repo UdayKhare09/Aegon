@@ -45,6 +45,7 @@ export default defineConfig({
               text: 'Built-in Middleware',
               collapsed: false,
               items: [
+                { text: 'Access Logger', link: '/guide/access-log' },
                 { text: 'CORS', link: '/guide/cors' },
                 { text: 'Security Headers', link: '/guide/security-headers' },
                 { text: 'Authentication & RBAC', link: '/guide/auth' },
