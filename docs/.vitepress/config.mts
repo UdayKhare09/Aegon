@@ -35,6 +35,7 @@ export default defineConfig({
           text: 'HTTP Framework',
           items: [
             { text: 'Routing & Groups', link: '/guide/routing' },
+            { text: 'Static Files & SPAs', link: '/guide/static-files' },
             { text: 'HTTP Request', link: '/guide/request' },
             { text: 'HTTP Response', link: '/guide/response' },
             { text: 'Context & Binding', link: '/guide/context' },
@@ -46,6 +47,7 @@ export default defineConfig({
               collapsed: false,
               items: [
                 { text: 'Access Logger', link: '/guide/access-log' },
+                { text: 'Compression', link: '/guide/compress' },
                 { text: 'CORS', link: '/guide/cors' },
                 { text: 'Security Headers', link: '/guide/security-headers' },
                 { text: 'Authentication & RBAC', link: '/guide/auth' },

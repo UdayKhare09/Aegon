@@ -237,3 +237,18 @@ Exceptions thrown inside a middleware or route handler propagate naturally throu
 1. **Zero Heap Allocation on Dispatch**: The chain runner (`run_chain`) operates over contiguous `std::span` views of pre-registered middleware vectors.
 2. **Zero-Overhead Fast Paths**: Routes without group or route middleware store the raw `Handler` directly in the radix tree without lambda wrapper overhead.
 3. **Unmodified Radix Tree**: Group and route middleware are pre-composed into the terminal handler at route registration time, ensuring SIMD exact-match lookups remain completely untouched.
+
+---
+
+## Built-in Middlewares
+
+Aegon ships with a suite of high-performance, production-ready built-in middlewares:
+
+| Middleware | Header | Description |
+| :--- | :--- | :--- |
+| [**Access Logger**](/guide/access-log) | `#include "http/middleware/AccessLog.h"` | Structured access logging (`Combined`, `Common`, `Json`, `Custom`), slow request detection, and contextual `RequestLogger`. |
+| [**Compression**](/guide/compress) | `#include "http/middleware/Compress.h"` | SIMD-accelerated on-the-fly HTTP response compression (`gzip`, `deflate`) powered by `libdeflate`. |
+| [**CORS**](/guide/cors) | `#include "http/middleware/Cors.h"` | W3C Fetch specification CORS handling with origin validation, subdomain wildcards, and preflight caching. |
+| [**Security Headers**](/guide/security-headers) | `#include "http/middleware/SecurityHeaders.h"` | Defense-in-depth HTTP headers (CSP, HSTS, X-Content-Type-Options, Frame-Options, Referrer-Policy). |
+| [**Authentication & RBAC**](/guide/auth) | `#include "http/middleware/Auth.h"` | Bearer, Cookie, API Key, and Basic auth extractors with compile-time type-safe RBAC role guards. |
+
