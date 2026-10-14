@@ -295,7 +295,8 @@ public:
      *                    When non-null, ctx.sse() will return an SseStream backed by this function.
      */
     core::Task<void> dispatch(Request& req, Response& res, const ServiceRegistry* services,
-                              SseWriteFn sse_writer = nullptr) const {
+                              SseWriteFn sse_writer = nullptr,
+                              SseProvider sse_provider = {}) const {
         if (req.method() == Method::OPTIONS && req.path() == "*") {
             res.status(StatusCode::Ok).header("Allow", "GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH").text("");
             co_return;
@@ -303,7 +304,11 @@ public:
 
         auto match_res = match(req);
         Context ctx(req, res, services);
-        if (sse_writer) ctx.set_sse_writer(std::move(sse_writer));
+        if (sse_writer) {
+            ctx.set_sse_writer(std::move(sse_writer));
+        } else if (sse_provider.build) {
+            ctx.set_sse_provider(sse_provider);
+        }
 
         // Fast-path hot path: Exact route found, no global middleware
         if (__builtin_expect(match_res.route_found && match_res.handler != nullptr && global_middleware_.empty(), 1)) {

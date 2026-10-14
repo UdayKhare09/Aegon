@@ -137,11 +137,8 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
         stream->error_status = StatusCode::RequestHeaderFieldsTooLarge;
     }
 
-    for (char c : v) {
-        unsigned char uc = static_cast<unsigned char>(c);
-        if (uc == '\0' || uc == '\r' || uc == '\n') {
-            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
-        }
+    if (!core::simd::SimdString::validate_h2_h3_header_value(v)) {
+        return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
     }
 
     if (n == ":method") {
@@ -159,18 +156,14 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
         if (v.find('@') != std::string_view::npos) {
             return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
         }
-        stream->header_storage.emplace_back("Host", std::string(v));
-        const auto& back = stream->header_storage.back();
-        stream->req.headers().add(back.first, back.second);
+        stream->add_header("Host", v);
     } else if (n.starts_with(':')) {
         // Other pseudo headers (:scheme, etc.)
     } else {
         if (!validate_request_header(n, v, stream->error_status, config_.limits.max_body_size)) {
             return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE; // RFC 9113 §8.2.1 malformed content-length -> PROTOCOL_ERROR
         }
-        stream->header_storage.emplace_back(std::string(n), std::string(v));
-        const auto& back = stream->header_storage.back();
-        stream->req.headers().add(back.first, back.second);
+        stream->add_header(n, v);
     }
 
     return 0;
@@ -403,18 +396,25 @@ void Http2Connection::submit_response(Http2Stream* stream) {
                 reinterpret_cast<const uint8_t*>(d.data()), d.size());
     }
 
-    // Keep lowercased header names alive for nghttp2_nv pointers
+    // Keep lowercased header names alive for nghttp2_nv pointers only if they contain uppercase chars
     std::vector<std::string> lower_names;
-    lower_names.reserve(stream->res.headers().size());
 
     for (const auto& h : stream->res.headers()) {
         if (is_hop_by_hop_header(h.name)) {
             continue;
         }
-        lower_names.push_back(to_lower_ascii(h.name));
-        const auto& ln = lower_names.back();
-        push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
-                reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        if (is_all_lower_ascii(h.name)) {
+            push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        } else {
+            if (lower_names.capacity() == 0) {
+                lower_names.reserve(stream->res.headers().size());
+            }
+            lower_names.push_back(to_lower_ascii(h.name));
+            const auto& ln = lower_names.back();
+            push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        }
     }
 
     if (!alt_svc_.empty() && !stream->res.headers().contains("alt-svc")) {
@@ -476,13 +476,20 @@ void Http2Connection::submit_sse_headers(Http2Stream* stream) {
     }
 
     std::vector<std::string> lower_names;
-    lower_names.reserve(stream->res.headers().size());
     for (const auto& h : stream->res.headers()) {
         if (is_hop_by_hop_header(h.name)) continue;
-        lower_names.push_back(to_lower_ascii(h.name));
-        const auto& ln = lower_names.back();
-        push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
-                reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        if (is_all_lower_ascii(h.name)) {
+            push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        } else {
+            if (lower_names.capacity() == 0) {
+                lower_names.reserve(stream->res.headers().size());
+            }
+            lower_names.push_back(to_lower_ascii(h.name));
+            const auto& ln = lower_names.back();
+            push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        }
     }
 
     if (!alt_svc_.empty() && !stream->res.headers().contains("alt-svc")) {
@@ -600,13 +607,22 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
         }
 
         // Build SSE write-back: pushes each frame into the stream queue and flushes.
-        // Captured by value for the stream pointer; safe because stream lifetime
-        // is tied to this Http2Connection.
-        SseWriteFn sse_fn = [this, stream](std::string frame) -> core::Task<void> {
-            co_await push_sse_frame(stream, std::move(frame));
+        struct H2SseContext {
+            Http2Connection* conn;
+            Http2Stream* stream;
+        } h2_sse_ctx{this, stream};
+
+        SseProvider sse_provider{
+            .user_data = &h2_sse_ctx,
+            .build = [](void* ud) -> SseWriteFn {
+                auto* c = static_cast<H2SseContext*>(ud);
+                return [conn = c->conn, stream = c->stream](std::string frame) -> core::Task<void> {
+                    co_await conn->push_sse_frame(stream, std::move(frame));
+                };
+            }
         };
 
-        co_await router_.dispatch(stream->req, stream->res, services_, std::move(sse_fn));
+        co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider);
 
         if (stream->res.is_sse()) {
             // Headers were marked by ctx.sse(); submit HEADERS frame if not yet done.

@@ -37,6 +37,29 @@ struct Http3Stream {
     std::string path_storage;
     std::string query_storage;
     std::deque<std::pair<std::string, std::string>> header_storage;
+
+    static constexpr size_t INLINE_HEADER_ARENA_SIZE = 1024;
+    char inline_header_arena[INLINE_HEADER_ARENA_SIZE];
+    size_t inline_arena_used{0};
+
+    void add_header(std::string_view n, std::string_view v) {
+        if (inline_arena_used + n.size() + v.size() <= INLINE_HEADER_ARENA_SIZE) {
+            char* n_dst = inline_header_arena + inline_arena_used;
+            std::memcpy(n_dst, n.data(), n.size());
+            inline_arena_used += n.size();
+
+            char* v_dst = inline_header_arena + inline_arena_used;
+            std::memcpy(v_dst, v.data(), v.size());
+            inline_arena_used += v.size();
+
+            req.headers().add({n_dst, n.size()}, {v_dst, v.size()});
+        } else {
+            header_storage.emplace_back(std::string(n), std::string(v));
+            const auto& back = header_storage.back();
+            req.headers().add(back.first, back.second);
+        }
+    }
+
     std::string body_accum;
     size_t body_offset{0};
     size_t headers_total_size{0};

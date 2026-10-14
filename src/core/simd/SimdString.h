@@ -5,6 +5,7 @@
 #include <string_view>
 #include <cstring>
 #include <bit>
+#include <array>
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
@@ -426,6 +427,177 @@ public:
         }
         return false;
 #endif
+    }
+
+    /**
+     * @brief Lookup table for RFC 9110 tchar validation
+     */
+    static constexpr auto TCHAR_TABLE = []() consteval {
+        std::array<bool, 256> table{};
+        for (int i = 0; i < 256; ++i) {
+            char c = static_cast<char>(i);
+            bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                      c == '!' || c == '#' || c == '$' || c == '%' || c == '&' ||
+                      c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' ||
+                      c == '^' || c == '_' || c == '`' || c == '|' || c == '~';
+            table[static_cast<size_t>(i)] = ok;
+        }
+        return table;
+    }();
+
+    /**
+     * @brief Validate that all characters in sv are valid RFC 9110 tchar tokens.
+     */
+    static inline bool validate_tchars(std::string_view sv) noexcept {
+        for (char c : sv) {
+            if (!TCHAR_TABLE[static_cast<uint8_t>(c)]) return false;
+        }
+        return true;
+    }
+
+    /**
+     * @brief Validate request URI characters: must be printable ASCII without CTLs, space, or DEL (0x21..0x7E).
+     */
+    static inline bool validate_uri_chars(std::string_view sv) noexcept {
+        const size_t len = sv.size();
+        const char* ptr = sv.data();
+        size_t i = 0;
+
+#if defined(__AVX512VL__) && defined(__AVX512BW__)
+        const __m512i low = _mm512_set1_epi8(0x20);
+        const __m512i high = _mm512_set1_epi8(0x7F);
+        for (; i + 64 <= len; i += 64) {
+            __m512i chunk = _mm512_loadu_si512(reinterpret_cast<const __m512i*>(ptr + i));
+            uint64_t mask = _mm512_cmpgt_epi8_mask(chunk, low) & _mm512_cmplt_epi8_mask(chunk, high);
+            if (mask != ~0ULL) return false;
+        }
+        if (i < len) {
+            __mmask64 tail = (__mmask64)((1ULL << (len - i)) - 1ULL);
+            __m512i chunk = _mm512_maskz_loadu_epi8(tail, ptr + i);
+            uint64_t mask = _mm512_cmpgt_epi8_mask(chunk, low) & _mm512_cmplt_epi8_mask(chunk, high) & tail;
+            if (mask != tail) return false;
+            return true;
+        }
+#elif defined(__AVX2__)
+        const __m256i low = _mm256_set1_epi8(0x20);
+        const __m256i high = _mm256_set1_epi8(0x7F);
+        for (; i + 32 <= len; i += 32) {
+            __m256i chunk = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ptr + i));
+            __m256i is_gt = _mm256_cmpgt_epi8(chunk, low);
+            __m256i is_lt = _mm256_cmpgt_epi8(high, chunk);
+            __m256i valid = _mm256_and_si256(is_gt, is_lt);
+            if (static_cast<uint32_t>(_mm256_movemask_epi8(valid)) != 0xFFFFFFFFU) return false;
+        }
+#elif defined(__SSE4_2__)
+        const __m128i low = _mm_set1_epi8(0x20);
+        const __m128i high = _mm_set1_epi8(0x7F);
+        for (; i + 16 <= len; i += 16) {
+            __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
+            __m128i is_gt = _mm_cmpgt_epi8(chunk, low);
+            __m128i is_lt = _mm_cmpgt_epi8(high, chunk);
+            __m128i valid = _mm_and_si128(is_gt, is_lt);
+            if ((_mm_movemask_epi8(valid) & 0xFFFF) != 0xFFFF) return false;
+        }
+#endif
+
+        for (; i < len; ++i) {
+            unsigned char uc = static_cast<unsigned char>(ptr[i]);
+            if (uc <= 0x20 || uc >= 0x7F) return false;
+        }
+        return true;
+    }
+
+    /**
+     * @brief Validate HTTP header value per RFC 9112 §2.2 / RFC 9110 §5.5:
+     * Rejects bare CR ('\r'), NUL, and CTLs (< 0x20 except '\t'), and DEL (0x7F).
+     */
+    static inline bool validate_header_value(std::string_view sv) noexcept {
+        const size_t len = sv.size();
+        const char* ptr = sv.data();
+        size_t i = 0;
+
+#if defined(__AVX2__)
+        const __m256i cr = _mm256_set1_epi8('\r');
+        const __m256i del = _mm256_set1_epi8(0x7F);
+        const __m256i tab = _mm256_set1_epi8('\t');
+        const __m256i ctl_limit = _mm256_set1_epi8(0x20);
+
+        for (; i + 32 <= len; i += 32) {
+            __m256i chunk = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ptr + i));
+            __m256i is_cr = _mm256_cmpeq_epi8(chunk, cr);
+            __m256i is_del = _mm256_cmpeq_epi8(chunk, del);
+            __m256i is_tab = _mm256_cmpeq_epi8(chunk, tab);
+            __m256i is_ctl = _mm256_cmpgt_epi8(_mm256_subs_epu8(ctl_limit, chunk), _mm256_setzero_si256());
+            __m256i bad_ctl = _mm256_andnot_si256(is_tab, is_ctl);
+            __m256i bad = _mm256_or_si256(_mm256_or_si256(is_cr, is_del), bad_ctl);
+            if (_mm256_movemask_epi8(bad) != 0) return false;
+        }
+#elif defined(__SSE4_2__)
+        const __m128i cr = _mm_set1_epi8('\r');
+        const __m128i del = _mm_set1_epi8(0x7F);
+        const __m128i tab = _mm_set1_epi8('\t');
+        const __m128i ctl_limit = _mm_set1_epi8(0x20);
+
+        for (; i + 16 <= len; i += 16) {
+            __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
+            __m128i is_cr = _mm_cmpeq_epi8(chunk, cr);
+            __m128i is_del = _mm_cmpeq_epi8(chunk, del);
+            __m128i is_tab = _mm_cmpeq_epi8(chunk, tab);
+            __m128i is_ctl = _mm_cmpgt_epi8(_mm_subs_epu8(ctl_limit, chunk), _mm_setzero_si128());
+            __m128i bad_ctl = _mm_andnot_si128(is_tab, is_ctl);
+            __m128i bad = _mm_or_si128(_mm_or_si128(is_cr, is_del), bad_ctl);
+            if ((_mm_movemask_epi8(bad) & 0xFFFF) != 0) return false;
+        }
+#endif
+
+        for (; i < len; ++i) {
+            unsigned char uc = static_cast<unsigned char>(ptr[i]);
+            if (uc == '\r' || (uc < 0x20 && uc != '\t') || uc == 0x7F) return false;
+        }
+        return true;
+    }
+
+    /**
+     * @brief Validate HTTP/2 and HTTP/3 header values: must not contain '\0', '\r', or '\n'.
+     */
+    static inline bool validate_h2_h3_header_value(std::string_view sv) noexcept {
+        const size_t len = sv.size();
+        const char* ptr = sv.data();
+        size_t i = 0;
+
+#if defined(__AVX2__)
+        const __m256i zero = _mm256_setzero_si256();
+        const __m256i cr = _mm256_set1_epi8('\r');
+        const __m256i lf = _mm256_set1_epi8('\n');
+
+        for (; i + 32 <= len; i += 32) {
+            __m256i chunk = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ptr + i));
+            __m256i is_z = _mm256_cmpeq_epi8(chunk, zero);
+            __m256i is_cr = _mm256_cmpeq_epi8(chunk, cr);
+            __m256i is_lf = _mm256_cmpeq_epi8(chunk, lf);
+            __m256i bad = _mm256_or_si256(_mm256_or_si256(is_z, is_cr), is_lf);
+            if (_mm256_movemask_epi8(bad) != 0) return false;
+        }
+#elif defined(__SSE4_2__)
+        const __m128i zero = _mm_setzero_si128();
+        const __m128i cr = _mm_set1_epi8('\r');
+        const __m128i lf = _mm_set1_epi8('\n');
+
+        for (; i + 16 <= len; i += 16) {
+            __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
+            __m128i is_z = _mm_cmpeq_epi8(chunk, zero);
+            __m128i is_cr = _mm_cmpeq_epi8(chunk, cr);
+            __m128i is_lf = _mm_cmpeq_epi8(chunk, lf);
+            __m128i bad = _mm_or_si128(_mm_or_si128(is_z, is_cr), is_lf);
+            if ((_mm_movemask_epi8(bad) & 0xFFFF) != 0) return false;
+        }
+#endif
+
+        for (; i < len; ++i) {
+            unsigned char uc = static_cast<unsigned char>(ptr[i]);
+            if (uc == '\0' || uc == '\r' || uc == '\n') return false;
+        }
+        return true;
     }
 };
 

@@ -25,13 +25,7 @@ enum class ParseStatus {
 class Http1Parser {
 public:
     static constexpr bool is_tchar(char c) noexcept {
-        unsigned char uc = static_cast<unsigned char>(c);
-        if ((uc >= 'a' && uc <= 'z') || (uc >= 'A' && uc <= 'Z') || (uc >= '0' && uc <= '9')) {
-            return true;
-        }
-        return c == '!' || c == '#' || c == '$' || c == '%' || c == '&' ||
-               c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' ||
-               c == '^' || c == '_' || c == '`' || c == '|' || c == '~';
+        return aegon::core::simd::SimdString::TCHAR_TABLE[static_cast<uint8_t>(c)];
     }
 
     /**
@@ -116,11 +110,8 @@ public:
         }
 
         // Must be ASCII without CTLs, NUL, or high bytes
-        for (char c : full_path) {
-            unsigned char uc = static_cast<unsigned char>(c);
-            if (uc <= 0x20 || uc >= 0x7F) {
-                return ParseStatus::Error;
-            }
+        if (!aegon::core::simd::SimdString::validate_uri_chars(full_path)) {
+            return ParseStatus::Error;
         }
 
         size_t qmark = aegon::core::simd::SimdString::find_char(full_path, '?');
@@ -199,8 +190,8 @@ public:
 
             std::string_view name = line.substr(0, colon);
             // RFC 9110 §5.6.2: Header name must consist only of tchar
-            for (char c : name) {
-                if (!is_tchar(c)) return ParseStatus::Error;
+            if (!aegon::core::simd::SimdString::validate_tchars(name)) {
+                return ParseStatus::Error;
             }
 
             // RFC 9110: No whitespace allowed between header field name and colon
@@ -210,11 +201,8 @@ public:
 
             std::string_view raw_value = line.substr(colon + 1);
             // RFC 9112 §2.2 / RFC 9110 §5.5: Reject bare CR, NUL, and CTLs (except HTAB)
-            for (char c : raw_value) {
-                unsigned char uc = static_cast<unsigned char>(c);
-                if (uc == '\r' || (uc < 0x20 && uc != '\t') || uc == 0x7F) {
-                    return ParseStatus::Error;
-                }
+            if (!aegon::core::simd::SimdString::validate_header_value(raw_value)) {
+                return ParseStatus::Error;
             }
 
             std::string_view value = raw_value;
@@ -229,96 +217,114 @@ public:
 
             req.headers().add(name, value);
 
-            if (iequals(name, "Host")) {
-                if (has_host) {
-                    return ParseStatus::Error; // Multiple Host headers forbidden (RFC 9112 §3.2)
-                }
-                has_host = true;
-                if (value.empty()) {
-                    return ParseStatus::Error; // Empty Host header forbidden
-                }
-                for (char c : value) {
-                    if (c == '@' || c == '/' || c == ',' || c == ' ' || c == '\t') {
-                        return ParseStatus::Error;
+            switch (name.size()) {
+                case 4:
+                    if (iequals(name, "Host")) {
+                        if (has_host) {
+                            return ParseStatus::Error; // Multiple Host headers forbidden (RFC 9112 §3.2)
+                        }
+                        has_host = true;
+                        if (value.empty()) {
+                            return ParseStatus::Error; // Empty Host header forbidden
+                        }
+                        for (char c : value) {
+                            if (c == '@' || c == '/' || c == ',' || c == ' ' || c == '\t') {
+                                return ParseStatus::Error;
+                            }
+                        }
                     }
-                }
-            } else if (iequals(name, "Content-Length")) {
-                if (has_content_length) {
-                    return ParseStatus::Error; // Duplicate Content-Length forbidden
-                }
-                has_content_length = true;
-                auto cl_opt = parse_valid_content_length(value);
-                if (!cl_opt) {
-                    return ParseStatus::Error;
-                }
-                content_length = *cl_opt;
-                if (content_length > limits.max_body_size) {
-                    return ParseStatus::PayloadTooLarge;
-                }
-            } else if (iequals(name, "Transfer-Encoding")) {
-                if (has_transfer_encoding) {
-                    // Duplicate Transfer-Encoding header -> RFC 9112 ambiguous -> 400
-                    return ParseStatus::Error;
-                }
-                has_transfer_encoding = true;
-                if (value.empty()) {
-                    return ParseStatus::Error; // Empty value -> 400
-                }
-
-                // Parse comma-separated codings
-                std::string_view te_val = value;
-                std::vector<std::string_view> codings;
-                while (!te_val.empty()) {
-                    size_t comma = te_val.find(',');
-                    std::string_view token = (comma != std::string_view::npos) ? te_val.substr(0, comma) : te_val;
-                    while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) token.remove_prefix(1);
-                    while (!token.empty() && (token.back() == ' ' || token.back() == '\t')) token.remove_suffix(1);
-                    if (!token.empty()) {
-                        codings.push_back(token);
+                    break;
+                case 6:
+                    if (iequals(name, "Expect")) {
+                        if (iequals(value, "100-continue")) {
+                            req.set_expect_continue(true);
+                        } else {
+                            return ParseStatus::ExpectationFailed;
+                        }
                     }
-                    if (comma == std::string_view::npos) break;
-                    te_val.remove_prefix(comma + 1);
-                }
-
-                if (codings.empty()) {
-                    return ParseStatus::Error;
-                }
-
-                size_t chunked_count = 0;
-                for (auto c : codings) {
-                    if (iequals(c, "chunked") || c.starts_with("chunked;")) {
-                        ++chunked_count;
+                    break;
+                case 7:
+                    if (iequals(name, "Upgrade")) {
+                        if (iequals(value, "h2c")) {
+                            req.set_upgrade_h2c(true);
+                        } else {
+                            std::string lower_val;
+                            lower_val.reserve(value.size());
+                            for (char ch : value) lower_val.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+                            if (lower_val.find("websocket") != std::string::npos) {
+                                req.set_websocket_upgrade(true);
+                            }
+                        }
                     }
-                }
-                if (chunked_count > 1) {
-                    return ParseStatus::Error;
-                }
-
-                std::string_view final_coding = codings.back();
-                if (iequals(final_coding, "chunked") || final_coding.starts_with("chunked;")) {
-                    is_chunked = true;
-                } else {
-                    return ParseStatus::NotImplemented;
-                }
-            } else if (iequals(name, "Expect")) {
-                if (iequals(value, "100-continue")) {
-                    req.set_expect_continue(true);
-                } else {
-                    return ParseStatus::ExpectationFailed;
-                }
-            } else if (iequals(name, "Upgrade")) {
-                if (iequals(value, "h2c")) {
-                    req.set_upgrade_h2c(true);
-                } else {
-                    std::string lower_val;
-                    lower_val.reserve(value.size());
-                    for (char ch : value) lower_val.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-                    if (lower_val.find("websocket") != std::string::npos) {
-                        req.set_websocket_upgrade(true);
+                    break;
+                case 14:
+                    if (iequals(name, "Content-Length")) {
+                        if (has_content_length) {
+                            return ParseStatus::Error; // Duplicate Content-Length forbidden
+                        }
+                        has_content_length = true;
+                        auto cl_opt = parse_valid_content_length(value);
+                        if (!cl_opt) {
+                            return ParseStatus::Error;
+                        }
+                        content_length = *cl_opt;
+                        if (content_length > limits.max_body_size) {
+                            return ParseStatus::PayloadTooLarge;
+                        }
                     }
-                }
-            } else if (iequals(name, "Sec-WebSocket-Key")) {
-                req.set_sec_websocket_key(value);
+                    break;
+                case 17:
+                    if (iequals(name, "Transfer-Encoding")) {
+                        if (has_transfer_encoding) {
+                            // Duplicate Transfer-Encoding header -> RFC 9112 ambiguous -> 400
+                            return ParseStatus::Error;
+                        }
+                        has_transfer_encoding = true;
+                        if (value.empty()) {
+                            return ParseStatus::Error; // Empty value -> 400
+                        }
+
+                        // Parse comma-separated codings
+                        std::string_view te_val = value;
+                        std::vector<std::string_view> codings;
+                        while (!te_val.empty()) {
+                            size_t comma = te_val.find(',');
+                            std::string_view token = (comma != std::string_view::npos) ? te_val.substr(0, comma) : te_val;
+                            while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) token.remove_prefix(1);
+                            while (!token.empty() && (token.back() == ' ' || token.back() == '\t')) token.remove_suffix(1);
+                            if (!token.empty()) {
+                                codings.push_back(token);
+                            }
+                            if (comma == std::string_view::npos) break;
+                            te_val.remove_prefix(comma + 1);
+                        }
+
+                        if (codings.empty()) {
+                            return ParseStatus::Error;
+                        }
+
+                        size_t chunked_count = 0;
+                        for (auto c : codings) {
+                            if (iequals(c, "chunked") || c.starts_with("chunked;")) {
+                                ++chunked_count;
+                            }
+                        }
+                        if (chunked_count > 1) {
+                            return ParseStatus::Error;
+                        }
+
+                        std::string_view final_coding = codings.back();
+                        if (iequals(final_coding, "chunked") || final_coding.starts_with("chunked;")) {
+                            is_chunked = true;
+                        } else {
+                            return ParseStatus::NotImplemented;
+                        }
+                    } else if (iequals(name, "Sec-WebSocket-Key")) {
+                        req.set_sec_websocket_key(value);
+                    }
+                    break;
+                default:
+                    break;
             }
 
             cursor = header_end + 2;

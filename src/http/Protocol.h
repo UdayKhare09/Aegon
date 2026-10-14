@@ -173,10 +173,17 @@ inline constexpr ProtocolLimits DEFAULT_LIMITS{};
  * @brief Checks if a header is hop-by-hop (prohibited in HTTP/2 RFC 9113 §8.2.2 and HTTP/3 RFC 9114 §4.2)
  */
 inline bool is_hop_by_hop_header(std::string_view name) noexcept {
-    return core::simd::SimdString::iequals(name, "connection") ||
-           core::simd::SimdString::iequals(name, "keep-alive") ||
-           core::simd::SimdString::iequals(name, "transfer-encoding") ||
-           core::simd::SimdString::iequals(name, "upgrade");
+    switch (name.size()) {
+        case 7:
+            return core::simd::SimdString::iequals(name, "upgrade");
+        case 10:
+            return core::simd::SimdString::iequals(name, "connection") ||
+                   core::simd::SimdString::iequals(name, "keep-alive");
+        case 17:
+            return core::simd::SimdString::iequals(name, "transfer-encoding");
+        default:
+            return false;
+    }
 }
 
 /**
@@ -198,11 +205,41 @@ inline std::string_view get_http_date() noexcept {
 }
 
 /**
+ * @brief Returns pre-formatted Date header line "Date: <HTTP-Date>\r\n"
+ * Cached per thread per second for single-memcpy HTTP/1 response serialization.
+ */
+inline std::string_view get_http_date_header() noexcept {
+    static thread_local time_t last_time = 0;
+    static thread_local char date_hdr_buf[64];
+    static thread_local size_t date_hdr_len = 0;
+    time_t now = time(nullptr);
+    if (now != last_time) {
+        last_time = now;
+        struct tm gmt;
+        gmtime_r(&now, &gmt);
+        std::memcpy(date_hdr_buf, "Date: ", 6);
+        size_t dlen = strftime(date_hdr_buf + 6, sizeof(date_hdr_buf) - 8, "%a, %d %b %Y %H:%M:%S GMT\r\n", &gmt);
+        date_hdr_len = 6 + dlen;
+    }
+    return {date_hdr_buf, date_hdr_len};
+}
+
+/**
  * @brief Checks if status code mandates suppression of Content-Length (RFC 9110 §8.6)
  */
 inline bool should_suppress_content_length(StatusCode code) noexcept {
     uint16_t sc = static_cast<uint16_t>(code);
     return (sc >= 100 && sc < 200) || sc == 204 || sc == 304;
+}
+
+/**
+ * @brief Checks if a string view contains only lowercase ASCII characters
+ */
+inline bool is_all_lower_ascii(std::string_view sv) noexcept {
+    for (char c : sv) {
+        if (c >= 'A' && c <= 'Z') return false;
+    }
+    return true;
 }
 
 /**

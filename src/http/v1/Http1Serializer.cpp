@@ -69,9 +69,7 @@ void Http1Serializer::append_headers(const Response& res, std::string& out) {
     }
 
     if (!headers.contains("Date") && static_cast<uint16_t>(res.status()) >= 200) {
-        out.append("Date: ");
-        out.append(get_http_date());
-        out.append("\r\n");
+        out.append(get_http_date_header());
     }
 
     for (const auto& h : headers) {

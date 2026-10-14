@@ -371,11 +371,8 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     }
 
-    for (char c : v) {
-        unsigned char uc = static_cast<unsigned char>(c);
-        if (uc == '\0' || uc == '\r' || uc == '\n') {
-            return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
-        }
+    if (!core::simd::SimdString::validate_h2_h3_header_value(v)) {
+        return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     }
 
     if (n == ":method") {
@@ -402,9 +399,7 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         if (v.find('@') != std::string_view::npos) {
             return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
         }
-        stream->header_storage.emplace_back("Host", std::string(v));
-        const auto& back = stream->header_storage.back();
-        stream->req.headers().add(back.first, back.second);
+        stream->add_header("Host", v);
     } else if (n.starts_with(':')) {
         return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     } else {
@@ -412,9 +407,7 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
         if (!validate_request_header(n, v, stream->error_status, config_.limits.max_body_size)) {
             return NGHTTP3_ERR_MALFORMED_HTTP_HEADER; // RFC 9114 §4.2 malformed content-length -> H3_MESSAGE_ERROR
         }
-        stream->header_storage.emplace_back(std::string(n), std::string(v));
-        const auto& back = stream->header_storage.back();
-        stream->req.headers().add(back.first, back.second);
+        stream->add_header(n, v);
     }
 
     return 0;
@@ -439,9 +432,7 @@ int Http3Connection::on_stream_trailer(int64_t stream_id, int32_t, nghttp3_rcbuf
         return NGHTTP3_ERR_MALFORMED_HTTP_HEADER;
     }
 
-    stream->header_storage.emplace_back(std::string(n), std::string(v));
-    const auto& back = stream->header_storage.back();
-    stream->req.headers().add(back.first, back.second);
+    stream->add_header(n, v);
     return 0;
 }
 
@@ -571,13 +562,20 @@ void Http3Connection::submit_sse_headers(Http3Stream* stream) {
     }
 
     std::vector<std::string> lower_names;
-    lower_names.reserve(stream->res.headers().size());
     for (const auto& h : stream->res.headers()) {
         if (is_prohibited_header(h.name)) continue;
-        lower_names.push_back(to_lower_ascii(h.name));
-        const auto& ln = lower_names.back();
-        push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
-                reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        if (is_all_lower_ascii(h.name)) {
+            push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        } else {
+            if (lower_names.capacity() == 0) {
+                lower_names.reserve(stream->res.headers().size());
+            }
+            lower_names.push_back(to_lower_ascii(h.name));
+            const auto& ln = lower_names.back();
+            push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        }
     }
 
     nghttp3_data_reader dr{};
@@ -653,16 +651,23 @@ void Http3Connection::submit_response(Http3Stream* stream) {
     }
 
     std::vector<std::string> lower_names;
-    lower_names.reserve(stream->res.headers().size());
 
     for (const auto& h : stream->res.headers()) {
         if (is_prohibited_header(h.name)) {
             continue;
         }
-        lower_names.push_back(to_lower_ascii(h.name));
-        const auto& ln = lower_names.back();
-        push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
-                reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        if (is_all_lower_ascii(h.name)) {
+            push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        } else {
+            if (lower_names.capacity() == 0) {
+                lower_names.reserve(stream->res.headers().size());
+            }
+            lower_names.push_back(to_lower_ascii(h.name));
+            const auto& ln = lower_names.back();
+            push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        }
     }
 
     nghttp3_data_reader dr{};
@@ -694,12 +699,23 @@ core::Task<void> Http3Connection::dispatch_pending_requests() {
             stream->req.set_body(stream->body_accum);
         }
 
-        SseWriteFn sse_fn = [this, stream](std::string frame) -> core::Task<void> {
-            push_sse_frame(stream, std::move(frame));
-            co_return;
+        struct H3SseContext {
+            Http3Connection* conn;
+            Http3Stream* stream;
+        } h3_sse_ctx{this, stream};
+
+        SseProvider sse_provider{
+            .user_data = &h3_sse_ctx,
+            .build = [](void* ud) -> SseWriteFn {
+                auto* c = static_cast<H3SseContext*>(ud);
+                return [conn = c->conn, stream = c->stream](std::string frame) -> core::Task<void> {
+                    conn->push_sse_frame(stream, std::move(frame));
+                    co_return;
+                };
+            }
         };
 
-        co_await router_.dispatch(stream->req, stream->res, services_, std::move(sse_fn));
+        co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider);
 
         if (stream->res.is_sse()) {
             if (!stream->response_submitted) {
@@ -783,6 +799,8 @@ bool Http3Connection::flush_outbound() {
         return true;
     };
 
+    const uint64_t now_ts = get_timestamp_ns();
+
     while (true) {
         int64_t stream_id = -1;
         int fin = 0;
@@ -807,11 +825,11 @@ bool Http3Connection::flush_outbound() {
         if (stream_id >= 0) {
             nwrite = ngtcp2_conn_writev_stream(
                 qconn_, &ps.path, &pi, cur_buf, max_payload, &pdatalen,
-                flags, stream_id, reinterpret_cast<const ngtcp2_vec*>(vec), static_cast<size_t>(veccnt), get_timestamp_ns());
+                flags, stream_id, reinterpret_cast<const ngtcp2_vec*>(vec), static_cast<size_t>(veccnt), now_ts);
         } else {
             nwrite = ngtcp2_conn_writev_stream(
                 qconn_, &ps.path, &pi, cur_buf, max_payload, &pdatalen,
-                NGTCP2_WRITE_STREAM_FLAG_NONE, -1, nullptr, 0, get_timestamp_ns());
+                NGTCP2_WRITE_STREAM_FLAG_NONE, -1, nullptr, 0, now_ts);
         }
 
         if (nwrite <= 0) {

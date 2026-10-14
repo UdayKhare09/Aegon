@@ -18,6 +18,14 @@ namespace aegon::http {
 using SseWriteFn = std::function<core::Task<void>(std::string)>;
 
 /**
+ * @brief Zero-allocation lazy provider for SseWriteFn.
+ */
+struct SseProvider {
+    void* user_data{nullptr};
+    SseWriteFn (*build)(void* user_data){nullptr};
+};
+
+/**
  * @brief Streaming writer for Server-Sent Events (RFC 8895).
  *
  * Returned by ctx.sse(). The developer co_awaits individual events;

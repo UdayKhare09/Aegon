@@ -29,6 +29,7 @@ private:
     const ServiceRegistry* services_{nullptr};
     std::unordered_map<std::type_index, std::shared_ptr<void>> local_store_;
     SseWriteFn sse_writer_{nullptr};
+    SseProvider sse_provider_{};
 
 public:
     Context(Request& req, Response& res, const ServiceRegistry* services = nullptr) noexcept
@@ -212,6 +213,10 @@ public:
         sse_writer_ = std::move(fn);
     }
 
+    void set_sse_provider(SseProvider provider) noexcept {
+        sse_provider_ = provider;
+    }
+
     /**
      * @brief Upgrade this response to a Server-Sent Events stream.
      *
@@ -228,6 +233,9 @@ public:
      */
     core::Task<SseStream> sse() {
         res_.sse();                              // set headers, mark flag
+        if (!sse_writer_ && sse_provider_.build) {
+            sse_writer_ = sse_provider_.build(sse_provider_.user_data);
+        }
         co_return SseStream(sse_writer_);        // hand write channel to handler
     }
 };

@@ -62,8 +62,10 @@ void test_modern_ring_initialization() {
     auto task = run_timer();
     task.resume();
 
-    ring.submit_and_wait(1);
-    ring.process_completions();
+    while (!timer_completed) {
+        ring.submit_and_wait(1);
+        ring.process_completions();
+    }
 
     assert(timer_completed);
     std::cout << "  -> PASS: Async operations executed cleanly under Single-Issuer Cooperative Engine.\n";

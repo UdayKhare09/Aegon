@@ -85,12 +85,85 @@ void test_has_url_encoding_chars() {
     assert(SimdString::has_url_encoding_chars(long_no_enc));
 }
 
+void test_validate_uri_chars() {
+    assert(SimdString::validate_uri_chars(""));
+    assert(SimdString::validate_uri_chars("/"));
+    assert(SimdString::validate_uri_chars("/api/v1/users?name=john&age=30"));
+    assert(!SimdString::validate_uri_chars("/api/v1/users with space"));
+    assert(!SimdString::validate_uri_chars("/api/v1/users\twith_tab"));
+    assert(!SimdString::validate_uri_chars("/api/v1/users\nwith_newline"));
+    assert(!SimdString::validate_uri_chars(std::string_view("/api\0test", 9)));
+
+    // Long URI across 32-byte boundary
+    std::string long_uri = "/this/is/a/very/long/uri/path/that/exceeds/thirty/two/bytes/for/avx2/testing";
+    assert(SimdString::validate_uri_chars(long_uri));
+    long_uri[45] = ' ';
+    assert(!SimdString::validate_uri_chars(long_uri));
+    long_uri[45] = 0x7f; // DEL
+    assert(!SimdString::validate_uri_chars(long_uri));
+}
+
+void test_validate_tchars() {
+    assert(SimdString::validate_tchars(""));
+    assert(SimdString::validate_tchars("GET"));
+    assert(SimdString::validate_tchars("content-type"));
+    assert(SimdString::validate_tchars("Transfer-Encoding"));
+    assert(SimdString::validate_tchars("!#$%&'*+-.^_`|~"));
+    assert(!SimdString::validate_tchars("content:type"));
+    assert(!SimdString::validate_tchars("content length"));
+    assert(!SimdString::validate_tchars("header@name"));
+    assert(!SimdString::validate_tchars("header/name"));
+    assert(!SimdString::validate_tchars("header?name"));
+
+    std::string long_token(64, 'a');
+    assert(SimdString::validate_tchars(long_token));
+    long_token[50] = ' ';
+    assert(!SimdString::validate_tchars(long_token));
+}
+
+void test_validate_header_value() {
+    assert(SimdString::validate_header_value(""));
+    assert(SimdString::validate_header_value("application/json"));
+    assert(SimdString::validate_header_value("text/html; charset=UTF-8"));
+    assert(SimdString::validate_header_value("val\twith\ttab"));
+    assert(!SimdString::validate_header_value("val\rwith_cr"));
+    assert(!SimdString::validate_header_value("val\nwith_lf"));
+    assert(!SimdString::validate_header_value(std::string_view("val\0with_nul", 12)));
+    assert(!SimdString::validate_header_value("val\x1f" "ctl"));
+    assert(!SimdString::validate_header_value("val\x7f" "del"));
+
+    std::string long_val(80, 'x');
+    assert(SimdString::validate_header_value(long_val));
+    long_val[35] = '\r';
+    assert(!SimdString::validate_header_value(long_val));
+    long_val[35] = '\x01';
+    assert(!SimdString::validate_header_value(long_val));
+}
+
+void test_validate_h2_h3_header_value() {
+    assert(SimdString::validate_h2_h3_header_value(""));
+    assert(SimdString::validate_h2_h3_header_value("gzip, deflate, br"));
+    assert(SimdString::validate_h2_h3_header_value("binary\x01\x02\xff" "data"));
+    assert(!SimdString::validate_h2_h3_header_value(std::string_view("has\0nul", 7)));
+    assert(!SimdString::validate_h2_h3_header_value("has\rcr"));
+    assert(!SimdString::validate_h2_h3_header_value("has\nlf"));
+
+    std::string long_h2_val(100, 'z');
+    assert(SimdString::validate_h2_h3_header_value(long_h2_val));
+    long_h2_val[67] = '\n';
+    assert(!SimdString::validate_h2_h3_header_value(long_h2_val));
+}
+
 int main() {
     test_find_char();
     test_find_crlf();
     test_find_double_crlf();
     test_iequals();
     test_has_url_encoding_chars();
+    test_validate_uri_chars();
+    test_validate_tchars();
+    test_validate_header_value();
+    test_validate_h2_h3_header_value();
     std::cout << "All SIMD String tests passed successfully!\n";
     return 0;
 }
