@@ -619,8 +619,9 @@ public:
      * Pool and database errors propagate.
      */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
-    core::Task<void> link(const ParentID& parent_id, const ChildID& child_id) {
-        co_await execute_with_tx([&](Transaction& tx) { return tx.template link<JunctionEntity>(parent_id, child_id); });
+    core::Task<void> link(const ParentID& parent_id, const ChildID& child_id,
+                          std::string_view parent_col = "", std::string_view child_col = "") {
+        co_await execute_with_tx([&](Transaction& tx) { return tx.template link<JunctionEntity>(parent_id, child_id, parent_col, child_col); });
     }
 
     /**
@@ -632,8 +633,9 @@ public:
      * Pool and database errors propagate.
      */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
-    core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id) {
-        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.template unlink<JunctionEntity>(parent_id, child_id); });
+    core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id,
+                            std::string_view parent_col = "", std::string_view child_col = "") {
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.template unlink<JunctionEntity>(parent_id, child_id, parent_col, child_col); });
     }
 };
 

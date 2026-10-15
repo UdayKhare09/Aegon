@@ -292,6 +292,15 @@ public:
             if (i + 1 < insert_col_indices.size()) sql.append(", ");
         }
 
+        size_t total_params = entities.size() * insert_col_indices.size();
+        size_t max_allowed = (dialect == DatabaseDialect::SQLite) ? 32766 : 65535;
+        if (total_params > max_allowed) {
+            throw std::invalid_argument(
+                "Table::build_insert_sql: total parameter count (" + std::to_string(total_params) +
+                ") exceeds dialect parameter limit (" + std::to_string(max_allowed) +
+                "). Split batch into smaller chunks.");
+        }
+
         sql.append(") VALUES ");
 
         size_t param_idx = 1;

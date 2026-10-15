@@ -283,7 +283,7 @@ public:
      */
     template <typename Entity>
     core::Task<size_t> update_entity(const Entity& entity) {
-        co_return co_await update_entity_impl(const_cast<Entity&>(entity), true);
+        co_return co_await update_entity_impl(const_cast<Entity&>(entity), false);
     }
 
     template <typename Entity, typename ID>
@@ -453,23 +453,47 @@ public:
      * Database errors propagate; no entity cache operations are recorded.
      */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
-    core::Task<void> link(const ParentID& parent_id, const ChildID& child_id) {
+    core::Task<void> link(const ParentID& parent_id, const ChildID& child_id,
+                          std::string_view parent_col = "", std::string_view child_col = "") {
         auto schema = JunctionEntity::schema();
-        std::vector<std::string> fk_cols;
-        for (const auto& col : schema.columns()) {
-            if (!col.is_auto_increment) {
-                fk_cols.push_back(col.column_name);
+        std::string p_col(parent_col);
+        std::string c_col(child_col);
+        if (p_col.empty() || c_col.empty()) {
+            std::vector<std::string> candidates;
+            for (const auto& col : schema.columns()) {
+                if (col.is_auto_increment) continue;
+                std::string lower_name = col.column_name;
+                for (char& ch : lower_name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                if (lower_name == "created_at" || lower_name == "updated_at" ||
+                    lower_name == "deleted_at" || lower_name == "timestamp" ||
+                    lower_name == "created" || lower_name == "updated" || lower_name == "id") {
+                    continue;
+                }
+                candidates.push_back(col.column_name);
             }
-        }
-        if (fk_cols.size() < 2) {
-            throw std::runtime_error("Transaction::link: junction table requires at least 2 non-auto-increment columns");
+            if (candidates.size() >= 2) {
+                p_col = candidates[0];
+                c_col = candidates[1];
+            } else {
+                std::vector<std::string> fk_cols;
+                for (const auto& col : schema.columns()) {
+                    if (!col.is_auto_increment) {
+                        fk_cols.push_back(col.column_name);
+                    }
+                }
+                if (fk_cols.size() < 2) {
+                    throw std::runtime_error("Transaction::link: junction table requires at least 2 non-auto-increment columns");
+                }
+                p_col = fk_cols[0];
+                c_col = fk_cols[1];
+            }
         }
         std::string sql = "INSERT INTO ";
         sql.append(DialectTraits::quote_identifier(dialect_, schema.table_name()));
         sql.append(" (");
-        sql.append(DialectTraits::quote_identifier(dialect_, fk_cols[0]));
+        sql.append(DialectTraits::quote_identifier(dialect_, p_col));
         sql.append(", ");
-        sql.append(DialectTraits::quote_identifier(dialect_, fk_cols[1]));
+        sql.append(DialectTraits::quote_identifier(dialect_, c_col));
         sql.append(") VALUES (");
         std::string p1, p2;
         DialectTraits::format_placeholder(dialect_, 1, p1);
@@ -490,27 +514,51 @@ public:
      * Database errors propagate; no entity cache operations are recorded.
      */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
-    core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id) {
+    core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id,
+                            std::string_view parent_col = "", std::string_view child_col = "") {
         auto schema = JunctionEntity::schema();
-        std::vector<std::string> fk_cols;
-        for (const auto& col : schema.columns()) {
-            if (!col.is_auto_increment) {
-                fk_cols.push_back(col.column_name);
+        std::string p_col(parent_col);
+        std::string c_col(child_col);
+        if (p_col.empty() || c_col.empty()) {
+            std::vector<std::string> candidates;
+            for (const auto& col : schema.columns()) {
+                if (col.is_auto_increment) continue;
+                std::string lower_name = col.column_name;
+                for (char& ch : lower_name) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                if (lower_name == "created_at" || lower_name == "updated_at" ||
+                    lower_name == "deleted_at" || lower_name == "timestamp" ||
+                    lower_name == "created" || lower_name == "updated" || lower_name == "id") {
+                    continue;
+                }
+                candidates.push_back(col.column_name);
             }
-        }
-        if (fk_cols.size() < 2) {
-            throw std::runtime_error("Transaction::unlink: junction table requires at least 2 non-auto-increment columns");
+            if (candidates.size() >= 2) {
+                p_col = candidates[0];
+                c_col = candidates[1];
+            } else {
+                std::vector<std::string> fk_cols;
+                for (const auto& col : schema.columns()) {
+                    if (!col.is_auto_increment) {
+                        fk_cols.push_back(col.column_name);
+                    }
+                }
+                if (fk_cols.size() < 2) {
+                    throw std::runtime_error("Transaction::unlink: junction table requires at least 2 non-auto-increment columns");
+                }
+                p_col = fk_cols[0];
+                c_col = fk_cols[1];
+            }
         }
         std::string sql = "DELETE FROM ";
         sql.append(DialectTraits::quote_identifier(dialect_, schema.table_name()));
         sql.append(" WHERE ");
-        sql.append(DialectTraits::quote_identifier(dialect_, fk_cols[0]));
+        sql.append(DialectTraits::quote_identifier(dialect_, p_col));
         sql.append(" = ");
         std::string p1;
         DialectTraits::format_placeholder(dialect_, 1, p1);
         sql.append(p1);
         sql.append(" AND ");
-        sql.append(DialectTraits::quote_identifier(dialect_, fk_cols[1]));
+        sql.append(DialectTraits::quote_identifier(dialect_, c_col));
         sql.append(" = ");
         std::string p2;
         DialectTraits::format_placeholder(dialect_, 2, p2);

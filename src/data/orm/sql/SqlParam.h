@@ -3,6 +3,7 @@
 #include "data/types/Types.h"
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -118,8 +119,14 @@ template <typename T>
     else if constexpr (std::is_integral_v<D> && std::is_signed_v<D>) {
         return SqlParam::integer(static_cast<int64_t>(val));
     }
-    // --- unsigned integers (cast to int64; uint64 loses top bit but fits all practical IDs) ---
+    // --- unsigned integers (values > INT64_MAX stored as text to avoid truncation/sign flip) ---
     else if constexpr (std::is_integral_v<D> && std::is_unsigned_v<D>) {
+        if constexpr (sizeof(D) == 8) {
+            uint64_t u64 = static_cast<uint64_t>(val);
+            if (u64 > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+                return SqlParam::text_owned(std::to_string(u64));
+            }
+        }
         return SqlParam::integer(static_cast<int64_t>(static_cast<uint64_t>(val)));
     }
     // --- floating point ---

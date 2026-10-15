@@ -69,6 +69,15 @@ public:
         return derived();
     }
 
+    template <typename FieldType>
+    [[nodiscard]] std::string column_of(FieldType Entity::* field) const {
+        auto name = schema().resolve_column_name(field);
+        if (name.empty()) {
+            throw std::invalid_argument("WhereClauseBuilder: field is not mapped in TableDef");
+        }
+        return name;
+    }
+
     // --- Standard Binary Predicates: where / and_where / or_where ---
 
     /**
@@ -78,7 +87,7 @@ public:
      */
     template <typename FieldType, typename ValueType>
     Derived& where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, schema().resolve_column_name(field), op, {make_sql_param(val)}, nullptr});
+        conditions_.push_back({Conjunction::And, column_of(field), op, {make_sql_param(val)}, nullptr});
         return derived();
     }
 
@@ -118,7 +127,7 @@ public:
      */
     template <typename FieldType, typename ValueType>
     Derived& or_where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::Or, schema().resolve_column_name(field), op, {make_sql_param(val)}, nullptr});
+        conditions_.push_back({Conjunction::Or, column_of(field), op, {make_sql_param(val)}, nullptr});
         return derived();
     }
 
@@ -142,7 +151,7 @@ public:
     Derived& where_in(FieldType Entity::* field, const Container& values) {
         std::vector<SqlParam> formatted;
         for (const auto& item : values) formatted.push_back(make_sql_param(item));
-        conditions_.push_back({Conjunction::And, schema().resolve_column_name(field), Op::In, std::move(formatted), nullptr});
+        conditions_.push_back({Conjunction::And, column_of(field), Op::In, std::move(formatted), nullptr});
         return derived();
     }
 
@@ -166,7 +175,7 @@ public:
     Derived& or_where_in(FieldType Entity::* field, const Container& values) {
         std::vector<SqlParam> formatted;
         for (const auto& item : values) formatted.push_back(make_sql_param(item));
-        conditions_.push_back({Conjunction::Or, schema().resolve_column_name(field), Op::In, std::move(formatted), nullptr});
+        conditions_.push_back({Conjunction::Or, column_of(field), Op::In, std::move(formatted), nullptr});
         return derived();
     }
 
@@ -191,7 +200,7 @@ public:
     Derived& where_not_in(FieldType Entity::* field, const Container& values) {
         std::vector<SqlParam> formatted;
         for (const auto& item : values) formatted.push_back(make_sql_param(item));
-        conditions_.push_back({Conjunction::And, schema().resolve_column_name(field), Op::NotIn, std::move(formatted), nullptr});
+        conditions_.push_back({Conjunction::And, column_of(field), Op::NotIn, std::move(formatted), nullptr});
         return derived();
     }
 
@@ -216,7 +225,7 @@ public:
     Derived& or_where_not_in(FieldType Entity::* field, const Container& values) {
         std::vector<SqlParam> formatted;
         for (const auto& item : values) formatted.push_back(make_sql_param(item));
-        conditions_.push_back({Conjunction::Or, schema().resolve_column_name(field), Op::NotIn, std::move(formatted), nullptr});
+        conditions_.push_back({Conjunction::Or, column_of(field), Op::NotIn, std::move(formatted), nullptr});
         return derived();
     }
 
@@ -240,7 +249,7 @@ public:
      */
     template <typename FieldType>
     Derived& where_null(FieldType Entity::* field) {
-        conditions_.push_back({Conjunction::And, schema().resolve_column_name(field), Op::IsNull, {}, nullptr});
+        conditions_.push_back({Conjunction::And, column_of(field), Op::IsNull, {}, nullptr});
         return derived();
     }
 
@@ -258,7 +267,7 @@ public:
      */
     template <typename FieldType>
     Derived& or_where_null(FieldType Entity::* field) {
-        conditions_.push_back({Conjunction::Or, schema().resolve_column_name(field), Op::IsNull, {}, nullptr});
+        conditions_.push_back({Conjunction::Or, column_of(field), Op::IsNull, {}, nullptr});
         return derived();
     }
 
@@ -276,7 +285,7 @@ public:
      */
     template <typename FieldType>
     Derived& where_not_null(FieldType Entity::* field) {
-        conditions_.push_back({Conjunction::And, schema().resolve_column_name(field), Op::IsNotNull, {}, nullptr});
+        conditions_.push_back({Conjunction::And, column_of(field), Op::IsNotNull, {}, nullptr});
         return derived();
     }
 
@@ -294,7 +303,7 @@ public:
      */
     template <typename FieldType>
     Derived& or_where_not_null(FieldType Entity::* field) {
-        conditions_.push_back({Conjunction::Or, schema().resolve_column_name(field), Op::IsNotNull, {}, nullptr});
+        conditions_.push_back({Conjunction::Or, column_of(field), Op::IsNotNull, {}, nullptr});
         return derived();
     }
 
@@ -315,7 +324,7 @@ public:
      */
     template <typename FieldType, typename LowType, typename HighType>
     Derived& where_between(FieldType Entity::* field, const LowType& low, const HighType& high) {
-        conditions_.push_back({Conjunction::And, schema().resolve_column_name(field), Op::Between, {make_sql_param(low), make_sql_param(high)}, nullptr});
+        conditions_.push_back({Conjunction::And, column_of(field), Op::Between, {make_sql_param(low), make_sql_param(high)}, nullptr});
         return derived();
     }
 
@@ -337,7 +346,7 @@ public:
      */
     template <typename FieldType, typename LowType, typename HighType>
     Derived& or_where_between(FieldType Entity::* field, const LowType& low, const HighType& high) {
-        conditions_.push_back({Conjunction::Or, schema().resolve_column_name(field), Op::Between, {make_sql_param(low), make_sql_param(high)}, nullptr});
+        conditions_.push_back({Conjunction::Or, column_of(field), Op::Between, {make_sql_param(low), make_sql_param(high)}, nullptr});
         return derived();
     }
 

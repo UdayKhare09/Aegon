@@ -66,7 +66,10 @@ inline T parse_field_value(std::string_view s) {
     } else if constexpr (std::is_enum_v<T>) {
         using Under = std::underlying_type_t<T>;
         Under val{};
-        std::from_chars(s.data(), s.data() + s.size(), val);
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), val);
+        if (ec != std::errc{} || ptr != s.data() + s.size()) {
+            throw std::runtime_error("RowView: failed to parse enum from '" + std::string(s) + "'");
+        }
         return static_cast<T>(val);
     } else if constexpr (std::is_floating_point_v<T>) {
         T val{};
