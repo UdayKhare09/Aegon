@@ -55,6 +55,11 @@ inline T parse_field_value(std::string_view s) {
         T val{};
         std::from_chars(s.data(), s.data() + s.size(), val);
         return val;
+    } else if constexpr (std::is_enum_v<T>) {
+        using Under = std::underlying_type_t<T>;
+        Under val{};
+        std::from_chars(s.data(), s.data() + s.size(), val);
+        return static_cast<T>(val);
     } else if constexpr (std::is_floating_point_v<T>) {
         T val{};
         std::from_chars(s.data(), s.data() + s.size(), val);

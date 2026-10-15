@@ -10,6 +10,11 @@ void compile_condition(const Condition& cond, DatabaseDialect dialect,
         return;
     }
 
+    if ((cond.op == Op::In || cond.op == Op::NotIn) && cond.values.empty()) {
+        sql.append(cond.op == Op::In ? "1 = 0" : "1 = 1");
+        return;
+    }
+
     sql.append(DialectTraits::quote_identifier(dialect, cond.column));
     sql.push_back(' ');
 

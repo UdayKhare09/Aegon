@@ -3,6 +3,7 @@
 #include "Dialect.h"
 #include "Table.h"
 #include "Expression.h"
+#include "WhereClauseBuilder.h"
 #include "QueryResult.h"
 #include "RowView.h"
 #include "SqlParam.h"
@@ -58,10 +59,12 @@ QueryResult compile_aggregate_query_impl(
 );
 
 template <typename Entity>
-class SelectBuilder {
+class SelectBuilder : public WhereClauseBuilder<SelectBuilder<Entity>, Entity> {
+    using Base = WhereClauseBuilder<SelectBuilder<Entity>, Entity>;
+    using Base::conditions_;
+
     TableDef<Entity> schema_;
     std::vector<std::string> projected_columns_;
-    std::vector<Condition> conditions_;
     std::vector<OrderByClause> order_bys_;
     std::vector<std::string> group_bys_;
     std::vector<Condition> havings_;
@@ -354,69 +357,6 @@ public:
 
     SelectBuilder& select_columns(std::vector<std::string> cols) {
         projected_columns_ = std::move(cols);
-        return *this;
-    }
-
-    // Where conditions
-    template <typename FieldType, typename ValueType>
-    SelectBuilder& where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {make_sql_param(val)}, nullptr});
-        return *this;
-    }
-
-    template <typename ValueType>
-    SelectBuilder& where(std::string col, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, std::move(col), op, {make_sql_param(val)}, nullptr});
-        return *this;
-    }
-
-    template <typename FieldType, typename ValueType>
-    SelectBuilder& and_where(FieldType Entity::* field, Op op, const ValueType& val) {
-        return where(field, op, val);
-    }
-
-    template <typename ValueType>
-    SelectBuilder& and_where(std::string col, Op op, const ValueType& val) {
-        return where(std::move(col), op, val);
-    }
-
-    template <typename FieldType, typename ValueType>
-    SelectBuilder& or_where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::Or, schema_.resolve_column_name(field), op, {make_sql_param(val)}, nullptr});
-        return *this;
-    }
-
-    template <typename ValueType>
-    SelectBuilder& or_where(std::string col, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::Or, std::move(col), op, {make_sql_param(val)}, nullptr});
-        return *this;
-    }
-
-    template <typename FieldType, typename Container>
-    SelectBuilder& where_in(FieldType Entity::* field, const Container& values) {
-        std::vector<SqlParam> formatted;
-        for (const auto& item : values) {
-            formatted.push_back(make_sql_param(item));
-        }
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), Op::In, std::move(formatted), nullptr});
-        return *this;
-    }
-
-    template <typename FieldType, typename LowType, typename HighType>
-    SelectBuilder& where_between(FieldType Entity::* field, const LowType& low, const HighType& high) {
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), Op::Between, {make_sql_param(low), make_sql_param(high)}, nullptr});
-        return *this;
-    }
-
-    template <typename FieldType>
-    SelectBuilder& where_null(FieldType Entity::* field) {
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), Op::IsNull, {}, nullptr});
-        return *this;
-    }
-
-    template <typename FieldType>
-    SelectBuilder& where_not_null(FieldType Entity::* field) {
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), Op::IsNotNull, {}, nullptr});
         return *this;
     }
 

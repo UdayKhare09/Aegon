@@ -3,6 +3,7 @@
 #include "Dialect.h"
 #include "Table.h"
 #include "Expression.h"
+#include "WhereClauseBuilder.h"
 #include "QueryResult.h"
 #include "SqlParam.h"
 #include <string>
@@ -11,14 +12,15 @@
 namespace aegon::data::orm::sql {
 
 template <typename Entity>
-class UpdateBuilder {
+class UpdateBuilder : public WhereClauseBuilder<UpdateBuilder<Entity>, Entity> {
     TableDef<Entity> schema_;
     std::vector<std::pair<std::string, SqlParam>> updates_;
-    std::vector<Condition> conditions_;
 
 public:
     UpdateBuilder() : schema_(Entity::schema()) {}
     explicit UpdateBuilder(TableDef<Entity> schema) : schema_(std::move(schema)) {}
+
+    [[nodiscard]] const TableDef<Entity>& schema() const noexcept { return schema_; }
 
     template <typename FieldType, typename ValueType>
     UpdateBuilder& set(FieldType Entity::* field, const ValueType& val) {
@@ -38,28 +40,6 @@ public:
             updates_.emplace_back(std::move(col), std::move(val));
         }
         return *this;
-    }
-
-    template <typename FieldType, typename ValueType>
-    UpdateBuilder& where(FieldType Entity::* field, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, schema_.resolve_column_name(field), op, {make_sql_param(val)}});
-        return *this;
-    }
-
-    template <typename ValueType>
-    UpdateBuilder& where(std::string col, Op op, const ValueType& val) {
-        conditions_.push_back({Conjunction::And, std::move(col), op, {make_sql_param(val)}});
-        return *this;
-    }
-
-    template <typename FieldType, typename ValueType>
-    UpdateBuilder& and_where(FieldType Entity::* field, Op op, const ValueType& val) {
-        return where(field, op, val);
-    }
-
-    template <typename ValueType>
-    UpdateBuilder& and_where(std::string col, Op op, const ValueType& val) {
-        return where(std::move(col), op, val);
     }
 
     [[nodiscard]] QueryResult to_sql(DatabaseDialect dialect) const {
@@ -87,23 +67,9 @@ public:
             result.params.push_back(updates_[i].second);
         }
 
-        if (!conditions_.empty()) {
+        if (!this->conditions_.empty()) {
             sql.append(" WHERE ");
-            for (size_t i = 0; i < conditions_.size(); ++i) {
-                const auto& cond = conditions_[i];
-                if (i > 0) {
-                    sql.append(cond.conj == Conjunction::Or ? " OR " : " AND ");
-                }
-
-                sql.append(DialectTraits::quote_identifier(dialect, cond.column));
-                sql.push_back(' ');
-                sql.append(op_to_sql(cond.op));
-                sql.push_back(' ');
-                std::string p;
-                DialectTraits::format_placeholder(dialect, param_idx++, p);
-                sql.append(p);
-                result.params.push_back(cond.values[0]);
-            }
+            compile_conditions(this->conditions_, dialect, param_idx, sql, result.params);
         }
 
         sql.push_back(';');

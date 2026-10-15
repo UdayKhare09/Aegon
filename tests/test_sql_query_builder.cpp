@@ -1,4 +1,5 @@
 #include "data/orm/sql/Sql.h"
+#include "data/orm/sql/drivers/MockDriver.h"
 #include <iostream>
 #include <cassert>
 #include <string>
@@ -291,6 +292,103 @@ void test_row_to_entity_auto_hydration() {
     std::cout << "  -> PASS: Bi-directional auto-hydration of pure C++ structs verified.\n";
 }
 
+enum class AccountStatus : int32_t {
+    Pending = 0,
+    Active = 1,
+    Suspended = 2
+};
+
+struct Account {
+    int64_t id{0};
+    std::string name;
+    AccountStatus status{AccountStatus::Pending};
+
+    static auto schema() {
+        return table<Account>("accounts")
+            .id(&Account::id)
+            .column(&Account::name, "name")
+            .column(&Account::status, "status");
+    }
+};
+
+void test_advanced_builder_conditions_and_enums() {
+    std::cout << "[Test 6] Testing Advanced Builder Conditions (where_null, where_in, between), Empty IN clauses, Enum Mapping, and const update_entity...\n";
+
+    // 1. Enum TypeMapper and make_sql_param
+    static_assert(HasTypeMapper<AccountStatus>);
+    TEST_CHECK(TypeMapper<AccountStatus>::column_type(DatabaseDialect::PostgreSQL) == "INTEGER");
+    TEST_CHECK(TypeMapper<AccountStatus>::column_type(DatabaseDialect::SQLite) == "INTEGER");
+
+    SqlParam p_active = make_sql_param(AccountStatus::Active);
+    TEST_CHECK(p_active.kind == SqlParam::Kind::Int64);
+    TEST_CHECK(p_active.i64 == 1);
+
+    // 2. Row hydration with enums
+    DriverRowView r;
+    r.add_value("42");
+    r.add_value("Acme Corp");
+    r.add_value("2"); // Suspended
+    auto acc = from<Account>().map_row(r);
+    TEST_CHECK(acc.id == 42);
+    TEST_CHECK(acc.name == "Acme Corp");
+    TEST_CHECK(acc.status == AccountStatus::Suspended);
+
+    // 3. UpdateBuilder where_null, where_in, where_between, or_where
+    auto up = update<Account>()
+        .set(&Account::status, AccountStatus::Active)
+        .where_null(&Account::name)
+        .or_where_in(&Account::status, std::vector{AccountStatus::Pending, AccountStatus::Suspended})
+        .where_between(&Account::id, 10, 100)
+        .to_sql(DatabaseDialect::PostgreSQL);
+
+    std::cout << "  Update with null/in/between SQL: " << up.sql << "\n";
+    TEST_CHECK(up.sql.find("\"name\" IS NULL") != std::string::npos);
+    TEST_CHECK(up.sql.find("OR \"status\" IN ($2, $3)") != std::string::npos);
+    TEST_CHECK(up.sql.find("AND \"id\" BETWEEN $4 AND $5") != std::string::npos);
+    TEST_CHECK(up.params.size() == 5); // SET status($1), IN $2, IN $3, BETWEEN $4, BETWEEN $5
+
+    // 4. DeleteBuilder where_null, where_in, where_between, or_where
+    auto del = delete_from<Account>()
+        .where_null(&Account::name)
+        .or_where_between(&Account::id, 1, 10)
+        .to_sql(DatabaseDialect::PostgreSQL);
+
+    std::cout << "  Delete with null/between SQL: " << del.sql << "\n";
+    TEST_CHECK(del.sql.find("\"name\" IS NULL") != std::string::npos);
+    TEST_CHECK(del.sql.find("OR \"id\" BETWEEN $1 AND $2") != std::string::npos);
+    TEST_CHECK(del.params.size() == 2);
+
+    // 5. Empty where_in -> 1 = 0, empty where_not_in -> 1 = 1
+    auto q_empty_in = from<Account>().where_in(&Account::id, std::vector<int>{}).to_sql(DatabaseDialect::PostgreSQL);
+    std::cout << "  Empty IN SQL: " << q_empty_in.sql << "\n";
+    TEST_CHECK(q_empty_in.sql.find("1 = 0") != std::string::npos);
+    TEST_CHECK(q_empty_in.params.empty());
+
+    auto q_empty_not_in = from<Account>().where_not_in(&Account::id, std::vector<int>{}).to_sql(DatabaseDialect::PostgreSQL);
+    std::cout << "  Empty NOT IN SQL: " << q_empty_not_in.sql << "\n";
+    TEST_CHECK(q_empty_not_in.sql.find("1 = 1") != std::string::npos);
+    TEST_CHECK(q_empty_not_in.params.empty());
+
+    // 6. Transaction::update_entity with const Entity&
+    drivers::MockConnection mock(DatabaseDialect::PostgreSQL);
+    Transaction tx(mock);
+    const Account c_acc{.id = 99, .name = "ConstUser", .status = AccountStatus::Active};
+    auto t = tx.update_entity(c_acc);
+    t.resume();
+    size_t affected = t.result();
+    TEST_CHECK(affected == 1);
+    TEST_CHECK(!mock.executed_sqls_.empty());
+    TEST_CHECK(mock.executed_sqls_[0].find("UPDATE \"accounts\" SET") != std::string::npos);
+    TEST_CHECK(mock.executed_sqls_[0].find("WHERE \"id\" = $3") != std::string::npos);
+
+    // 7. DriverRowView owner retention
+    auto shared_owner = std::make_shared<int>(777);
+    DriverRowView shared_row(shared_owner, nullptr, 0, 0, nullptr, nullptr);
+    TEST_CHECK(shared_row.owner() == shared_owner);
+
+    std::cout << "  -> PASS: Advanced builder conditions, enums, empty IN clauses, and const update_entity verified.\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "  AEGON C++26 SQL QUERY BUILDER & AUTO-MAPPING TESTS   \n";
@@ -301,6 +399,7 @@ int main() {
     test_insert_builder_and_auto_mapping();
     test_update_and_delete_builders();
     test_row_to_entity_auto_hydration();
+    test_advanced_builder_conditions_and_enums();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL SQL QUERY BUILDER TESTS PASSED! <<<         \n";

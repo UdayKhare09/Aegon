@@ -22,6 +22,21 @@
 
 namespace aegon::data::orm::sql {
 
+namespace detail {
+template <typename T>
+struct task_value {
+    using type = T;
+};
+
+template <typename T>
+struct task_value<core::Task<T>> {
+    using type = T;
+};
+
+template <typename T>
+using task_value_t = typename task_value<T>::type;
+} // namespace detail
+
 class SqlDatabaseClient {
     PerCoreConnectionPool& primary_pool_;
     std::vector<std::reference_wrapper<PerCoreConnectionPool>> replica_pools_;
@@ -64,6 +79,36 @@ public:
         co_await aegon::data::orm::sql::flush_deferred_cache(*cache_, ops);
     }
 
+    // Generalized execution wrappers for primary pool (with deferred cache) and read pool
+    template <typename Action>
+    auto execute_with_tx(Action&& action) -> core::Task<detail::task_value_t<std::invoke_result_t<Action, Transaction&>>> {
+        using R = detail::task_value_t<std::invoke_result_t<Action, Transaction&>>;
+        auto guard = primary_pool_.acquire();
+        Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
+        if constexpr (std::is_void_v<R>) {
+            co_await action(tx);
+            co_await flush_deferred_cache(deferred);
+        } else {
+            R res = co_await action(tx);
+            co_await flush_deferred_cache(deferred);
+            co_return res;
+        }
+    }
+
+    template <typename Action>
+    auto execute_with_read_tx(Action&& action) -> core::Task<detail::task_value_t<std::invoke_result_t<Action, Transaction&>>> {
+        using R = detail::task_value_t<std::invoke_result_t<Action, Transaction&>>;
+        auto guard = read_pool().acquire();
+        Transaction tx(*guard);
+        if constexpr (std::is_void_v<R>) {
+            co_await action(tx);
+        } else {
+            co_return co_await action(tx);
+        }
+    }
+
     // Transaction & Unit of Work Lifecycle (always on primary pool)
     template <typename Func>
     core::Task<void> transaction(Func&& block) {
@@ -101,55 +146,27 @@ public:
             co_await insert_get_id(entity);
             co_return;
         }
-
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        co_await tx.insert(entity);
-        co_await flush_deferred_cache(deferred);
+        co_await execute_with_tx([&](Transaction& tx) { return tx.insert(entity); });
     }
 
     template <typename Entity>
     core::Task<void> insert(const Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        co_await tx.insert(entity);
-        co_await flush_deferred_cache(deferred);
+        co_await execute_with_tx([&](Transaction& tx) { return tx.insert(entity); });
     }
 
     template <typename Entity>
     core::Task<int64_t> insert_get_id(Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        int64_t id = co_await tx.insert_get_id(entity);
-        co_await flush_deferred_cache(deferred);
-        co_return id;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.insert_get_id(entity); });
     }
 
     template <typename Entity>
     core::Task<int64_t> insert_get_id(const Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        int64_t id = co_await tx.insert_get_id(entity);
-        co_await flush_deferred_cache(deferred);
-        co_return id;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.insert_get_id(entity); });
     }
 
     template <typename Entity>
     core::Task<void> insert_all(std::span<Entity> entities) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        co_await tx.insert_all(entities);
-        co_await flush_deferred_cache(deferred);
+        co_await execute_with_tx([&](Transaction& tx) { return tx.insert_all(entities); });
     }
 
     template <typename Entity>
@@ -161,24 +178,12 @@ public:
 
     template <typename Entity>
     core::Task<size_t> update_entity(Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        size_t n = co_await tx.update_entity(entity);
-        co_await flush_deferred_cache(deferred);
-        co_return n;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.update_entity(entity); });
     }
 
     template <typename Entity>
     core::Task<size_t> update_entity(const Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        size_t n = co_await tx.update_entity(entity);
-        co_await flush_deferred_cache(deferred);
-        co_return n;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.update_entity(entity); });
     }
 
     template <typename Entity, typename ID>
@@ -232,14 +237,7 @@ public:
         Transaction tx(*guard);
         auto opt_entity = co_await tx.find_by_unique(field, val);
         if (opt_entity && cache_ && schema.is_cached()) {
-            auto vals = schema.extract_values(*opt_entity, false);
-            std::string pk;
-            for (const auto& [c, v] : vals) {
-                if (c == schema.primary_key_name()) {
-                    pk = v.to_debug_string();
-                    break;
-                }
-            }
+            std::string pk = schema.get_primary_key(*opt_entity);
             if (!pk.empty()) {
                 std::string id_key = format_cache_id_key(schema.table_name(), pk);
                 co_await cache_->set(id_key, schema.serialize_entity_json(*opt_entity), schema.cache_config().ttl);
@@ -252,13 +250,7 @@ public:
 
     template <typename Entity, typename ID>
     core::Task<bool> delete_by_id(const ID& id) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        bool ok = co_await tx.delete_by_id<Entity>(id);
-        co_await flush_deferred_cache(deferred);
-        co_return ok;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.template delete_by_id<Entity>(id); });
     }
 
     template <typename Entity>
@@ -377,14 +369,7 @@ public:
             std::string ids_str;
             auto ttl = builder.cache_ttl().value_or(std::chrono::seconds(300));
             for (size_t i = 0; i < entities.size(); ++i) {
-                auto vals = schema.extract_values(entities[i], false);
-                std::string pk;
-                for (const auto& [col, val] : vals) {
-                    if (col == schema.primary_key_name()) {
-                        pk = val.to_debug_string();
-                        break;
-                    }
-                }
+                std::string pk = schema.get_primary_key(entities[i]);
                 if (!pk.empty()) {
                     if (i > 0) ids_str.push_back(',');
                     ids_str.append(pk);
@@ -400,9 +385,7 @@ public:
 
     template <typename Entity>
     core::Task<void> fetch_into(const SelectBuilder<Entity>& builder, std::vector<Entity>& out) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_await tx.fetch_into(builder, out);
+        co_await execute_with_read_tx([&](Transaction& tx) { return tx.fetch_into(builder, out); });
     }
 
     template <typename Entity>
@@ -418,63 +401,45 @@ public:
 
     template <typename Entity>
     core::Task<uint64_t> count(const SelectBuilder<Entity>& builder) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.count(builder);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.count(builder); });
     }
 
     template <typename Entity, typename FieldType>
     core::Task<std::optional<unwrapped_type_t<FieldType>>> sum(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.sum(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.sum(builder, field); });
     }
 
     template <typename ResultType, typename Entity, typename FieldType>
     core::Task<std::optional<ResultType>> sum(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.template sum<ResultType>(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.template sum<ResultType>(builder, field); });
     }
 
     template <typename Entity, typename FieldType>
     core::Task<std::optional<double>> avg(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.avg(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.avg(builder, field); });
     }
 
     template <typename Entity, typename FieldType>
     core::Task<std::optional<unwrapped_type_t<FieldType>>> min(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.min(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.min(builder, field); });
     }
 
     template <typename Entity, typename FieldType>
     core::Task<std::optional<unwrapped_type_t<FieldType>>> max(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.max(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.max(builder, field); });
     }
 
     template <typename Entity>
     core::Task<Page<Entity>> paginate(SelectBuilder<Entity> builder, size_t page = 1, size_t per_page = 20) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.paginate(std::move(builder), page, per_page);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.paginate(std::move(builder), page, per_page); });
     }
 
     core::Task<size_t> execute(const QueryResult& query) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.execute(query);
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.execute(query); });
     }
 
     core::Task<size_t> execute(std::string_view sql, std::span<const SqlParam> params = {}) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.execute(sql, params);
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.execute(sql, params); });
     }
 
     /**
@@ -512,16 +477,12 @@ public:
 
     template <typename JunctionEntity, typename ParentID, typename ChildID>
     core::Task<void> link(const ParentID& parent_id, const ChildID& child_id) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        co_await tx.template link<JunctionEntity>(parent_id, child_id);
+        co_await execute_with_tx([&](Transaction& tx) { return tx.template link<JunctionEntity>(parent_id, child_id); });
     }
 
     template <typename JunctionEntity, typename ParentID, typename ChildID>
     core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.template unlink<JunctionEntity>(parent_id, child_id);
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.template unlink<JunctionEntity>(parent_id, child_id); });
     }
 };
 

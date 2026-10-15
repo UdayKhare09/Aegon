@@ -8,6 +8,7 @@
 #include "SchemaGenerator.h"
 #include "RowView.h"
 #include "Expression.h"
+#include "WhereClauseBuilder.h"
 #include "QueryResult.h"
 #include "SelectBuilder.h"
 #include "InsertBuilder.h"

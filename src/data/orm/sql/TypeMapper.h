@@ -276,6 +276,19 @@ struct TypeMapper<types::Hash256> {
 };
 
 // -------------------------------------------------------------
+// Enum Specialization (maps to underlying integral type)
+// -------------------------------------------------------------
+
+template <typename T>
+    requires (std::is_enum_v<T>)
+struct TypeMapper<T> {
+    static constexpr bool is_nullable = false;
+    static std::string column_type(DatabaseDialect d, size_t length = 0) {
+        return TypeMapper<std::underlying_type_t<T>>::column_type(d, length);
+    }
+};
+
+// -------------------------------------------------------------
 // std::optional<T> Specialization (Nullable)
 // -------------------------------------------------------------
 

@@ -83,18 +83,7 @@ public:
         }
 
         if (schema.cache_config().by_id) {
-            std::string pk_val;
-            if (new_id > 0) {
-                pk_val = std::to_string(new_id);
-            } else {
-                auto vals = schema.extract_values(entity, false);
-                for (const auto& [col, val] : vals) {
-                    if (col == schema.primary_key_name() && !val.is_null()) {
-                        pk_val = val.to_debug_string();
-                        break;
-                    }
-                }
-            }
+            std::string pk_val = (new_id > 0) ? std::to_string(new_id) : schema.get_primary_key(entity);
             if (!pk_val.empty()) {
                 std::string id_key = format_cache_id_key(schema.table_name(), pk_val);
                 deferred_cache_ops_->push_back({DeferredCacheOpType::Set, std::move(id_key), schema.serialize_entity_json(entity), schema.cache_config().ttl});
@@ -108,15 +97,7 @@ public:
         auto schema = Entity::schema();
         if (!schema.is_cached()) return;
 
-        std::string pk_str;
-        auto vals = schema.extract_values(entity, false);
-        for (const auto& [col, val] : vals) {
-            if (col == schema.primary_key_name()) {
-                pk_str = val.to_debug_string();
-                break;
-            }
-        }
-
+        std::string pk_str = schema.get_primary_key(entity);
         if (!pk_str.empty()) {
             std::string id_key = format_cache_id_key(schema.table_name(), pk_str);
             if (schema.cache_config().mutation_sync == MutationSync::UpdateOnWrite) {
@@ -137,6 +118,7 @@ public:
         } else if (schema.cache_config().invalidation == InvalidationMode::StrictEpoch) {
             deferred_cache_ops_->push_back({DeferredCacheOpType::Incr, format_cache_epoch_key(schema.table_name()), {}, {}});
         } else if (schema.cache_config().invalidation == InvalidationMode::PredicateAware) {
+            auto vals = schema.extract_values(entity, false);
             for (const auto& [col, val] : vals) {
                 if (!val.is_null()) {
                     std::string val_str = val.to_debug_string();
@@ -231,18 +213,10 @@ public:
     }
 
     template <typename Entity>
-    core::Task<size_t> update_entity(Entity& entity) {
+    core::Task<size_t> update_entity_impl(Entity& entity, bool update_version_on_obj) {
         auto schema = Entity::schema();
         const auto& pk_name = schema.primary_key_name();
-        auto extracted = schema.extract_values(entity, false);
-
-        std::string pk_val;
-        for (const auto& [col, val] : extracted) {
-            if (col == pk_name) {
-                pk_val = val.to_debug_string();
-                break;
-            }
-        }
+        std::string pk_val = schema.get_primary_key(entity);
 
         auto builder = update<Entity>().set_entity(entity).where(pk_name, Op::Eq, pk_val);
         int64_t curr_ver = 0;
@@ -260,7 +234,9 @@ public:
             if (n == 0) {
                 throw OptimisticLockException("Optimistic lock failure: entity was modified concurrently");
             }
-            schema.set_version(entity, next_ver);
+            if (update_version_on_obj) {
+                schema.set_version(entity, next_ver);
+            }
         }
         if (n > 0) {
             record_update_cache(entity);
@@ -269,41 +245,13 @@ public:
     }
 
     template <typename Entity>
+    core::Task<size_t> update_entity(Entity& entity) {
+        co_return co_await update_entity_impl(entity, true);
+    }
+
+    template <typename Entity>
     core::Task<size_t> update_entity(const Entity& entity) {
-        auto schema = Entity::schema();
-        const auto& pk_name = schema.primary_key_name();
-        auto extracted = schema.extract_values(entity, false);
-
-        std::string pk_val;
-        for (const auto& [col, val] : extracted) {
-            if (col == pk_name) {
-                pk_val = val;
-                break;
-            }
-        }
-
-        auto builder = update<Entity>().set_entity(entity).where(pk_name, Op::Eq, pk_val);
-        int64_t curr_ver = 0;
-        int64_t next_ver = 0;
-        if (schema.has_version()) {
-            curr_ver = schema.get_version(entity);
-            next_ver = curr_ver + 1;
-            builder.set(schema.version_column(), next_ver);
-            builder.where(schema.version_column(), Op::Eq, curr_ver);
-        }
-
-        auto query = builder.to_sql(dialect_);
-        size_t n = co_await conn_.execute(query.sql, query.params);
-        if (schema.has_version()) {
-            if (n == 0) {
-                throw OptimisticLockException("Optimistic lock failure: entity was modified concurrently");
-            }
-            schema.set_version(const_cast<Entity&>(entity), next_ver);
-        }
-        if (n > 0) {
-            record_update_cache(entity);
-        }
-        co_return n;
+        co_return co_await update_entity_impl(const_cast<Entity&>(entity), true);
     }
 
     template <typename Entity, typename ID>
@@ -469,12 +417,21 @@ public:
     template <typename JunctionEntity, typename ParentID, typename ChildID>
     core::Task<void> link(const ParentID& parent_id, const ChildID& child_id) {
         auto schema = JunctionEntity::schema();
+        std::vector<std::string> fk_cols;
+        for (const auto& col : schema.columns()) {
+            if (!col.is_auto_increment) {
+                fk_cols.push_back(col.column_name);
+            }
+        }
+        if (fk_cols.size() < 2) {
+            throw std::runtime_error("Transaction::link: junction table requires at least 2 non-auto-increment columns");
+        }
         std::string sql = "INSERT INTO ";
         sql.append(DialectTraits::quote_identifier(dialect_, schema.table_name()));
         sql.append(" (");
-        sql.append(DialectTraits::quote_identifier(dialect_, schema.columns()[0].column_name));
+        sql.append(DialectTraits::quote_identifier(dialect_, fk_cols[0]));
         sql.append(", ");
-        sql.append(DialectTraits::quote_identifier(dialect_, schema.columns()[1].column_name));
+        sql.append(DialectTraits::quote_identifier(dialect_, fk_cols[1]));
         sql.append(") VALUES (");
         std::string p1, p2;
         DialectTraits::format_placeholder(dialect_, 1, p1);
@@ -490,16 +447,25 @@ public:
     template <typename JunctionEntity, typename ParentID, typename ChildID>
     core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id) {
         auto schema = JunctionEntity::schema();
+        std::vector<std::string> fk_cols;
+        for (const auto& col : schema.columns()) {
+            if (!col.is_auto_increment) {
+                fk_cols.push_back(col.column_name);
+            }
+        }
+        if (fk_cols.size() < 2) {
+            throw std::runtime_error("Transaction::unlink: junction table requires at least 2 non-auto-increment columns");
+        }
         std::string sql = "DELETE FROM ";
         sql.append(DialectTraits::quote_identifier(dialect_, schema.table_name()));
         sql.append(" WHERE ");
-        sql.append(DialectTraits::quote_identifier(dialect_, schema.columns()[0].column_name));
+        sql.append(DialectTraits::quote_identifier(dialect_, fk_cols[0]));
         sql.append(" = ");
         std::string p1;
         DialectTraits::format_placeholder(dialect_, 1, p1);
         sql.append(p1);
         sql.append(" AND ");
-        sql.append(DialectTraits::quote_identifier(dialect_, schema.columns()[1].column_name));
+        sql.append(DialectTraits::quote_identifier(dialect_, fk_cols[1]));
         sql.append(" = ");
         std::string p2;
         DialectTraits::format_placeholder(dialect_, 2, p2);

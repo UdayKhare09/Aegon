@@ -271,13 +271,7 @@ public:
         if (!remover_) throw std::runtime_error("HasMany: no remover mutator configured (is this a 1:N relation?)");
         std::string id_str;
         if constexpr (requires { T::schema(); }) {
-            auto s = T::schema();
-            for (const auto& [col, val] : s.extract_values(item, false)) {
-                if (col == s.primary_key_name()) {
-                    id_str = val.to_debug_string();
-                    break;
-                }
-            }
+            id_str = T::schema().get_primary_key(item);
         }
         co_return co_await remover_(conn, owner_key_, id_str, data_);
     }
@@ -311,13 +305,7 @@ public:
         if (!detacher_) throw std::runtime_error("HasMany: no detacher mutator configured (is this an N:M relation?)");
         std::string id_str;
         if constexpr (requires { T::schema(); }) {
-            auto s = T::schema();
-            for (const auto& [col, val] : s.extract_values(item, false)) {
-                if (col == s.primary_key_name()) {
-                    id_str = val.to_debug_string();
-                    break;
-                }
-            }
+            id_str = T::schema().get_primary_key(item);
         }
         co_return co_await detacher_(conn, owner_key_, id_str, data_);
     }

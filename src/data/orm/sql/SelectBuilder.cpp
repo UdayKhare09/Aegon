@@ -47,12 +47,7 @@ QueryResult compile_select_query_impl(
 
     if (!havings.empty()) {
         sql.append(" HAVING ");
-        for (size_t i = 0; i < havings.size(); ++i) {
-            if (i > 0) {
-                sql.append(havings[i].conj == Conjunction::Or ? " OR " : " AND ");
-            }
-            compile_condition(havings[i], dialect, param_idx, sql, result.params);
-        }
+        compile_conditions(havings, dialect, param_idx, sql, result.params);
     }
 
     if (!order_bys.empty()) {
@@ -133,6 +128,7 @@ QueryResult compile_aggregate_query_impl(
     std::string& sql = result.sql;
     sql.reserve(128);
 
+    sql.append("SELECT ");
     sql.append(agg_func);
     sql.push_back('(');
     if (col_expr == "*") {
@@ -160,16 +156,10 @@ QueryResult compile_aggregate_query_impl(
 
     if (!havings.empty()) {
         sql.append(" HAVING ");
-        for (size_t i = 0; i < havings.size(); ++i) {
-            if (i > 0) sql.append(havings[i].conj == Conjunction::Or ? " OR " : " AND ");
-            compile_condition(havings[i], dialect, param_idx, sql, result.params);
-        }
+        compile_conditions(havings, dialect, param_idx, sql, result.params);
     }
 
     sql.push_back(';');
-
-    // Prepend SELECT
-    result.sql = "SELECT " + result.sql;
     return result;
 }
 

@@ -85,8 +85,12 @@ template <typename T>
 [[nodiscard]] inline SqlParam make_sql_param(const T& val) {
     using D = std::decay_t<T>;
 
+    // --- SqlParam passthrough ---
+    if constexpr (std::is_same_v<D, SqlParam>) {
+        return val;
+    }
     // --- std::optional ---
-    if constexpr (requires { val.has_value(); }) {
+    else if constexpr (requires { val.has_value(); }) {
         if (!val.has_value()) return SqlParam::null();
         return make_sql_param(*val);
     }
@@ -97,6 +101,10 @@ template <typename T>
     // --- bool ---
     else if constexpr (std::is_same_v<D, bool>) {
         return SqlParam::boolean(val);
+    }
+    // --- enum types ---
+    else if constexpr (std::is_enum_v<D>) {
+        return make_sql_param(static_cast<std::underlying_type_t<D>>(val));
     }
     // --- signed integers ---
     else if constexpr (std::is_integral_v<D> && std::is_signed_v<D>) {

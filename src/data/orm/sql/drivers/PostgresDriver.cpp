@@ -40,8 +40,14 @@ struct PgParamArrays {
                     break;
 
                 case SqlParam::Kind::Text:
-                    paramValues[i]  = p.text_view.data();
-                    paramLengths[i] = static_cast<int>(p.text_view.size());
+                    if (p.owns_storage) {
+                        paramValues[i]  = p.storage.c_str();
+                        paramLengths[i] = static_cast<int>(p.storage.size());
+                    } else {
+                        text_bufs[i]    = std::string(p.text_view);
+                        paramValues[i]  = text_bufs[i].c_str();
+                        paramLengths[i] = static_cast<int>(text_bufs[i].size());
+                    }
                     break;
 
                 case SqlParam::Kind::Int64:
@@ -358,7 +364,7 @@ core::Task<std::vector<DriverRowView>> PostgresConnection::query(std::string_vie
     rows.reserve(rows_count);
 
     for (int r = 0; r < rows_count; ++r) {
-        rows.emplace_back(r == 0 ? shared_res : nullptr, res, r, cols_count, &pg_raw_getter, &pg_is_null);
+        rows.emplace_back(shared_res, res, r, cols_count, &pg_raw_getter, &pg_is_null);
     }
 
     co_return rows;
