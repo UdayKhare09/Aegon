@@ -4,27 +4,6 @@ Aegon is independently evaluated and verified on [HttpArena](https://http-arena.
 
 HttpArena executes automated, isolated, multi-iteration workloads across standardized suites on dedicated bare-metal hardware. Aegon ranks **#1 Worldwide Overall** among standard web frameworks across all 4 major protocol suites (HTTP/1.1, HTTP/2, WebSocket, and HTTP/3) combined.
 
----
-
-## 🏆 Live Leaderboard Badges
-
-<p align="center">
-  <a href="https://http-arena.com/#type=emerging,experimental,flagship&tuned=0" target="_blank" rel="noopener noreferrer">
-    <img src="https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h1.json" alt="HTTP/1.1 #1" />
-  </a>
-  <a href="https://http-arena.com/#scope=h2&type=emerging,experimental,flagship&tuned=0" target="_blank" rel="noopener noreferrer">
-    <img src="https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h2.json" alt="HTTP/2 #1" />
-  </a>
-  <a href="https://http-arena.com/#scope=ws&type=emerging,experimental,flagship&tuned=0" target="_blank" rel="noopener noreferrer">
-    <img src="https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/ws.json" alt="WebSocket #1" />
-  </a>
-  <a href="https://http-arena.com/#scope=h3&type=emerging,experimental,flagship&tuned=0" target="_blank" rel="noopener noreferrer">
-    <img src="https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h3.json" alt="HTTP/3 #2" />
-  </a>
-</p>
-
----
-
 ## 📊 Official Protocol Standings
 
 HttpArena tests frameworks under identical conditions on bare metal (**AMD Ryzen Threadripper PRO 3995WX 64-Core / 128-Thread processor** with physical CPU pinning, kernel optimization, and dedicated 10GbE network interfaces).
