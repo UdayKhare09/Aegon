@@ -153,30 +153,17 @@ target_link_libraries(aegon_http PUBLIC
     crypto
 )
 
-# 7. Cloud-Native API Gateway & Proxy (aegon_gateway)
-add_library(aegon_gateway
-    src/gateway/UpstreamNode.cpp
-    src/gateway/LoadBalancer.cpp
-    src/gateway/CircuitBreaker.cpp
-    src/gateway/UpstreamCluster.cpp
-    src/gateway/ProxyHandler.cpp
-)
-target_link_libraries(aegon_gateway PUBLIC
-    aegon_http
-    aegon_core
-)
-
 # ==============================================================================
 # Include Directories, Aliases & Export Names
 # ==============================================================================
-set(AEGON_MODULES log core config redis memory orm http gateway)
+set(AEGON_MODULES log core config redis memory orm http)
 
 foreach(mod ${AEGON_MODULES})
     set_target_properties(aegon_${mod} PROPERTIES EXPORT_NAME ${mod})
     add_library(Aegon::${mod} ALIAS aegon_${mod})
 endforeach()
 
-foreach(tgt aegon_log aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http aegon_gateway)
+foreach(tgt aegon_log aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http)
     target_include_directories(${tgt} PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -192,7 +179,7 @@ target_include_directories(aegon_orm PUBLIC
 # Installation & Package Configuration
 # ==============================================================================
 install(
-    TARGETS aegon_log aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http aegon_gateway
+    TARGETS aegon_log aegon_core aegon_config aegon_redis aegon_memory aegon_orm aegon_http
     EXPORT AegonTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -299,7 +286,6 @@ aegon_add_test(http_client)
 aegon_add_test(service_registry)
 aegon_add_test(websocket)
 aegon_add_test(forms)
-aegon_add_test(gateway aegon_gateway aegon_http aegon_core)
 aegon_add_test(config aegon_config)
 
 # Data, Redis & ORM

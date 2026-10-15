@@ -155,7 +155,6 @@ Topics covered:
 - [C++26 Tasks & io_uring Kernel Engine](docs/guide/core/task.md)
 - [Type-Safe SQL Engine & Static ORM](docs/guide/data/sql/schema.md)
 - [Native Async Redis Client](docs/guide/data/redis/client.md)
-- [API Gateway & Reverse Proxy](docs/guide/gateway.md)
 
 ---
 

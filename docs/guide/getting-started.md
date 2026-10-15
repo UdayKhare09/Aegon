@@ -111,7 +111,6 @@ Aegon exports strictly modular targets:
 | `Aegon::redis` | Native async Redis client (RESP3, Sentinel, Cluster, per-core pools, distributed locks, streams). |
 | `Aegon::memory` | Async in-process MemStore — Redis alternative running on its own thread with LRU eviction and TTL sweep. |
 | `Aegon::config` | Layered YAML 1.2 and `.env` configuration builder with `${VAR:default}` expansion. |
-| `Aegon::gateway` | High-performance reverse proxy, dynamic routing, and cluster circuit breakers. |
 
 ---
 
