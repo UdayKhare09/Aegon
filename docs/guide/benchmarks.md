@@ -1,101 +1,121 @@
-# Level-Playing-Field Benchmarks
+# HttpArena Official Benchmarks
 
-Aegon is engineered from the ground up for extreme throughput and deterministic sub-millisecond tail latencies. This document details the official, scientifically isolated benchmark results comparing **Aegon (C++26)** against leading modern frameworks:
-- **Swerver** (Zig `io_uring_native`)
-- **Actix-web** (Rust `tokio` / `epoll` + `mimalloc`)
-- **Drogon** (C++17 Trantor `epoll`)
-- **Fiber** (Go `fasthttp` prefork)
+Aegon is independently evaluated and verified on [HttpArena](https://http-arena.com) — the premier open bare-metal benchmark suite for modern web servers, networking engines, and asynchronous frameworks.
+
+HttpArena executes automated, isolated, multi-iteration workloads across standardized suites on dedicated bare-metal hardware. Aegon ranks **#1 Worldwide Overall** among standard web frameworks across all 4 major protocol suites (HTTP/1.1, HTTP/2, WebSocket, and HTTP/3) combined.
 
 ---
 
-## Methodology & Hardware Isolation
+## 🏆 Live Leaderboard Badges
 
-To ensure 100% reproducibility and eliminate scheduling and cache interference:
-- **Hardware**: AMD Ryzen 5 7600X (6 Zen 4 physical cores / 12 logical threads), 32MB L3 Cache
-- **Operating System**: Linux 6.18.2-zen (x86_64)
-- **Server CPU Isolation**: Physical Cores `0, 1` (`taskset -c 0,1`, 2 worker threads)
-- **Client CPU Isolation**: Physical Cores `2, 3, 4, 5` (`taskset -c 2,3,4,5`, 4 client threads)
-- **Execution Protocol**: 3-second warm-up + **3 consecutive 10-second measurement runs** per workload with cooldown intervals. All reported metrics represent un-cherry-picked arithmetic triplicate averages.
-
----
-
-## 1. Plain HTTP/1.1 Benchmark Results
-
-Tool: `wrk` (4 threads, 100 persistent connections, pipeline depth 1)
-
-### `/plaintext` (TechEmpower Standard 13-Byte Payload)
-| Rank | Framework | Language & Architecture | 3-Run Avg Req/s | Mean Latency | p50 Latency | p99 Latency | Error Rate |
-| :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| 🥇 | **Aegon** | **C++26 (`io_uring` multishot)** | **547,144.84** | **214.09 µs** | **169.33 µs** | **468.67 µs** | **0.00%** |
-| 🥈 | **Swerver** | Zig (`io_uring_native`) | **468,612.69** | 209.88 µs | 198.33 µs | 416.33 µs | 0.00% |
-| 🥉 | **Actix-web** | Rust (`tokio` / `epoll`) | **400,128.26** | 271.05 µs | 239.00 µs | 559.00 µs | 0.00% |
-| 4 | **Drogon** | C++17 (Trantor `epoll`) | **388,383.14** | 255.72 µs | 248.67 µs | 531.00 µs | 0.00% |
-| 5 | **Fiber** | Go (`fasthttp` prefork) | **352,123.01** | 286.28 µs | 284.67 µs | 621.00 µs | 0.00% |
-
-### `/json` (Dynamic UUIDv4 + Timestamp Payload)
-| Rank | Framework | JSON Engine | 3-Run Avg Req/s | Mean Latency | p50 Latency | p99 Latency | Error Rate |
-| :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| 🥇 | **Aegon** | **Glaze (Compile-time reflection)** | **543,849.26** | **206.22 µs** | **172.00 µs** | **1,606.67 µs** | **0.00%** |
-| 🥈 | **Swerver** | `std.json` streaming | **465,714.91** | 213.45 µs | 204.00 µs | 444.33 µs | 0.00% |
-| 🥉 | **Actix-web** | `serde_json` + `mimalloc` | **393,235.00** | 265.14 µs | 248.00 µs | 1,133.33 µs | 0.00% |
-| 4 | **Fiber** | `fastjson` | **320,411.14** | 312.83 µs | 314.00 µs | 664.00 µs | 0.00% |
-| 5 | **Drogon** | `jsoncpp` DOM | **222,119.66** | 448.21 µs | 450.00 µs | 916.67 µs | 0.00% |
-
-### Dynamic Route `/users/42/posts/101` (Path Parameter Extraction)
-| Rank | Framework | Router Architecture | 3-Run Avg Req/s | Mean Latency | p50 Latency | p99 Latency | Error Rate |
-| :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| 🥇 | **Aegon** | **Zero-alloc Radix + `from_chars`** | **544,465.49** | **200.22 µs** | **173.33 µs** | **1,340.67 µs** | **0.00%** |
-| 🥈 | **Swerver** | Swerver Router | **460,992.37** | 214.42 µs | 202.00 µs | 421.33 µs | 0.00% |
-| 🥉 | **Actix-web** | Actix Path extractor | **381,962.28** | 265.66 µs | 255.67 µs | 452.33 µs | 0.00% |
-| 4 | **Fiber** | `fasthttp` Tree Router | **334,278.93** | 298.32 µs | 298.67 µs | 612.67 µs | 0.00% |
-| 5 | **Drogon** | Drogon Dynamic Router | **296,297.79** | 335.46 µs | 326.67 µs | 674.33 µs | 0.00% |
+<p align="center">
+  <a href="https://http-arena.com/#type=emerging,experimental,flagship&tuned=0" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h1.json" alt="HTTP/1.1 #1" />
+  </a>
+  <a href="https://http-arena.com/#scope=h2&type=emerging,experimental,flagship&tuned=0" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h2.json" alt="HTTP/2 #1" />
+  </a>
+  <a href="https://http-arena.com/#scope=ws&type=emerging,experimental,flagship&tuned=0" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/ws.json" alt="WebSocket #1" />
+  </a>
+  <a href="https://http-arena.com/#scope=h3&type=emerging,experimental,flagship&tuned=0" target="_blank" rel="noopener noreferrer">
+    <img src="https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h3.json" alt="HTTP/3 #2" />
+  </a>
+</p>
 
 ---
 
-## 2. HTTP/1.1 TLS (HTTPS) Benchmark Results
+## 📊 Official Protocol Standings
 
-Tool: `wrk` with TLS 1.3 (`ECDSA prime256v1`, 4 threads, 100 persistent HTTPS connections)
+HttpArena tests frameworks under identical conditions on bare metal (**AMD Ryzen Threadripper PRO 3995WX 64-Core / 128-Thread processor** with physical CPU pinning, kernel optimization, and dedicated 10GbE network interfaces).
 
-| Workload | Aegon (C++26) | Swerver (Zig) | Actix-web (Rust, `rustls`) | Fiber (Go) | Drogon (C++) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **`/plaintext`** | **423,902.09 req/s** | 382,901.10 req/s | 349,875.17 req/s | 327,720.40 req/s | 319,510.95 req/s |
-| **`/json`** | **418,027.14 req/s** | 386,190.38 req/s | 336,283.59 req/s | 296,697.13 req/s | 194,054.45 req/s |
-| **`/users/42/posts/101`** | **413,632.71 req/s** | 375,552.83 req/s | 330,479.97 req/s | 307,973.21 req/s | 252,762.95 req/s |
-
----
-
-## 3. HTTP/2 Multiplexing Benchmark Results (RFC 7540)
-
-Tool: `h2load` (100 connections × 10 streams = **1,000 active concurrent multiplexed streams**, HPACK enabled)
-
-| Workload | Aegon (C++26) | Actix-web (Rust, `rustls`) | Swerver (Zig) | Drogon (C++) | Fiber (Go) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **`/plaintext`** | **1,750,028.67 req/s** | 693,620.67 req/s | 475,583.73 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
-| **`/json`** | **1,695,960.00 req/s** | 651,131.33 req/s | 476,690.33 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
-| **`/users/42/posts/101`** | **1,667,803.33 req/s** | 627,524.00 req/s | 466,247.10 req/s | *UNSUPPORTED* | *UNSUPPORTED* |
-
-*Note: Drogon (Trantor) and Fiber (`fasthttp`) do not implement RFC 7540 binary framing; ALPN falls back to HTTP/1.1.*
+| Protocol Suite | Official Rank | Score | Peak Bare-Metal Throughput | Live Benchmark Results |
+| :--- | :---: | :---: | :---: | :---: |
+| **[HTTP/1.1](https://http-arena.com/#type=emerging,experimental,flagship&tuned=0)** | 🥇 **#1** of 84 | **7,227.92** / 8,000 (90.3%) | **27.6M req/s** (Pipelined) <br> **4.0M+ req/s** (Baseline) | [Explore HTTP/1.1 Leaderboard ↗](https://http-arena.com/#type=emerging,experimental,flagship&tuned=0) |
+| **[HTTP/2](https://http-arena.com/#scope=h2&type=emerging,experimental,flagship&tuned=0)** | 🥇 **#1** of 28 | **3,243.47** / 4,000 (81.1%) | **14.4M req/s** (`h2c`) <br> **13.4M req/s** (`h2` TLS) | [Explore HTTP/2 Leaderboard ↗](https://http-arena.com/#scope=h2&type=emerging,experimental,flagship&tuned=0) |
+| **[WebSocket](https://http-arena.com/#scope=ws&type=emerging,experimental,flagship&tuned=0)** | 🥇 **#1** of 31 | **3,000.00** / 3,000 (**100.0%**) | **63.6M msg/s** (Pipelined Echo) | [Explore WebSocket Leaderboard ↗](https://http-arena.com/#scope=ws&type=emerging,experimental,flagship&tuned=0) |
+| **[HTTP/3](https://http-arena.com/#scope=h3&type=emerging,experimental,flagship&tuned=0)** | 🥉 **#3** of 17 | **884.57** / 2,000 (44.2%) | **2.98M req/s** (QUIC / UDP) | [Explore HTTP/3 Leaderboard ↗](https://http-arena.com/#scope=h3&type=emerging,experimental,flagship&tuned=0) |
+| **High Concurrency** | — | — | **2.65M req/s** @ 32,000 concurrent held connections | — |
 
 ---
 
-## 4. HTTP/3 over QUIC Benchmark Results (RFC 9000 / RFC 9114)
+## 🎖️ Official HttpArena Achievements & Medals
 
-Tool: `h2load --h3` (100 connections × 10 streams = **1,000 active concurrent QUIC streams**, UDP datagrams over loopback)
+In HttpArena's automated scoring, medals are awarded to the top three frameworks in each profile and family composite:
 
-| Workload | Aegon (C++26) | Swerver (Zig) | Actix-web (Rust) | Drogon (C++) | Fiber (Go) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **`/plaintext`** | **336,440.73 req/s** | 109,570.60 req/s | *UNSUPPORTED* | *UNSUPPORTED* | *UNSUPPORTED* |
-| **`/json`** | **331,608.03 req/s** | 109,342.50 req/s | *UNSUPPORTED* | *UNSUPPORTED* | *UNSUPPORTED* |
-| **`/users/42/posts/101`** | **326,682.63 req/s** | 108,137.93 req/s | *UNSUPPORTED* | *UNSUPPORTED* | *UNSUPPORTED* |
+### Gold Medals (🥇 Rank #1 Worldwide)
+- **HTTP/1.1 Family Composite**: 🥇 **#1 Overall** (Score: 7,564.9 pts)
+- **HTTP/2 Family Composite**: 🥇 **#1 Overall** (Score: 3,243.5 pts)
+- **WebSocket Family Composite**: 🥇 **#1 Overall** (**3,000.0 / 3,000 pts — 100.0% Perfect Score**)
+- **High Concurrency (`Async Delay`)**: 🥇 **#1 Worldwide** (2.65M req/s @ 32,000 concurrent held connections)
+- **Connection Baseline (`HTTP/1.1`)**: 🥇 **#1 Worldwide** (4.0M+ req/s @ 4,096 connections)
+- **HTTP/2 Baseline (`h2-TLS`)**: 🥇 **#1 Worldwide** (13.4M req/s @ 256 connections)
+- **HTTP/2 Baseline Cleartext (`h2c`)**: 🥇 **#1 Worldwide** (14.4M req/s @ 256 connections)
+- **HTTP/2 JSON API (`h2c`)**: 🥇 **#1 Worldwide** (@ 1,024 connections)
+- **WebSocket Echo (`ws`)**: 🥇 **#1 Worldwide** (@ 512 connections)
+- **WebSocket Echo Pipelined**: 🥇 **#1 Worldwide** (63.6M msg/s @ 512 connections)
+- **WebSocket Echo Short-Lived**: 🥇 **#1 Worldwide** (@ 512 connections)
+- **Workload JSON Comp**: 🥇 **#1 Worldwide** (@ 4,096 connections)
 
-*Note: Actix-web, Drogon, and Fiber lack UDP/QUIC network transport support and are strictly TCP-only.*
+### Silver Medals (🥈 Rank #2 Worldwide)
+- **HTTP/3 Family Composite**: 🥈 **#2 Worldwide**
+- **HTTP/3 Baseline**: 🥈 **#2 Worldwide** (2.98M req/s @ 64 connections)
+- **HTTP/3 Static File Delivery**: 🥈 **#2 Worldwide** (@ 64 connections)
+- **Short-Lived Connections**: 🥈 **#2 Worldwide** (@ 4,096 connections)
+- **8Gbit Bandwidth Saturation**: 🥈 **#2 Worldwide** (@ 512 connections)
+- **Workload JSON over TLS**: 🥈 **#2 Worldwide** (@ 4,096 connections)
+
+### Bronze Medals (🥉 Rank #3 Worldwide)
+- **HTTP/2 Static File Delivery**: 🥉 **#3 Worldwide** (@ 256 connections)
 
 ---
 
-## Reproducing the Benchmarks
+## 🛡️ Wire Specification & RFC Conformance
 
-All benchmark harnesses and server implementations are open-source and located in [`benchmarks/`](https://github.com/UdayKhare09/Aegon/tree/main/benchmarks):
-- `benchmarks/http1_plain/`: Plain HTTP/1.1 suite
-- `benchmarks/http1_tls/`: HTTPS TLS 1.3 suite
-- `benchmarks/http2/`: HTTP/2 stream multiplexing suite
-- `benchmarks/http3/`: HTTP/3 over QUIC suite
+Raw performance is only valuable when accompanied by rigorous protocol correctness and resilience against security vectors. Aegon undergoes continuous testing against the web ecosystem's gold-standard conformance suites:
+
+### Autobahn WebSocket Testsuite (RFC 6455)
+- **Score: 296 / 296 Passed (100% Clean Sweep)**
+- Validates the entire WebSocket specification: frame boundaries, opcode handling, reserved bits, fragmented control frames, UTF-8 code point validation, SWAR / SIMD unmasking correctness, close handshakes, and compression extensions.
+
+### `h2spec` (RFC 9113 / HTTP/2)
+- **Score: 145 Passed, 0 Failed (100% Clean)**
+- Strict verification of binary frame parsers, multiplexed stream state machines, flow control credit windows, HPACK dynamic table compression, `SETTINGS` negotiations, priority tree handling, and `RST_STREAM` resets.
+
+### `Http11Probe` (RFC 9110 / RFC 9112)
+- **Score: 158 / 159 Passed (99.4%)**
+- Exhaustively validates HTTP/1.1 message parsing, CRLF normalization, whitespace handling, header semantics, and full immunity against HTTP Request Smuggling (TE.CL, CL.TE, and dual-header ambiguities).
+
+### `h3spec` (RFC 9000 / RFC 9114 / HTTP/3 & QUIC)
+- **Score: 47 / 49 Passed (100% Core HTTP/3 & QPACK)**
+- Validates QUIC stream multiplexing, datagram encapsulation, HTTP/3 control and data frame state machines, and QPACK dynamic instruction encoding.
+
+---
+
+## 🔬 Hardware Architecture & Why Aegon Leads
+
+Aegon achieves these results through architectural innovations across kernel, CPU, and memory boundaries:
+
+1. **Linux `io_uring` Multishot Primitives**
+   - Zero-syscall request ingest via `IORING_OP_RECV_MULTISHOT` and direct socket registration via `IORING_OP_ACCEPT_DIRECT`.
+   - Kernel-managed buffer rings (`io_uring_buf_ring`) provide zero-copy memory directly from NIC socket receive queues.
+
+2. **C++26 Symmetric-Transfer Coroutines**
+   - Eliminates coroutine call frame heap allocation on hot paths using symmetric transfer (`std::coroutine_handle<>::resume()`), achieving sub-microsecond latency.
+
+3. **Stepped SIMD Vector Acceleration**
+   - 4-tier vector fallback engine (`AVX-512BW/VL` → `AVX2/BMI2` → `SSE4.2` → `Scalar`) for instant case-insensitive header matching, URI parsing, and token extraction.
+   - 5-tier SIMD / SWAR hardware unmasker for WebSocket frame payloads.
+
+4. **Zero-Allocation Protocol Engines**
+   - Contiguous response vector packing for pipelined HTTP/1.1.
+   - Stack-allocated HPACK/QPACK buffer management for HTTP/2 and HTTP/3.
+
+---
+
+## 🔗 Live Leaderboard & Source Code
+
+- **Live Benchmark Results**: [https://http-arena.com](https://http-arena.com)
+- **HttpArena Upstream Suite**: [https://github.com/MDA2AV/HttpArena](https://github.com/MDA2AV/HttpArena)
+- **Aegon Upstream PR**: [HttpArena PR #1491 (Merged)](https://github.com/MDA2AV/HttpArena/pull/1491)
+- **Aegon Source Code**: [https://github.com/UdayKhare09/Aegon](https://github.com/UdayKhare09/Aegon)
