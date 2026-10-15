@@ -283,6 +283,10 @@ template <typename T>
     requires (std::is_enum_v<T>)
 struct TypeMapper<T> {
     static constexpr bool is_nullable = false;
+    /**
+     * @brief Return the SQL type of the enum's underlying integer type.
+     * That integral type must have a TypeMapper specialization; length is forwarded.
+     */
     static std::string column_type(DatabaseDialect d, size_t length = 0) {
         return TypeMapper<std::underlying_type_t<T>>::column_type(d, length);
     }

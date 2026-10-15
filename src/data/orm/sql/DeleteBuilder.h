@@ -21,6 +21,10 @@ public:
 
     [[nodiscard]] const TableDef<Entity>& schema() const noexcept { return schema_; }
 
+    /**
+     * @brief Build DELETE SQL and ordered parameters without executing it.
+     * An empty condition list omits WHERE, targeting every row if executed.
+     */
     [[nodiscard]] QueryResult to_sql(DatabaseDialect dialect) const {
         QueryResult result;
         std::string& sql = result.sql;

@@ -42,6 +42,11 @@ public:
         return *this;
     }
 
+    /**
+     * @brief Build UPDATE SQL with SET parameters followed by WHERE parameters.
+     * Return empty SQL and parameters if no assignments exist. Without conditions,
+     * the statement targets every row if executed; this method does not execute it.
+     */
     [[nodiscard]] QueryResult to_sql(DatabaseDialect dialect) const {
         QueryResult result;
         if (updates_.empty()) {

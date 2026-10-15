@@ -2,6 +2,12 @@
 
 namespace aegon::data::orm::sql {
 
+/**
+ * @brief Build SELECT SQL and parameters in WHERE-then-HAVING order without executing it.
+ * Use select_all_prefix verbatim when projected_columns is empty; otherwise quote
+ * the projected identifiers. limit and offset count rows and are emitted when set,
+ * including zero. Custom condition compiler exceptions propagate.
+ */
 QueryResult compile_select_query_impl(
     DatabaseDialect dialect,
     std::string_view table_name,
@@ -115,6 +121,12 @@ QueryResult compile_count_query_impl(
     return result;
 }
 
+/**
+ * @brief Build a grouped or ungrouped aggregate SELECT and its bound parameters.
+ * agg_func is inserted verbatim; col_expr is quoted as an identifier unless it is *.
+ * WHERE parameters precede HAVING parameters. No query is executed; exceptions
+ * from custom condition compilers propagate.
+ */
 QueryResult compile_aggregate_query_impl(
     DatabaseDialect dialect,
     std::string_view table_name,

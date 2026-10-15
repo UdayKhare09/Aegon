@@ -38,6 +38,10 @@ constexpr std::string_view kPgPlaceholders[] = {
 constexpr size_t kMaxCachedPlaceholders = sizeof(kPgPlaceholders) / sizeof(kPgPlaceholders[0]) - 1;
 }
 
+/**
+ * @brief Append a placeholder to out: $N for PostgreSQL or ? for SQLite.
+ * index_1based is the parameter position; it is ignored for SQLite and not validated.
+ */
 void DialectTraits::format_placeholder(DatabaseDialect d, size_t index_1based, std::string& out) {
     if (d == DatabaseDialect::PostgreSQL) {
         if (index_1based <= kMaxCachedPlaceholders) {

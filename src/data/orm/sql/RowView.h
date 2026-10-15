@@ -43,6 +43,14 @@ public:
     }
 };
 
+/**
+ * @brief Convert a non-null field to T; a string_view result borrows the input.
+ * Numeric and enum parsing accepts a valid prefix and returns zero on invalid
+ * or out-of-range input; enum values are not checked against named enumerators.
+ * Boolean true spellings are 1, true, TRUE, t, and T; all others yield false.
+ * Failed optional-like conversions and unsupported types yield T{}. Exceptions
+ * from type-specific conversions propagate.
+ */
 template <typename T>
 inline T parse_field_value(std::string_view s) {
     if constexpr (std::is_same_v<T, std::string>) {

@@ -81,6 +81,14 @@ struct SqlParam {
 
 }; // struct SqlParam
 
+/**
+ * @brief Convert a value to a SQL parameter, copying an existing SqlParam as-is.
+ * Empty optional-like values, null pointers, and unsupported types become NULL.
+ * Enums use their underlying integer value; unsigned integers are cast to int64_t.
+ * String inputs and converted text or bytes own their storage. Copying an existing
+ * SqlParam preserves its ownership, so borrowed data must remain alive while used.
+ * Exceptions from user-defined to_string conversions propagate.
+ */
 template <typename T>
 [[nodiscard]] inline SqlParam make_sql_param(const T& val) {
     using D = std::decay_t<T>;

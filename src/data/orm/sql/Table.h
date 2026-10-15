@@ -110,6 +110,12 @@ private:
 public:
     explicit TableDef(std::string name) : table_name_(std::move(name)) {}
 
+    /**
+     * @brief Return SELECT for all mapped columns and FROM, without filters or a semicolon.
+     * The returned reference normally belongs to this schema. For dialect indices
+     * outside the cache, it refers to per-thread storage overwritten by the next
+     * such call for this Entity type on the same thread.
+     */
     [[nodiscard]] const std::string& select_all_prefix(DatabaseDialect d) const {
         size_t idx = static_cast<size_t>(d);
         if (idx < cached_select_prefix_.size() && !cached_select_prefix_[idx].empty()) {
@@ -253,6 +259,12 @@ public:
         return false;
     }
 
+    /**
+     * @brief Build a single INSERT with parameters ordered by entity, then schema column.
+     * Empty input returns empty SQL and parameters. Auto-increment columns are
+     * omitted; PostgreSQL and SQLite append RETURNING for the primary key when
+     * any column is auto-incremented. Entities are unchanged and no SQL is executed.
+     */
     QueryResult build_insert_sql(std::span<const Entity> entities, DatabaseDialect dialect) const {
         QueryResult result;
         if (entities.empty()) return result;
@@ -309,6 +321,10 @@ public:
         return result;
     }
 
+    /**
+     * @brief Build a one-row INSERT using the same column and RETURNING rules as the span
+     * overload.
+     */
     QueryResult build_insert_sql(const Entity& entity, DatabaseDialect dialect) const {
         return build_insert_sql(std::span<const Entity>(&entity, 1), dialect);
     }

@@ -61,6 +61,11 @@ public:
         return committed_ || rolled_back_;
     }
 
+    /**
+     * @brief Queue configured insert invalidation and by-ID cache writes without applying them.
+     * Do nothing without a deferred buffer or an enabled entity cache. A positive
+     * new_id overrides the entity's key for the by-ID entry; otherwise use its schema key.
+     */
     template <typename Entity>
     void record_insert_cache(const Entity& entity, int64_t new_id = 0) {
         if (!deferred_cache_ops_) return;
@@ -91,6 +96,11 @@ public:
         }
     }
 
+    /**
+     * @brief Queue configured entity eviction or replacement and query-cache invalidation.
+     * Also evict a configured unique-value key. Do nothing without a deferred buffer
+     * or an enabled entity cache; no cache operations are executed here.
+     */
     template <typename Entity>
     void record_update_cache(const Entity& entity) {
         if (!deferred_cache_ops_) return;
@@ -212,6 +222,14 @@ public:
         }
     }
 
+    /**
+     * @brief Update by primary key and return the affected row count, recording cache work on
+     * success.
+     * A versioned schema matches the current version and writes its increment to SQL.
+     * update_version_on_obj controls only writing that increment back to entity.
+     * @throws OptimisticLockException If a versioned update affects no rows.
+     * Database errors propagate; this method does not begin or finish a transaction.
+     */
     template <typename Entity>
     core::Task<size_t> update_entity_impl(Entity& entity, bool update_version_on_obj) {
         auto schema = Entity::schema();
@@ -244,11 +262,25 @@ public:
         co_return n;
     }
 
+    /**
+     * @brief Update by primary key, increment a configured version, and return affected rows.
+     * The increment is written back even through the const overload; a versioned
+     * entity must be modifiable. Successful updates record configured cache work.
+     * @throws OptimisticLockException If a versioned update affects no rows.
+     * Database errors propagate.
+     */
     template <typename Entity>
     core::Task<size_t> update_entity(Entity& entity) {
         co_return co_await update_entity_impl(entity, true);
     }
 
+    /**
+     * @brief Update by primary key, increment a configured version, and return affected rows.
+     * The increment is written back even through the const overload; a versioned
+     * entity must be modifiable. Successful updates record configured cache work.
+     * @throws OptimisticLockException If a versioned update affects no rows.
+     * Database errors propagate.
+     */
     template <typename Entity>
     core::Task<size_t> update_entity(const Entity& entity) {
         co_return co_await update_entity_impl(const_cast<Entity&>(entity), true);
@@ -414,6 +446,12 @@ public:
         co_return result;
     }
 
+    /**
+     * @brief Insert a junction row using the first two non-auto-increment schema columns.
+     * Bind parent_id to the first eligible column and child_id to the second.
+     * @throws std::runtime_error If fewer than two eligible columns exist.
+     * Database errors propagate; no entity cache operations are recorded.
+     */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
     core::Task<void> link(const ParentID& parent_id, const ChildID& child_id) {
         auto schema = JunctionEntity::schema();
@@ -444,6 +482,13 @@ public:
         co_await conn_.execute(sql, std::array{make_sql_param(parent_id), make_sql_param(child_id)});
     }
 
+    /**
+     * @brief Delete a junction row using the first two non-auto-increment schema columns.
+     * Bind parent_id to the first eligible column and child_id to the second.
+     * Return whether any rows were deleted.
+     * @throws std::runtime_error If fewer than two eligible columns exist.
+     * Database errors propagate; no entity cache operations are recorded.
+     */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
     core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id) {
         auto schema = JunctionEntity::schema();

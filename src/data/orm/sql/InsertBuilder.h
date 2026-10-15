@@ -30,6 +30,11 @@ public:
         return *this;
     }
 
+    /**
+     * @brief Build one INSERT for the queued entities, or an empty result if none exist.
+     * Auto-increment columns are omitted; PostgreSQL and SQLite request the primary
+     * key with RETURNING when such a column exists. No SQL is executed.
+     */
     [[nodiscard]] QueryResult to_sql(DatabaseDialect dialect) const {
         return schema_.build_insert_sql(entities_, dialect);
     }
