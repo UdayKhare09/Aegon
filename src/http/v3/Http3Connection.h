@@ -99,7 +99,7 @@ public:
     /**
      * @brief Process an incoming UDP datagram.
      */
-    core::Task<bool> feed_datagram(std::span<const uint8_t> pkt, const sockaddr_storage& from_addr, socklen_t from_len);
+    core::Task<bool> feed_datagram(std::span<const uint8_t> pkt, const sockaddr_storage& from_addr, socklen_t from_len, bool flush = true);
 
     /**
      * @brief Flush pending outbound QUIC packets over UDP.
