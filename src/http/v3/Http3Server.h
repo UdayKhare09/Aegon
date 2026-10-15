@@ -59,6 +59,10 @@ private:
     core::Task<void> dispatch_datagram(std::span<const uint8_t> pkt,
                                        const sockaddr_storage& from_addr,
                                        socklen_t from_len);
+    core::Task<Http3Connection*> dispatch_datagram_internal(std::span<const uint8_t> pkt,
+                                                            const sockaddr_storage& from_addr,
+                                                            socklen_t from_len,
+                                                            bool flush);
 
     core::EventLoop& loop_;
     uint16_t port_;

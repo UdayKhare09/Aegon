@@ -6,7 +6,18 @@
 #include <cstring>
 #include <iostream>
 #include <cstdarg>
+#include <atomic>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/udp.h>
 #include <openssl/rand.h>
+
+#ifndef UDP_SEGMENT
+#define UDP_SEGMENT 103
+#endif
+#ifndef SOL_UDP
+#define SOL_UDP 17
+#endif
 
 #include "core/simd/SimdString.h"
 
@@ -269,9 +280,11 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
     ngtcp2_settings_default(&qsettings);
     qsettings.initial_ts = get_timestamp_ns();
     qsettings.log_printf = nullptr;
+    qsettings.max_tx_udp_payload_size = 1452;
 
     ngtcp2_transport_params qparams{};
     ngtcp2_transport_params_default(&qparams);
+    qparams.max_udp_payload_size = 1452;
     qparams.initial_max_streams_bidi = 65535;
     qparams.initial_max_streams_uni = 65535;
     qparams.initial_max_stream_data_bidi_remote = 10485760;
@@ -768,38 +781,91 @@ bool Http3Connection::flush_outbound() {
     ngtcp2_path_storage_init(&ps, reinterpret_cast<const ngtcp2_sockaddr*>(&local_addr_), local_addr_len_,
                              reinterpret_cast<const ngtcp2_sockaddr*>(&remote_addr_), remote_addr_len_, nullptr);
 
-    constexpr size_t BATCH_SIZE = 16;
-    alignas(64) uint8_t packet_bufs[BATCH_SIZE][1500];
-    iovec iovs[BATCH_SIZE];
-    mmsghdr msgs[BATCH_SIZE];
+    constexpr size_t BATCH_SIZE = 64;
+    struct FlushBuffers {
+        alignas(64) uint8_t packet_bufs[BATCH_SIZE][1500];
+        iovec iovs[BATCH_SIZE];
+        mmsghdr msgs[BATCH_SIZE];
+        char cmsg_bufs[BATCH_SIZE][CMSG_SPACE(sizeof(uint16_t))];
+    };
+    static thread_local FlushBuffers fb;
+    static std::atomic<bool> gso_supported{true};
     size_t batch_count = 0;
 
     auto flush_batch = [&]() -> bool {
         if (batch_count == 0) return true;
-        for (size_t i = 0; i < batch_count; ++i) {
-            msgs[i].msg_hdr.msg_name = const_cast<sockaddr*>(reinterpret_cast<const sockaddr*>(&remote_addr_));
-            msgs[i].msg_hdr.msg_namelen = remote_addr_len_;
-            msgs[i].msg_hdr.msg_iov = &iovs[i];
-            msgs[i].msg_hdr.msg_iovlen = 1;
-            msgs[i].msg_hdr.msg_control = nullptr;
-            msgs[i].msg_hdr.msg_controllen = 0;
-            msgs[i].msg_hdr.msg_flags = 0;
+
+        bool use_gso = gso_supported.load(std::memory_order_relaxed);
+        size_t num_msgs = 0;
+
+        for (size_t i = 0; i < batch_count; ) {
+            size_t seg_size = fb.iovs[i].iov_len;
+            size_t j = i + 1;
+            size_t total_bytes = seg_size;
+
+            if (use_gso && seg_size > 0) {
+                while (j < batch_count && (j - i) < 64 && fb.iovs[j - 1].iov_len == seg_size &&
+                       fb.iovs[j].iov_len <= seg_size && (total_bytes + fb.iovs[j].iov_len) <= 65000) {
+                    total_bytes += fb.iovs[j].iov_len;
+                    j++;
+                }
+            }
+
+            size_t run_len = j - i;
+            mmsghdr& m = fb.msgs[num_msgs];
+            m.msg_hdr.msg_name = const_cast<sockaddr*>(reinterpret_cast<const sockaddr*>(&remote_addr_));
+            m.msg_hdr.msg_namelen = remote_addr_len_;
+            m.msg_hdr.msg_iov = &fb.iovs[i];
+            m.msg_hdr.msg_iovlen = run_len;
+            m.msg_hdr.msg_flags = 0;
+
+            if (use_gso && run_len > 1) {
+                m.msg_hdr.msg_control = fb.cmsg_bufs[num_msgs];
+                m.msg_hdr.msg_controllen = CMSG_SPACE(sizeof(uint16_t));
+                auto* cm = CMSG_FIRSTHDR(&m.msg_hdr);
+                cm->cmsg_level = SOL_UDP;
+                cm->cmsg_type = UDP_SEGMENT;
+                cm->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+                *reinterpret_cast<uint16_t*>(CMSG_DATA(cm)) = static_cast<uint16_t>(seg_size);
+            } else {
+                m.msg_hdr.msg_control = nullptr;
+                m.msg_hdr.msg_controllen = 0;
+            }
+
+            num_msgs++;
+            i = j;
         }
 
-        int sent = ::sendmmsg(udp_fd_, msgs, static_cast<unsigned int>(batch_count), 0);
+        int sent = ::sendmmsg(udp_fd_, fb.msgs, static_cast<unsigned int>(num_msgs), 0);
         if (sent < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                batch_count = 0;
-                return true;
+            if (errno == EINVAL && use_gso) {
+                gso_supported.store(false, std::memory_order_relaxed);
+                for (size_t k = 0; k < batch_count; ++k) {
+                    fb.msgs[k].msg_hdr.msg_name = const_cast<sockaddr*>(reinterpret_cast<const sockaddr*>(&remote_addr_));
+                    fb.msgs[k].msg_hdr.msg_namelen = remote_addr_len_;
+                    fb.msgs[k].msg_hdr.msg_iov = &fb.iovs[k];
+                    fb.msgs[k].msg_hdr.msg_iovlen = 1;
+                    fb.msgs[k].msg_hdr.msg_control = nullptr;
+                    fb.msgs[k].msg_hdr.msg_controllen = 0;
+                    fb.msgs[k].msg_hdr.msg_flags = 0;
+                }
+                sent = ::sendmmsg(udp_fd_, fb.msgs, static_cast<unsigned int>(batch_count), 0);
             }
-            batch_count = 0;
-            return false;
+            if (sent < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    batch_count = 0;
+                    return true;
+                }
+                batch_count = 0;
+                return false;
+            }
         }
         batch_count = 0;
         return true;
     };
 
     const uint64_t now_ts = get_timestamp_ns();
+    bool write_more = false;
 
     while (true) {
         int64_t stream_id = -1;
@@ -815,12 +881,34 @@ bool Http3Connection::flush_outbound() {
             }
         }
 
-        ngtcp2_ssize pdatalen = 0;
-        uint32_t flags = (fin ? NGTCP2_WRITE_STREAM_FLAG_FIN : 0);
-        ngtcp2_pkt_info pi{};
-        ngtcp2_ssize nwrite = 0;
+        if (stream_id < 0 && !write_more) {
+            ngtcp2_ssize pdatalen = 0;
+            ngtcp2_pkt_info pi{};
+            uint8_t* cur_buf = fb.packet_bufs[batch_count];
+            ngtcp2_ssize nwrite = ngtcp2_conn_writev_stream(
+                qconn_, &ps.path, &pi, cur_buf, max_payload, &pdatalen,
+                NGTCP2_WRITE_STREAM_FLAG_NONE, -1, nullptr, 0, now_ts);
+            if (nwrite > 0) {
+                fb.iovs[batch_count].iov_base = cur_buf;
+                fb.iovs[batch_count].iov_len = static_cast<size_t>(nwrite);
+                batch_count++;
+                if (batch_count == BATCH_SIZE) {
+                    if (!flush_batch()) return false;
+                }
+            }
+            break;
+        }
 
-        uint8_t* cur_buf = packet_bufs[batch_count];
+        uint8_t* cur_buf = fb.packet_bufs[batch_count];
+        ngtcp2_pkt_info pi{};
+        ngtcp2_ssize pdatalen = 0;
+
+        uint32_t flags = NGTCP2_WRITE_STREAM_FLAG_MORE;
+        if (fin) {
+            flags |= NGTCP2_WRITE_STREAM_FLAG_FIN;
+        }
+
+        ngtcp2_ssize nwrite = 0;
 
         if (stream_id >= 0) {
             nwrite = ngtcp2_conn_writev_stream(
@@ -830,6 +918,18 @@ bool Http3Connection::flush_outbound() {
             nwrite = ngtcp2_conn_writev_stream(
                 qconn_, &ps.path, &pi, cur_buf, max_payload, &pdatalen,
                 NGTCP2_WRITE_STREAM_FLAG_NONE, -1, nullptr, 0, now_ts);
+        }
+
+        if (nwrite == NGTCP2_ERR_WRITE_MORE) {
+            if (h3conn_ && stream_id >= 0 && pdatalen >= 0) {
+                int rv = nghttp3_conn_add_write_offset(h3conn_, stream_id, static_cast<size_t>(pdatalen));
+                if (rv != 0) {
+                    closed_ = true;
+                    return false;
+                }
+            }
+            write_more = true;
+            continue;
         }
 
         if (nwrite <= 0) {
@@ -844,9 +944,10 @@ bool Http3Connection::flush_outbound() {
             }
         }
 
-        iovs[batch_count].iov_base = cur_buf;
-        iovs[batch_count].iov_len = static_cast<size_t>(nwrite);
+        fb.iovs[batch_count].iov_base = cur_buf;
+        fb.iovs[batch_count].iov_len = static_cast<size_t>(nwrite);
         batch_count++;
+        write_more = false;
 
         if (batch_count == BATCH_SIZE) {
             if (!flush_batch()) return false;
@@ -862,7 +963,8 @@ bool Http3Connection::flush_outbound() {
 
 core::Task<bool> Http3Connection::feed_datagram(std::span<const uint8_t> pkt,
                                                 const sockaddr_storage& from_addr,
-                                                socklen_t from_len) {
+                                                socklen_t from_len,
+                                                bool flush) {
     if (!qconn_) co_return false;
 
     remote_addr_ = from_addr;
@@ -918,11 +1020,11 @@ core::Task<bool> Http3Connection::feed_datagram(std::span<const uint8_t> pkt,
     }
 
     if (is_closed()) {
-        co_return flush_outbound();
+        co_return flush ? flush_outbound() : true;
     }
 
     co_await dispatch_pending_requests();
-    co_return flush_outbound();
+    co_return flush ? flush_outbound() : true;
 }
 
 bool Http3Connection::is_closed() const noexcept {

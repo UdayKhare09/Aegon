@@ -31,7 +31,7 @@ bool Http3Server::start() {
         setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
         setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
 
-        int buf_size = 4 * 1024 * 1024;
+        int buf_size = 8 * 1024 * 1024;
         setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
         setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
 
@@ -55,7 +55,7 @@ bool Http3Server::start() {
         setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
         setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
 
-        int buf_size = 4 * 1024 * 1024;
+        int buf_size = 8 * 1024 * 1024;
         setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
         setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
 
@@ -166,21 +166,29 @@ core::Task<void> Http3Server::run_timer_loop() {
 core::Task<void> Http3Server::dispatch_datagram(std::span<const uint8_t> pkt,
                                                    const sockaddr_storage& from_addr,
                                                    socklen_t from_len) {
+    co_await dispatch_datagram_internal(pkt, from_addr, from_len, true);
+}
+
+core::Task<Http3Connection*> Http3Server::dispatch_datagram_internal(
+    std::span<const uint8_t> pkt,
+    const sockaddr_storage& from_addr,
+    socklen_t from_len,
+    bool flush) {
     if (!QuicHeader::is_quic_packet(pkt)) {
-        co_return;
+        co_return nullptr;
     }
 
     ngtcp2_version_cid vc{};
     int rv = ngtcp2_pkt_decode_version_cid(&vc, pkt.data(), pkt.size(), 16);
     if (rv != 0 && rv != NGTCP2_ERR_VERSION_NEGOTIATION) {
-        co_return;
+        co_return nullptr;
     }
 
     // RFC 9000 §5.2: Send Version Negotiation packet for unsupported versions
     if (rv == NGTCP2_ERR_VERSION_NEGOTIATION ||
         (vc.version != 0 && vc.version != NGTCP2_PROTO_VER_V1 && vc.version != NGTCP2_PROTO_VER_V2)) {
         send_version_negotiation(vc, from_addr, from_len);
-        co_return;
+        co_return nullptr;
     }
 
     // Zero-allocation transparent lookup using std::string_view
@@ -219,8 +227,10 @@ core::Task<void> Http3Server::dispatch_datagram(std::span<const uint8_t> pkt,
     }
 
     if (conn) {
-        co_await conn->feed_datagram(pkt, from_addr, from_len);
+        co_await conn->feed_datagram(pkt, from_addr, from_len, flush);
+        co_return conn.get();
     }
+    co_return nullptr;
 }
 
 core::Task<void> Http3Server::run_receive_loop() {
@@ -229,7 +239,7 @@ core::Task<void> Http3Server::run_receive_loop() {
     iovec iov{.iov_base = buf, .iov_len = sizeof(buf)};
     msghdr msg{};
 
-    constexpr size_t BURST_BATCH = 16;
+    constexpr size_t BURST_BATCH = 32;
     uint8_t burst_bufs[BURST_BATCH][2048];
     sockaddr_storage burst_addrs[BURST_BATCH];
     iovec burst_iovs[BURST_BATCH];
@@ -247,6 +257,28 @@ core::Task<void> Http3Server::run_receive_loop() {
         burst_msgs[i].msg_hdr.msg_flags = 0;
     }
 
+    std::array<Http3Connection*, BURST_BATCH + 1> touched;
+    size_t touched_count = 0;
+
+    auto record_touched = [&](Http3Connection* c) {
+        if (!c) return;
+        for (size_t k = 0; k < touched_count; ++k) {
+            if (touched[k] == c) return;
+        }
+        if (touched_count < touched.size()) {
+            touched[touched_count++] = c;
+        }
+    };
+
+    auto flush_touched = [&]() {
+        for (size_t k = 0; k < touched_count; ++k) {
+            if (touched[k] && !touched[k]->is_closed()) {
+                touched[k]->flush_outbound();
+            }
+        }
+        touched_count = 0;
+    };
+
     while (running_) {
         msg.msg_name = &remote_addr;
         msg.msg_namelen = sizeof(remote_addr);
@@ -262,8 +294,10 @@ core::Task<void> Http3Server::run_receive_loop() {
             continue;
         }
 
-        co_await dispatch_datagram(std::span<const uint8_t>(buf, static_cast<size_t>(bytes)),
-                                   remote_addr, msg.msg_namelen);
+        auto* first_conn = co_await dispatch_datagram_internal(
+            std::span<const uint8_t>(buf, static_cast<size_t>(bytes)),
+            remote_addr, msg.msg_namelen, false);
+        record_touched(first_conn);
 
         // Batched multi-packet burst drainage with recvmmsg (cutting syscalls by up to 90%)
         while (running_) {
@@ -276,12 +310,22 @@ core::Task<void> Http3Server::run_receive_loop() {
             for (int i = 0; i < count; ++i) {
                 size_t n = burst_msgs[i].msg_len;
                 if (n > 0) {
-                    co_await dispatch_datagram(std::span<const uint8_t>(burst_bufs[i], n),
-                                               burst_addrs[i], burst_msgs[i].msg_hdr.msg_namelen);
+                    auto* c = co_await dispatch_datagram_internal(
+                        std::span<const uint8_t>(burst_bufs[i], n),
+                        burst_addrs[i], burst_msgs[i].msg_hdr.msg_namelen, false);
+                    record_touched(c);
                 }
             }
+
+            if (touched_count >= 16 || count < static_cast<int>(BURST_BATCH)) {
+                flush_touched();
+            }
+
             if (count < static_cast<int>(BURST_BATCH)) break;
         }
+
+        // Flush any remaining touched connections
+        flush_touched();
     }
 }
 
