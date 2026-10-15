@@ -2,11 +2,23 @@
 
 namespace aegon::data::orm::sql {
 
+/**
+ * @brief Append one predicate and its bound values, advancing the next 1-based parameter index.
+ * A custom compiler takes precedence and its exceptions propagate. Empty IN and
+ * NOT IN lists append 1 = 0 and 1 = 1, respectively, without consuming parameters.
+ * Without a custom compiler, BETWEEN requires two values and binary operators
+ * require one; IS NULL and IS NOT NULL consume none. The conjunction is ignored.
+ */
 void compile_condition(const Condition& cond, DatabaseDialect dialect,
                        size_t& param_idx, std::string& sql,
                        std::vector<SqlParam>& out_params) {
     if (cond.custom_compiler) {
         sql.append(cond.custom_compiler(dialect, param_idx, out_params));
+        return;
+    }
+
+    if ((cond.op == Op::In || cond.op == Op::NotIn) && cond.values.empty()) {
+        sql.append(cond.op == Op::In ? "1 = 0" : "1 = 1");
         return;
     }
 

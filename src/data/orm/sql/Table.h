@@ -110,6 +110,12 @@ private:
 public:
     explicit TableDef(std::string name) : table_name_(std::move(name)) {}
 
+    /**
+     * @brief Return SELECT for all mapped columns and FROM, without filters or a semicolon.
+     * The returned reference normally belongs to this schema. For dialect indices
+     * outside the cache, it refers to per-thread storage overwritten by the next
+     * such call for this Entity type on the same thread.
+     */
     [[nodiscard]] const std::string& select_all_prefix(DatabaseDialect d) const {
         size_t idx = static_cast<size_t>(d);
         if (idx < cached_select_prefix_.size() && !cached_select_prefix_[idx].empty()) {
@@ -126,7 +132,7 @@ public:
             cached_select_prefix_[idx] = s;
             return cached_select_prefix_[idx];
         }
-        static std::string fallback;
+        static thread_local std::string fallback;
         fallback = std::move(s);
         return fallback;
     }
@@ -253,8 +259,16 @@ public:
         return false;
     }
 
-    QueryResult build_insert_sql(const Entity& entity, DatabaseDialect dialect) const {
+    /**
+     * @brief Build a single INSERT with parameters ordered by entity, then schema column.
+     * Empty input returns empty SQL and parameters. Auto-increment columns are
+     * omitted; PostgreSQL and SQLite append RETURNING for the primary key when
+     * any column is auto-incremented. Entities are unchanged and no SQL is executed.
+     */
+    QueryResult build_insert_sql(std::span<const Entity> entities, DatabaseDialect dialect) const {
         QueryResult result;
+        if (entities.empty()) return result;
+
         std::string& sql = result.sql;
         sql.reserve(256);
 
@@ -278,17 +292,34 @@ public:
             if (i + 1 < insert_col_indices.size()) sql.append(", ");
         }
 
-        sql.append(") VALUES (");
-
-        auto extracted = extract_values(entity, true);
-        for (size_t col_i = 0; col_i < extracted.size(); ++col_i) {
-            std::string p;
-            DialectTraits::format_placeholder(dialect, col_i + 1, p);
-            sql.append(p);
-            if (col_i + 1 < extracted.size()) sql.append(", ");
-            result.params.push_back(std::move(extracted[col_i].second));
+        size_t total_params = entities.size() * insert_col_indices.size();
+        size_t max_allowed = (dialect == DatabaseDialect::SQLite) ? 32766 : 65535;
+        if (total_params > max_allowed) {
+            throw std::invalid_argument(
+                "Table::build_insert_sql: total parameter count (" + std::to_string(total_params) +
+                ") exceeds dialect parameter limit (" + std::to_string(max_allowed) +
+                "). Split batch into smaller chunks.");
         }
-        sql.push_back(')');
+
+        sql.append(") VALUES ");
+
+        size_t param_idx = 1;
+
+        for (size_t row_idx = 0; row_idx < entities.size(); ++row_idx) {
+            const auto& entity = entities[row_idx];
+            auto extracted = extract_values(entity, true);
+
+            sql.push_back('(');
+            for (size_t col_i = 0; col_i < extracted.size(); ++col_i) {
+                std::string p;
+                DialectTraits::format_placeholder(dialect, param_idx++, p);
+                sql.append(p);
+                if (col_i + 1 < extracted.size()) sql.append(", ");
+                result.params.push_back(std::move(extracted[col_i].second));
+            }
+            sql.push_back(')');
+            if (row_idx + 1 < entities.size()) sql.append(", ");
+        }
 
         if ((dialect == DatabaseDialect::PostgreSQL || dialect == DatabaseDialect::SQLite) && auto_inc) {
             sql.append(" RETURNING ");
@@ -297,6 +328,14 @@ public:
 
         sql.push_back(';');
         return result;
+    }
+
+    /**
+     * @brief Build a one-row INSERT using the same column and RETURNING rules as the span
+     * overload.
+     */
+    QueryResult build_insert_sql(const Entity& entity, DatabaseDialect dialect) const {
+        return build_insert_sql(std::span<const Entity>(&entity, 1), dialect);
     }
 
     core::Task<int64_t> insert_entity(Entity& entity, Connection& conn) const {

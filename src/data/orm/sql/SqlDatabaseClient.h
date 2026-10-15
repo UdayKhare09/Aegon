@@ -22,6 +22,21 @@
 
 namespace aegon::data::orm::sql {
 
+namespace detail {
+template <typename T>
+struct task_value {
+    using type = T;
+};
+
+template <typename T>
+struct task_value<core::Task<T>> {
+    using type = T;
+};
+
+template <typename T>
+using task_value_t = typename task_value<T>::type;
+} // namespace detail
+
 class SqlDatabaseClient {
     PerCoreConnectionPool& primary_pool_;
     std::vector<std::reference_wrapper<PerCoreConnectionPool>> replica_pools_;
@@ -64,6 +79,49 @@ public:
         co_await aegon::data::orm::sql::flush_deferred_cache(*cache_, ops);
     }
 
+    // Generalized execution wrappers for primary pool (with deferred cache) and read pool
+    /**
+     * @brief Await action(tx) on a primary connection, then flush recorded cache operations.
+     * Return the action's result, if any. This does not begin, commit, or roll back a
+     * database transaction. Keep action alive until the task completes. Pool and
+     * action errors propagate and prevent the flush; cache errors propagate after
+     * the action has completed and may leave some cache operations applied.
+     */
+    template <typename Action>
+    auto execute_with_tx(Action&& action) -> core::Task<detail::task_value_t<std::invoke_result_t<Action, Transaction&>>> {
+        using R = detail::task_value_t<std::invoke_result_t<Action, Transaction&>>;
+        auto guard = primary_pool_.acquire();
+        Transaction tx(*guard);
+        std::vector<DeferredCacheOp> deferred;
+        if (cache_) tx.set_deferred_cache_ops(&deferred);
+        if constexpr (std::is_void_v<R>) {
+            co_await action(tx);
+            co_await flush_deferred_cache(deferred);
+        } else {
+            R res = co_await action(tx);
+            co_await flush_deferred_cache(deferred);
+            co_return res;
+        }
+    }
+
+    /**
+     * @brief Await action(tx) on a read connection and return its result, if any.
+     * Use replicas in round-robin order, or the primary when none are configured.
+     * No database transaction is begun and no deferred cache buffer is installed.
+     * Keep action alive until completion; pool and action errors propagate.
+     */
+    template <typename Action>
+    auto execute_with_read_tx(Action&& action) -> core::Task<detail::task_value_t<std::invoke_result_t<Action, Transaction&>>> {
+        using R = detail::task_value_t<std::invoke_result_t<Action, Transaction&>>;
+        auto guard = read_pool().acquire();
+        Transaction tx(*guard);
+        if constexpr (std::is_void_v<R>) {
+            co_await action(tx);
+        } else {
+            co_return co_await action(tx);
+        }
+    }
+
     // Transaction & Unit of Work Lifecycle (always on primary pool)
     template <typename Func>
     core::Task<void> transaction(Func&& block) {
@@ -94,6 +152,13 @@ public:
     }
 
     // Direct non-transactional single-operation conveniences
+    /**
+     * @brief Insert on the primary, assigning a positive generated auto-increment key to
+     * entity.
+     * Initialize its relation loaders when using the generated-key path and flush
+     * recorded cache operations after success. Pool, database, and cache errors propagate; a
+     * cache error can follow a successful write.
+     */
     template <typename Entity>
     core::Task<void> insert(Entity& entity) {
         auto schema = Entity::schema();
@@ -101,55 +166,50 @@ public:
             co_await insert_get_id(entity);
             co_return;
         }
-
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        co_await tx.insert(entity);
-        co_await flush_deferred_cache(deferred);
+        co_await execute_with_tx([&](Transaction& tx) { return tx.insert(entity); });
     }
 
+    /**
+     * @brief Insert on the primary without assigning generated keys to entity.
+     * Flush recorded cache operations after success. Pool, database, and cache errors
+     * propagate; a cache error can follow a successful write.
+     */
     template <typename Entity>
     core::Task<void> insert(const Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        co_await tx.insert(entity);
-        co_await flush_deferred_cache(deferred);
+        co_await execute_with_tx([&](Transaction& tx) { return tx.insert(entity); });
     }
 
+    /**
+     * @brief Insert on the primary and return the generated key, or zero if none is obtained.
+     * Assign a positive generated key to entity and initialize its relation loaders.
+     * Flush recorded cache operations after success. Pool, database, and cache errors
+     * propagate; a cache error can follow a successful write.
+     */
     template <typename Entity>
     core::Task<int64_t> insert_get_id(Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        int64_t id = co_await tx.insert_get_id(entity);
-        co_await flush_deferred_cache(deferred);
-        co_return id;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.insert_get_id(entity); });
     }
 
+    /**
+     * @brief Insert on the primary and return the first returned key, or zero for no row.
+     * The entity is unchanged. Flush recorded cache operations after success.
+     * Pool, database, and cache errors propagate; a cache error can follow a successful write.
+     */
     template <typename Entity>
     core::Task<int64_t> insert_get_id(const Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        int64_t id = co_await tx.insert_get_id(entity);
-        co_await flush_deferred_cache(deferred);
-        co_return id;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.insert_get_id(entity); });
     }
 
+    /**
+     * @brief Insert entities sequentially on one primary connection, assigning generated keys.
+     * Empty input performs no inserts. No transaction is begun: earlier inserts can
+     * remain if a later insert fails. Flush recorded cache operations only after all
+     * inserts succeed. Pool, database, and cache errors propagate; a cache error can follow a
+     * successful write.
+     */
     template <typename Entity>
     core::Task<void> insert_all(std::span<Entity> entities) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        co_await tx.insert_all(entities);
-        co_await flush_deferred_cache(deferred);
+        co_await execute_with_tx([&](Transaction& tx) { return tx.insert_all(entities); });
     }
 
     template <typename Entity>
@@ -159,26 +219,30 @@ public:
         });
     }
 
+    /**
+     * @brief Update by primary key on the primary and return the affected row count.
+     * For a versioned schema, also match the current version and write the next
+     * version back to entity after success, including through the const overload.
+     * A versioned entity must therefore be modifiable. Flush recorded cache operations.
+     * @throws OptimisticLockException If a versioned update affects no rows.
+     * Pool, database, and cache errors propagate; a cache error can follow a successful write.
+     */
     template <typename Entity>
     core::Task<size_t> update_entity(Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        size_t n = co_await tx.update_entity(entity);
-        co_await flush_deferred_cache(deferred);
-        co_return n;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.update_entity(entity); });
     }
 
+    /**
+     * @brief Update by primary key on the primary and return the affected row count.
+     * For a versioned schema, also match the current version and write the next
+     * version back to entity after success, including through the const overload.
+     * A versioned entity must therefore be modifiable. Flush recorded cache operations.
+     * @throws OptimisticLockException If a versioned update affects no rows.
+     * Pool, database, and cache errors propagate; a cache error can follow a successful write.
+     */
     template <typename Entity>
     core::Task<size_t> update_entity(const Entity& entity) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        size_t n = co_await tx.update_entity(entity);
-        co_await flush_deferred_cache(deferred);
-        co_return n;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.update_entity(entity); });
     }
 
     template <typename Entity, typename ID>
@@ -213,6 +277,12 @@ public:
         co_return opt_entity;
     }
 
+    /**
+     * @brief Return the first entity matching field, or nullopt if no row matches.
+     * Try a configured unique-value cache mapping first, otherwise query a read
+     * connection and populate entity and unique-value cache entries when enabled.
+     * Pool, database, and cache errors propagate rather than becoming cache misses.
+     */
     template <typename Entity, typename FieldType, typename ValueType>
     core::Task<std::optional<Entity>> find_by_unique(FieldType Entity::* field, const ValueType& val) {
         auto schema = Entity::schema();
@@ -232,14 +302,7 @@ public:
         Transaction tx(*guard);
         auto opt_entity = co_await tx.find_by_unique(field, val);
         if (opt_entity && cache_ && schema.is_cached()) {
-            auto vals = schema.extract_values(*opt_entity, false);
-            std::string pk;
-            for (const auto& [c, v] : vals) {
-                if (c == schema.primary_key_name()) {
-                    pk = v.to_debug_string();
-                    break;
-                }
-            }
+            std::string pk = schema.get_primary_key(*opt_entity);
             if (!pk.empty()) {
                 std::string id_key = format_cache_id_key(schema.table_name(), pk);
                 co_await cache_->set(id_key, schema.serialize_entity_json(*opt_entity), schema.cache_config().ttl);
@@ -250,17 +313,23 @@ public:
         co_return opt_entity;
     }
 
+    /**
+     * @brief Delete matching primary-key rows on the primary; return whether any were deleted.
+     * Flush recorded cache operations after success. Pool, database, and cache errors
+     * propagate; a cache error can follow a successful write.
+     */
     template <typename Entity, typename ID>
     core::Task<bool> delete_by_id(const ID& id) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        std::vector<DeferredCacheOp> deferred;
-        if (cache_) tx.set_deferred_cache_ops(&deferred);
-        bool ok = co_await tx.delete_by_id<Entity>(id);
-        co_await flush_deferred_cache(deferred);
-        co_return ok;
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.template delete_by_id<Entity>(id); });
     }
 
+    /**
+     * @brief Fetch mapped entities, using the configured query cache when enabled.
+     * A cache miss or failed entity deserialization triggers a read-pool query;
+     * cache entries are populated with the resolved query TTL in seconds. Includes
+     * are eagerly loaded for nonempty results, including cache hits. Pool, database,
+     * and cache errors propagate; cache exceptions do not trigger a fallback query.
+     */
     template <typename Entity>
     core::Task<std::vector<Entity>> fetch_all(const SelectBuilder<Entity>& builder) {
         auto schema = builder.schema();
@@ -377,14 +446,7 @@ public:
             std::string ids_str;
             auto ttl = builder.cache_ttl().value_or(std::chrono::seconds(300));
             for (size_t i = 0; i < entities.size(); ++i) {
-                auto vals = schema.extract_values(entities[i], false);
-                std::string pk;
-                for (const auto& [col, val] : vals) {
-                    if (col == schema.primary_key_name()) {
-                        pk = val.to_debug_string();
-                        break;
-                    }
-                }
+                std::string pk = schema.get_primary_key(entities[i]);
                 if (!pk.empty()) {
                     if (i > 0) ids_str.push_back(',');
                     ids_str.append(pk);
@@ -398,11 +460,15 @@ public:
         co_return entities;
     }
 
+    /**
+     * @brief Query a read connection and replace out with mapped entities, reusing its
+     * capacity.
+     * Eagerly load configured includes. This path bypasses query caching.
+     * Pool and database errors propagate.
+     */
     template <typename Entity>
     core::Task<void> fetch_into(const SelectBuilder<Entity>& builder, std::vector<Entity>& out) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_await tx.fetch_into(builder, out);
+        co_await execute_with_read_tx([&](Transaction& tx) { return tx.fetch_into(builder, out); });
     }
 
     template <typename Entity>
@@ -416,65 +482,100 @@ public:
         co_return std::nullopt;
     }
 
+    /**
+     * @brief Return the first COUNT(*) result from a read connection, or zero for no row or
+     * NULL.
+     * Keep WHERE, GROUP BY, and HAVING; ignore projections, ordering, limit, and offset.
+     * With grouping, return only the first group's count. Pool and database errors propagate.
+     */
     template <typename Entity>
     core::Task<uint64_t> count(const SelectBuilder<Entity>& builder) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.count(builder);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.count(builder); });
     }
 
+    /**
+     * @brief Return the first SUM result from a read connection as the field's unwrapped type.
+     * Return nullopt for no row or NULL. Keep WHERE, GROUP BY, and HAVING; ignore
+     * ordering, limit, and offset. With grouping, use the first group. Pool and database errors
+     * propagate.
+     */
     template <typename Entity, typename FieldType>
     core::Task<std::optional<unwrapped_type_t<FieldType>>> sum(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.sum(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.sum(builder, field); });
     }
 
+    /**
+     * @brief Return the first SUM result from a read connection converted to ResultType.
+     * Return nullopt for no row or NULL. Keep WHERE, GROUP BY, and HAVING; ignore
+     * ordering, limit, and offset. With grouping, use the first group. Pool and database errors
+     * propagate.
+     */
     template <typename ResultType, typename Entity, typename FieldType>
     core::Task<std::optional<ResultType>> sum(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.template sum<ResultType>(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.template sum<ResultType>(builder, field); });
     }
 
+    /**
+     * @brief Return the first AVG result from a read connection as double.
+     * Return nullopt for no row or NULL. Keep WHERE, GROUP BY, and HAVING; ignore
+     * ordering, limit, and offset. With grouping, use the first group. Pool and database errors
+     * propagate.
+     */
     template <typename Entity, typename FieldType>
     core::Task<std::optional<double>> avg(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.avg(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.avg(builder, field); });
     }
 
+    /**
+     * @brief Return the first MIN result from a read connection as the field's unwrapped type.
+     * Return nullopt for no row or NULL. Keep WHERE, GROUP BY, and HAVING; ignore
+     * ordering, limit, and offset. With grouping, use the first group. Pool and database errors
+     * propagate.
+     */
     template <typename Entity, typename FieldType>
     core::Task<std::optional<unwrapped_type_t<FieldType>>> min(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.min(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.min(builder, field); });
     }
 
+    /**
+     * @brief Return the first MAX result from a read connection as the field's unwrapped type.
+     * Return nullopt for no row or NULL. Keep WHERE, GROUP BY, and HAVING; ignore
+     * ordering, limit, and offset. With grouping, use the first group. Pool and database errors
+     * propagate.
+     */
     template <typename Entity, typename FieldType>
     core::Task<std::optional<unwrapped_type_t<FieldType>>> max(const SelectBuilder<Entity>& builder, FieldType Entity::* field) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.max(builder, field);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.max(builder, field); });
     }
 
+    /**
+     * @brief Count then fetch a page on one read connection, including pagination metadata.
+     * page is 1-based; zero becomes 1. per_page counts rows; zero becomes 20.
+     * The copied builder's limit and offset are replaced. No transaction is begun
+     * between the count and fetch, and query caching is bypassed. Pool and database errors
+     * propagate.
+     */
     template <typename Entity>
     core::Task<Page<Entity>> paginate(SelectBuilder<Entity> builder, size_t page = 1, size_t per_page = 20) {
-        auto guard = read_pool().acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.paginate(std::move(builder), page, per_page);
+        co_return co_await execute_with_read_tx([&](Transaction& tx) { return tx.paginate(std::move(builder), page, per_page); });
     }
 
+    /**
+     * @brief Execute parameterized SQL on the primary and return the driver's affected row
+     * count.
+     * No entity cache operations are inferred from raw SQL. Pool and database errors propagate.
+     */
     core::Task<size_t> execute(const QueryResult& query) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.execute(query);
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.execute(query); });
     }
 
+    /**
+     * @brief Execute parameterized SQL on the primary and return the driver's affected row
+     * count.
+     * No entity cache operations are inferred from raw SQL. Pool and database errors propagate.
+     */
     core::Task<size_t> execute(std::string_view sql, std::span<const SqlParam> params = {}) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.execute(sql, params);
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.execute(sql, params); });
     }
 
     /**
@@ -510,18 +611,31 @@ public:
         co_await rel.load(*this);
     }
 
+    /**
+     * @brief Insert a junction row on the primary using the first two non-auto-increment
+     * columns.
+     * Schema order maps parent_id to the first column and child_id to the second.
+     * @throws std::runtime_error If fewer than two eligible columns exist.
+     * Pool and database errors propagate.
+     */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
-    core::Task<void> link(const ParentID& parent_id, const ChildID& child_id) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        co_await tx.template link<JunctionEntity>(parent_id, child_id);
+    core::Task<void> link(const ParentID& parent_id, const ChildID& child_id,
+                          std::string_view parent_col = "", std::string_view child_col = "") {
+        co_await execute_with_tx([&](Transaction& tx) { return tx.template link<JunctionEntity>(parent_id, child_id, parent_col, child_col); });
     }
 
+    /**
+     * @brief Delete a junction row on the primary using the first two non-auto-increment
+     * columns.
+     * Schema order maps parent_id to the first column and child_id to the second.
+     * Return whether any rows were deleted.
+     * @throws std::runtime_error If fewer than two eligible columns exist.
+     * Pool and database errors propagate.
+     */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
-    core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id) {
-        auto guard = primary_pool_.acquire();
-        Transaction tx(*guard);
-        co_return co_await tx.template unlink<JunctionEntity>(parent_id, child_id);
+    core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id,
+                            std::string_view parent_col = "", std::string_view child_col = "") {
+        co_return co_await execute_with_tx([&](Transaction& tx) { return tx.template unlink<JunctionEntity>(parent_id, child_id, parent_col, child_col); });
     }
 };
 

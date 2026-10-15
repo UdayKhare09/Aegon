@@ -3,6 +3,7 @@
 #include "data/types/Types.h"
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -81,12 +82,24 @@ struct SqlParam {
 
 }; // struct SqlParam
 
+/**
+ * @brief Convert a value to a SQL parameter, copying an existing SqlParam as-is.
+ * Empty optional-like values, null pointers, and unsupported types become NULL.
+ * Enums use their underlying integer value; unsigned integers are cast to int64_t.
+ * String inputs and converted text or bytes own their storage. Copying an existing
+ * SqlParam preserves its ownership, so borrowed data must remain alive while used.
+ * Exceptions from user-defined to_string conversions propagate.
+ */
 template <typename T>
 [[nodiscard]] inline SqlParam make_sql_param(const T& val) {
     using D = std::decay_t<T>;
 
+    // --- SqlParam passthrough ---
+    if constexpr (std::is_same_v<D, SqlParam>) {
+        return val;
+    }
     // --- std::optional ---
-    if constexpr (requires { val.has_value(); }) {
+    else if constexpr (requires { val.has_value(); }) {
         if (!val.has_value()) return SqlParam::null();
         return make_sql_param(*val);
     }
@@ -98,12 +111,22 @@ template <typename T>
     else if constexpr (std::is_same_v<D, bool>) {
         return SqlParam::boolean(val);
     }
+    // --- enum types ---
+    else if constexpr (std::is_enum_v<D>) {
+        return make_sql_param(static_cast<std::underlying_type_t<D>>(val));
+    }
     // --- signed integers ---
     else if constexpr (std::is_integral_v<D> && std::is_signed_v<D>) {
         return SqlParam::integer(static_cast<int64_t>(val));
     }
-    // --- unsigned integers (cast to int64; uint64 loses top bit but fits all practical IDs) ---
+    // --- unsigned integers (values > INT64_MAX stored as text to avoid truncation/sign flip) ---
     else if constexpr (std::is_integral_v<D> && std::is_unsigned_v<D>) {
+        if constexpr (sizeof(D) == 8) {
+            uint64_t u64 = static_cast<uint64_t>(val);
+            if (u64 > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+                return SqlParam::text_owned(std::to_string(u64));
+            }
+        }
         return SqlParam::integer(static_cast<int64_t>(static_cast<uint64_t>(val)));
     }
     // --- floating point ---

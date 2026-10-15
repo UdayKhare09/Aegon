@@ -267,17 +267,18 @@ public:
         co_return co_await remover_(conn, owner_key_, make_sql_param(item_id).to_debug_string(), data_);
     }
 
+    /**
+     * @brief Invoke the configured remover with the item's schema primary key.
+     * Pass an empty key if T has no schema or primary-key extractor. The callback
+     * receives the stored collection by reference and determines changes and the
+     * returned boolean; its exceptions propagate.
+     * @throws std::runtime_error If no remover is configured.
+     */
     core::Task<bool> remove(Connection& conn, const T& item) {
         if (!remover_) throw std::runtime_error("HasMany: no remover mutator configured (is this a 1:N relation?)");
         std::string id_str;
         if constexpr (requires { T::schema(); }) {
-            auto s = T::schema();
-            for (const auto& [col, val] : s.extract_values(item, false)) {
-                if (col == s.primary_key_name()) {
-                    id_str = val.to_debug_string();
-                    break;
-                }
-            }
+            id_str = T::schema().get_primary_key(item);
         }
         co_return co_await remover_(conn, owner_key_, id_str, data_);
     }
@@ -307,17 +308,18 @@ public:
         co_return co_await detacher_(conn, owner_key_, make_sql_param(item_id).to_debug_string(), data_);
     }
 
+    /**
+     * @brief Invoke the configured detacher with the item's schema primary key.
+     * Pass an empty key if T has no schema or primary-key extractor. The callback
+     * receives the stored collection by reference and determines changes and the
+     * returned boolean; its exceptions propagate.
+     * @throws std::runtime_error If no detacher is configured.
+     */
     core::Task<bool> detach(Connection& conn, const T& item) {
         if (!detacher_) throw std::runtime_error("HasMany: no detacher mutator configured (is this an N:M relation?)");
         std::string id_str;
         if constexpr (requires { T::schema(); }) {
-            auto s = T::schema();
-            for (const auto& [col, val] : s.extract_values(item, false)) {
-                if (col == s.primary_key_name()) {
-                    id_str = val.to_debug_string();
-                    break;
-                }
-            }
+            id_str = T::schema().get_primary_key(item);
         }
         co_return co_await detacher_(conn, owner_key_, id_str, data_);
     }

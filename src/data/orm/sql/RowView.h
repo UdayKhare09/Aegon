@@ -43,6 +43,14 @@ public:
     }
 };
 
+/**
+ * @brief Convert a non-null field to T; a string_view result borrows the input.
+ * Numeric and enum parsing accepts a valid prefix and returns zero on invalid
+ * or out-of-range input; enum values are not checked against named enumerators.
+ * Boolean true spellings are 1, true, TRUE, t, and T; all others yield false.
+ * Failed optional-like conversions and unsupported types yield T{}. Exceptions
+ * from type-specific conversions propagate.
+ */
 template <typename T>
 inline T parse_field_value(std::string_view s) {
     if constexpr (std::is_same_v<T, std::string>) {
@@ -55,6 +63,14 @@ inline T parse_field_value(std::string_view s) {
         T val{};
         std::from_chars(s.data(), s.data() + s.size(), val);
         return val;
+    } else if constexpr (std::is_enum_v<T>) {
+        using Under = std::underlying_type_t<T>;
+        Under val{};
+        auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), val);
+        if (ec != std::errc{} || ptr != s.data() + s.size()) {
+            throw std::runtime_error("RowView: failed to parse enum from '" + std::string(s) + "'");
+        }
+        return static_cast<T>(val);
     } else if constexpr (std::is_floating_point_v<T>) {
         T val{};
         std::from_chars(s.data(), s.data() + s.size(), val);

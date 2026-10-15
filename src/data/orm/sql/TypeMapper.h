@@ -37,6 +37,30 @@ struct TypeMapper<bool> {
 };
 
 template <>
+struct TypeMapper<int8_t> {
+    static constexpr bool is_nullable = false;
+    static std::string column_type(DatabaseDialect d, size_t = 0) {
+        switch (d) {
+            case DatabaseDialect::PostgreSQL: return "SMALLINT";
+            case DatabaseDialect::SQLite:     return "INTEGER";
+        }
+        return "INTEGER";
+    }
+};
+
+template <>
+struct TypeMapper<uint8_t> {
+    static constexpr bool is_nullable = false;
+    static std::string column_type(DatabaseDialect d, size_t = 0) {
+        switch (d) {
+            case DatabaseDialect::PostgreSQL: return "SMALLINT";
+            case DatabaseDialect::SQLite:     return "INTEGER";
+        }
+        return "INTEGER";
+    }
+};
+
+template <>
 struct TypeMapper<int16_t> {
     static constexpr bool is_nullable = false;
     static std::string column_type(DatabaseDialect d, size_t = 0) {
@@ -272,6 +296,28 @@ struct TypeMapper<types::Hash256> {
             case DatabaseDialect::SQLite:     return "BLOB";
         }
         return "BLOB";
+    }
+};
+
+// -------------------------------------------------------------
+// Enum Specialization (maps to underlying integral type)
+// -------------------------------------------------------------
+
+template <typename T>
+    requires (std::is_enum_v<T>)
+struct TypeMapper<T> {
+    static constexpr bool is_nullable = false;
+    /**
+     * @brief Return the SQL type of the enum's underlying integer type.
+     * That integral type must have a TypeMapper specialization; length is forwarded.
+     */
+    static std::string column_type(DatabaseDialect d, size_t length = 0) {
+        using Under = std::underlying_type_t<T>;
+        if constexpr (sizeof(Under) == 1) {
+            return TypeMapper<int16_t>::column_type(d, length);
+        } else {
+            return TypeMapper<Under>::column_type(d, length);
+        }
     }
 };
 

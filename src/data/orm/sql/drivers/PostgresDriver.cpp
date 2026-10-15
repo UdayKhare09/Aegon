@@ -24,6 +24,12 @@ struct PgParamArrays {
     std::vector<int>         paramLengths;
     std::vector<int>         paramFormats; // 0 = text, 1 = binary
 
+    /**
+     * @brief Replace the libpq binding arrays, using terminated text and binary byte values.
+     * Borrowed text is copied; owned text and bytes refer to the input parameters,
+     * which must remain alive and unchanged while the arrays are used. Pointers to
+     * converted text remain valid until this object is changed or destroyed.
+     */
     void build(std::span<const SqlParam> params) {
         const size_t n = params.size();
         text_bufs.resize(n);
@@ -40,8 +46,14 @@ struct PgParamArrays {
                     break;
 
                 case SqlParam::Kind::Text:
-                    paramValues[i]  = p.text_view.data();
-                    paramLengths[i] = static_cast<int>(p.text_view.size());
+                    if (p.owns_storage) {
+                        paramValues[i]  = p.storage.c_str();
+                        paramLengths[i] = static_cast<int>(p.storage.size());
+                    } else {
+                        text_bufs[i]    = std::string(p.text_view);
+                        paramValues[i]  = text_bufs[i].c_str();
+                        paramLengths[i] = static_cast<int>(text_bufs[i].size());
+                    }
                     break;
 
                 case SqlParam::Kind::Int64:
@@ -278,6 +290,14 @@ core::Task<size_t> PostgresConnection::execute(std::string_view sql, std::span<c
     co_return affected;
 }
 
+/**
+ * @brief Execute a row-returning query; each returned row retains the shared result buffer.
+ * Return an empty vector for zero rows. Raw field views remain valid while a row
+ * or its owner retains that buffer. A registered prepared statement is used for
+ * matching SQL. sql and params must remain valid until the task finishes.
+ * @throws std::runtime_error If the connection is closed, sending fails, no result
+ * is returned, or the result status is not PGRES_TUPLES_OK.
+ */
 core::Task<std::vector<DriverRowView>> PostgresConnection::query(std::string_view sql, std::span<const SqlParam> params) {
     if (!conn_) throw std::runtime_error("PostgresConnection: connection is closed.");
 
@@ -358,7 +378,7 @@ core::Task<std::vector<DriverRowView>> PostgresConnection::query(std::string_vie
     rows.reserve(rows_count);
 
     for (int r = 0; r < rows_count; ++r) {
-        rows.emplace_back(r == 0 ? shared_res : nullptr, res, r, cols_count, &pg_raw_getter, &pg_is_null);
+        rows.emplace_back(shared_res, res, r, cols_count, &pg_raw_getter, &pg_is_null);
     }
 
     co_return rows;

@@ -2,6 +2,12 @@
 
 namespace aegon::data::orm::sql {
 
+/**
+ * @brief Build SELECT SQL and parameters in WHERE-then-HAVING order without executing it.
+ * Use select_all_prefix verbatim when projected_columns is empty; otherwise quote
+ * the projected identifiers. limit and offset count rows and are emitted when set,
+ * including zero. Custom condition compiler exceptions propagate.
+ */
 QueryResult compile_select_query_impl(
     DatabaseDialect dialect,
     std::string_view table_name,
@@ -47,12 +53,7 @@ QueryResult compile_select_query_impl(
 
     if (!havings.empty()) {
         sql.append(" HAVING ");
-        for (size_t i = 0; i < havings.size(); ++i) {
-            if (i > 0) {
-                sql.append(havings[i].conj == Conjunction::Or ? " OR " : " AND ");
-            }
-            compile_condition(havings[i], dialect, param_idx, sql, result.params);
-        }
+        compile_conditions(havings, dialect, param_idx, sql, result.params);
     }
 
     if (!order_bys.empty()) {
@@ -120,6 +121,12 @@ QueryResult compile_count_query_impl(
     return result;
 }
 
+/**
+ * @brief Build a grouped or ungrouped aggregate SELECT and its bound parameters.
+ * agg_func is inserted verbatim; col_expr is quoted as an identifier unless it is *.
+ * WHERE parameters precede HAVING parameters. No query is executed; exceptions
+ * from custom condition compilers propagate.
+ */
 QueryResult compile_aggregate_query_impl(
     DatabaseDialect dialect,
     std::string_view table_name,
@@ -133,6 +140,7 @@ QueryResult compile_aggregate_query_impl(
     std::string& sql = result.sql;
     sql.reserve(128);
 
+    sql.append("SELECT ");
     sql.append(agg_func);
     sql.push_back('(');
     if (col_expr == "*") {
@@ -160,16 +168,10 @@ QueryResult compile_aggregate_query_impl(
 
     if (!havings.empty()) {
         sql.append(" HAVING ");
-        for (size_t i = 0; i < havings.size(); ++i) {
-            if (i > 0) sql.append(havings[i].conj == Conjunction::Or ? " OR " : " AND ");
-            compile_condition(havings[i], dialect, param_idx, sql, result.params);
-        }
+        compile_conditions(havings, dialect, param_idx, sql, result.params);
     }
 
     sql.push_back(';');
-
-    // Prepend SELECT
-    result.sql = "SELECT " + result.sql;
     return result;
 }
 
