@@ -38,7 +38,7 @@
 
 ## ⚡ Highlights
 
-- **Linux-Native `io_uring` Engine**: Complete kernel bypass with zero-syscall request loops via `IORING_OP_RECV_MULTISHOT`, `IORING_OP_ACCEPT_DIRECT`, and kernel-managed buffer rings (`io_uring_buf_ring`).
+- **Pluggable I/O Engine Architecture**: Unified polymorphic `IoEngine` interface supporting native Linux 6.1+ `io_uring` multishot pipelines with `PBUF_RING`, paired with an automatic high-speed `epoll` fallback engine for Linux < 6.1, WSL2, and Docker (delivering 454k plain req/s and 1.31M H2 req/s with zero code changes). Paves the way for upcoming macOS (`kqueue`) and Windows (`IOCP`) adoption.
 - **C++26 Symmetric-Transfer Coroutines**: Pure `aegon::core::Task<T>` async programming with zero heap frame allocations on hot paths.
 - **Hardware-Aware Stepped SIMD**: 4-tier vector fallback engine (`AVX-512BW/VL` → `AVX2/BMI2` → `SSE4.2` → `Scalar`) accelerating case-insensitive header matching, URL decoding, and token discovery.
 - **Pure Native Protocols (HTTP/1.1, HTTP/2, HTTP/3 & WebSocket)**:

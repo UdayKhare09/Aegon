@@ -71,6 +71,22 @@ Raw performance is only valuable when accompanied by rigorous protocol correctne
 
 ---
 
+## ⚡ Pluggable Engine Comparative Benchmarks (`io_uring` vs `epoll`)
+
+Aegon features a pluggable I/O engine architecture with zero-allocation stack awaiters. Below are comparative benchmarks executed on isolated physical CPU cores (Server on Cores 0,1; Client on Cores 2,3,4,5):
+
+| Protocol Suite | Workload | `io_uring` Engine (Linux 6.1+) | `epoll` Engine (Kernels <6.1, WSL2, Docker) | Epoll Efficiency |
+| :--- | :--- | :--- | :--- | :--- |
+| **HTTP/1.1 Plaintext** | `wrk -t4 -c100 -d10s` | **528,851 req/s** (203 µs) | **454,290 req/s** (212 µs) | **86.0%** |
+| **HTTP/1.1 TLS 1.3** | `wrk -t4 -c100 -d10s` | **398,003 req/s** (249 µs) | **350,448 req/s** (272 µs) | **88.0%** |
+| **HTTP/2 Multiplexing** | `h2load -t4 -c100 -m10` | **1,350,621 req/s** (682 µs) | **1,316,487 req/s** (737 µs) | **97.5%** |
+| **HTTP/3 (QUIC)** | `h2load --h3 -t4 -c50 -m10` | **836,720 req/s** (596 µs) | **873,842 req/s** (572 µs) | **104.4%** |
+
+> [!NOTE]
+> Even under traditional Linux `epoll`, Aegon achieves over **1.31 Million HTTP/2 req/s** and **873k HTTP/3 req/s** across just 2 physical CPU cores, providing top-tier throughput in virtualized or container environments where `io_uring` is unprivileged or unavailable.
+
+---
+
 ## 🔬 Hardware Architecture & Why Aegon Leads
 
 Aegon achieves these results through architectural innovations across kernel, CPU, and memory boundaries:

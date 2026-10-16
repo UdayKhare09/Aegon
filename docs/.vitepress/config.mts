@@ -104,10 +104,11 @@ export default defineConfig({
           text: 'Advanced / Internals',
           collapsed: true,
           items: [
-            { text: 'Task & Coroutines', link: '/guide/core/task' },
+            { text: 'I/O Engine & Backends', link: '/guide/core/io-engine' },
             { text: 'io_uring Subsystem', link: '/guide/core/io-uring' },
-            { text: 'BufferPool', link: '/guide/core/buffer-pool' },
+            { text: 'BufferPool (Dual-Mode)', link: '/guide/core/buffer-pool' },
             { text: 'EventLoop', link: '/guide/core/event-loop' },
+            { text: 'Task & Coroutines', link: '/guide/core/task' },
           ]
         }
       ]

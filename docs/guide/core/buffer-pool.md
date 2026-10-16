@@ -34,6 +34,22 @@ Sockets do not hold dedicated receive buffers while idle. Memory is consumed onl
 
 ---
 
+## Dual-Mode Architecture
+
+`BufferPool` operates seamlessly in two distinct modes depending on which `IoEngine` is active:
+
+1. **Linux Kernel `io_uring` Mode (`PBUF_RING`)**:
+   - Registered with the kernel via `io_uring_register_buf_ring`.
+   - The Linux kernel automatically selects an available buffer slot upon packet ingress.
+   - Buffer recycling executes via `io_uring_buf_ring_advance`.
+
+2. **User-Space Freelist Mode (`EpollEngine`)**:
+   - Operates entirely in user space without requiring kernel ring support.
+   - An internal zero-allocation freelist provides instant $O(1)$ buffer allocations.
+   - When socket readiness is signaled, `EpollEngine` reserves a buffer slot, receives into it, and returns the buffer identifier.
+
+---
+
 ## Public API Reference
 
 ```cpp
@@ -45,42 +61,45 @@ using aegon::core::BufferPool;
 ### Constructor
 
 ```cpp
-BufferPool(struct io_uring* ring, 
-           uint16_t bgid, 
+BufferPool(uint16_t bgid = 1, 
            uint16_t entries = 2048, 
            size_t buffer_size = 4096, 
            bool register_buffers = true);
 ```
 
-- `bgid`: Buffer Group Identifier referenced in `recv_multishot(fd, bgid)`.
+- `bgid`: Buffer Group Identifier referenced in `recv_provided(fd, bgid)`.
 - `entries`: Number of buffer slots (must be a power of 2).
 - `buffer_size`: Size of each buffer slot (default 4KB).
-- `register_buffers`: Pre-registers memory with the kernel ring for zero-copy fixed buffer transmission.
+- `register_buffers`: Pre-registers memory with the kernel ring for zero-copy fixed buffer transmission under `io_uring`.
 
 ---
 
-## Recycling Buffers
+## Receiving and Recycling Buffers
 
-When a multishot receive completion event is harvested:
+When an asynchronous receive operation completes:
 
 ```cpp
-RecvResult res = co_await ring.recv_multishot(client_fd, pool.bgid());
+RecvResult res = co_await loop.engine().recv_provided(client_fd, pool.bgid());
 
-// 1. Obtain zero-copy span slice into the kernel-populated buffer
-std::span<uint8_t> data = pool.get_buffer(res.bid, res.bytes);
+if (res.bytes > 0) {
+    // 1. Obtain zero-copy span slice into the populated buffer
+    std::span<uint8_t> data = pool.get_buffer(res.bid, res.bytes);
 
-// 2. Parse HTTP request from data...
-// ...
+    // 2. Parse request payload in-place...
+    // ...
 
-// 3. Recycle the buffer slot back to the kernel ring
-pool.return_buffer(res.bid);
+    // 3. Recycle the buffer slot back to the pool
+    pool.return_buffer(res.bid);
+}
 ```
 
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
-| `get_buffer(bid, bytes)` | `std::span<uint8_t>` | Returns memory slice for the buffer ID assigned by the kernel. |
-| `return_buffer(bid)` | `void` | Returns buffer slot back to the kernel ring (`io_uring_buf_ring_advance`). |
+| `get_buffer(bid, bytes)` | `std::span<uint8_t>` | Returns memory slice for the buffer ID assigned by the engine. |
+| `return_buffer(bid)` | `void` | Returns buffer slot back to the active engine (deferred kernel ring advance or freelist push). |
+| `alloc_buffer()` | `int` | Allocates a buffer slot from the freelist (used by `EpollEngine`). |
 | `bgid()` | `uint16_t` | Returns the assigned buffer group identifier. |
 | `buffer_size()` | `size_t` | Size in bytes of each individual buffer slot. |
 | `entries()` | `uint16_t` | Total number of buffer slots. |
+| `flush_returns()` | `void` | Flushes deferred buffer advances to the kernel ring at the end of the event loop iteration. |
 | `raw_memory()` | `uint8_t*` | Pointer to the base of the contiguous memory allocation. |

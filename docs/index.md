@@ -18,8 +18,8 @@ hero:
 
 features:
   - icon: ⚡
-    title: Linux-Native io_uring Engine
-    details: Complete kernel bypass and zero-contention runtime leveraging multishot accept, multishot recv, buffer rings, and single-issuer cooperative task work.
+    title: Pluggable io_uring & Epoll Engines
+    details: Complete kernel bypass with Linux 6.1+ io_uring multishot pipelines, and automatic high-speed epoll fallback for Linux < 6.1, WSL2, and Docker containers.
   - icon: 🔄
     title: Pure C++26 Coroutines
     details: Symmetric transfer coroutines via Task<T> with zero heap allocations in hot paths, eliminating thread pool exhaustion and context switching.
