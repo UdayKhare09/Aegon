@@ -6,8 +6,7 @@
 #include <cassert>
 #include <cstring>
 #include <thread>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include "core/OsSocket.h"
 
 using namespace aegon::http;
 using namespace aegon::data;
@@ -115,8 +114,8 @@ void test_live_server_loopback() {
 
     // Client requests
     auto send_http_request = [](std::string raw) -> std::string {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        assert(fd >= 0);
+        aegon::core::os_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+        assert(aegon::core::is_valid_socket(fd));
 
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -127,14 +126,14 @@ void test_live_server_loopback() {
         assert(connect_ret == 0);
         (void)connect_ret;
 
-        ssize_t s = send(fd, raw.data(), raw.size(), 0);
+        ssize_t s = send(fd, raw.data(), static_cast<int>(raw.size()), 0);
         assert(s == (ssize_t)raw.size());
         (void)s;
 
         char buf[2048] = {0};
         ssize_t r = recv(fd, buf, sizeof(buf) - 1, 0);
         assert(r > 0);
-        close(fd);
+        aegon::core::close_socket(fd);
         return std::string(buf, r);
     };
 
@@ -259,8 +258,8 @@ void test_live_server_loopback() {
 
     // 12. HTTP/1.1 16x Pipelined Requests Verification
     {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        assert(fd >= 0);
+        aegon::core::os_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+        assert(aegon::core::is_valid_socket(fd));
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(19876);
@@ -272,14 +271,14 @@ void test_live_server_loopback() {
         for (int i = 0; i < 16; ++i) {
             pipelined_req += "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n";
         }
-        ssize_t sent = write(fd, pipelined_req.data(), pipelined_req.size());
+        ssize_t sent = send(fd, pipelined_req.data(), static_cast<int>(pipelined_req.size()), 0);
         assert(sent == static_cast<ssize_t>(pipelined_req.size()));
 
         std::string pipelined_resp;
         char buf[4096];
         size_t count_200 = 0;
         while (count_200 < 16) {
-            ssize_t r = read(fd, buf, sizeof(buf));
+            ssize_t r = recv(fd, buf, sizeof(buf), 0);
             if (r <= 0) break;
             pipelined_resp.append(buf, r);
             count_200 = 0;
@@ -290,19 +289,19 @@ void test_live_server_loopback() {
             }
         }
         assert(count_200 == 16);
-        close(fd);
+        aegon::core::close_socket(fd);
         std::cout << "  -> HTTP/1.1 16x Pipelined requests batching: PASS (all 16 responses received)\n";
     }
 
     server.stop();
     // Connect dummy to wake up accept
-    int dummy = socket(AF_INET, SOCK_STREAM, 0);
+    aegon::core::os_socket_t dummy = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(19876);
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
     connect(dummy, (sockaddr*)&addr, sizeof(addr));
-    close(dummy);
+    aegon::core::close_socket(dummy);
 
     if (server_thread.joinable()) {
         server_thread.join();

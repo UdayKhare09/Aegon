@@ -12,7 +12,7 @@
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
 #include <nghttp3/nghttp3.h>
 #include <openssl/ssl.h>
-#include <netinet/in.h>
+#include "core/OsSocket.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -75,7 +75,7 @@ private:
     nghttp3_conn* h3conn_{nullptr};
     ngtcp2_crypto_conn_ref conn_ref_{};
 
-    int udp_fd_{-1};
+    core::os_socket_t udp_fd_{core::INVALID_OS_SOCKET};
     sockaddr_storage local_addr_{};
     socklen_t local_addr_len_{0};
     sockaddr_storage remote_addr_{};

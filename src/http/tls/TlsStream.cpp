@@ -3,7 +3,7 @@
 
 namespace aegon::http::tls {
 
-TlsStream::TlsStream(core::EventLoop& loop, int client_fd, SSL_CTX* ctx)
+TlsStream::TlsStream(core::EventLoop& loop, core::os_socket_t client_fd, SSL_CTX* ctx)
     : loop_(loop), client_fd_(client_fd) {
     ssl_ = SSL_new(ctx);
     in_bio_ = BIO_new(BIO_s_mem());

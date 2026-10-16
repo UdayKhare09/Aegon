@@ -4,6 +4,7 @@
 #include "http/Response.h"
 #include "http/Router.h"
 #include "core/EventLoop.h"
+#include "core/OsSocket.h"
 #include <nghttp2/nghttp2.h>
 #include <unordered_map>
 #include <unordered_set>
@@ -62,7 +63,7 @@ using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
 
 class Http2Connection {
 public:
-    Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
+    Http2Connection(core::EventLoop& loop, core::os_socket_t client_fd, const Router& router, 
                     const ServiceRegistry* services = nullptr, OutputSender sender = nullptr,
                     const ServerConfig& config = {});
     ~Http2Connection();
@@ -125,7 +126,7 @@ private:
     core::Task<void> push_sse_frame(Http2Stream* stream, std::string frame);
 
     core::EventLoop& loop_;
-    int client_fd_;
+    core::os_socket_t client_fd_;
     const Router& router_;
     const ServiceRegistry* services_{nullptr};
 

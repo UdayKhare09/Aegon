@@ -2,15 +2,22 @@
 #include "http/v2/Http2Frame.h"
 #include "http/websocket/WebSocketHandshake.h"
 #include "http/websocket/WebSocketConnection.h"
+#include "core/OsSocket.h"
+#if defined(_WIN32)
+#include <io.h>
+#include <fcntl.h>
+#define O_BINARY _O_BINARY
+#else
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 #include <cerrno>
 #include <algorithm>
 
 namespace aegon::http::v1 {
 
-Http1Connection::Http1Connection(core::EventLoop& loop, int client_fd, const Router& router,
+Http1Connection::Http1Connection(core::EventLoop& loop, core::os_socket_t client_fd, const Router& router,
                                  const ServiceRegistry* services, const ServerConfig& config)
     : loop_(loop), client_fd_(client_fd), router_(router), services_(services), config_(config) {}
 
@@ -74,10 +81,36 @@ std::optional<Response> Http1Connection::validate_websocket_upgrade(const Reques
     return std::nullopt;
 }
 
-core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, int client_fd,
+core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, core::os_socket_t client_fd,
                                                         const std::string& file_path, size_t file_size) {
     if (file_size == 0) co_return true;
 
+#if defined(_WIN32)
+    int file_fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
+    if (file_fd < 0) co_return false;
+
+    constexpr size_t CHUNK_SIZE = 65536;
+    std::string buf(CHUNK_SIZE, '\0');
+    size_t remaining = file_size;
+    bool ok = true;
+
+    while (remaining > 0) {
+        size_t to_read = std::min(remaining, CHUNK_SIZE);
+        int n_read = ::_read(file_fd, buf.data(), static_cast<unsigned int>(to_read));
+        if (n_read <= 0) {
+            ok = false;
+            break;
+        }
+        int sent = co_await loop.engine().send(client_fd, buf.data(), static_cast<size_t>(n_read));
+        if (sent <= 0) {
+            ok = false;
+            break;
+        }
+        remaining -= static_cast<size_t>(sent);
+    }
+    ::_close(file_fd);
+    co_return ok;
+#else
     int file_fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     if (file_fd < 0) co_return false;
 
@@ -115,6 +148,7 @@ core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, i
     ::close(pipefd[1]);
     (void)(co_await loop.engine().close(file_fd));
     co_return ok;
+#endif
 }
 
 core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
@@ -274,7 +308,7 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
 
             struct SseContext {
                 core::EventLoop& loop;
-                int client_fd;
+                core::os_socket_t client_fd;
                 Response& res;
                 std::string& resp_batch;
                 bool& sse_headers_sent;

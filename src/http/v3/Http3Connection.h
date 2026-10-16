@@ -5,12 +5,12 @@
 #include "http/Router.h"
 #include "core/Task.h"
 #include "core/EventLoop.h"
+#include "core/OsSocket.h"
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
 #include <nghttp3/nghttp3.h>
 #include <openssl/ssl.h>
-#include <netinet/in.h>
 #include <unordered_map>
 #include <memory>
 #include <string>
@@ -82,7 +82,7 @@ struct Http3Stream {
 
 class Http3Connection {
 public:
-    Http3Connection(core::EventLoop& loop, int udp_fd, const sockaddr_storage& remote_addr,
+    Http3Connection(core::EventLoop& loop, core::os_socket_t udp_fd, const sockaddr_storage& remote_addr,
                     socklen_t remote_addr_len, const Router& router, SSL_CTX* ssl_ctx,
                     const ServiceRegistry* services = nullptr,
                     const ServerConfig& config = {});
@@ -159,7 +159,7 @@ private:
     core::Task<void> dispatch_pending_requests();
 
     core::EventLoop& loop_;
-    int udp_fd_;
+    core::os_socket_t udp_fd_{core::INVALID_OS_SOCKET};
     sockaddr_storage local_addr_{};
     socklen_t local_addr_len_{sizeof(sockaddr_storage)};
     sockaddr_storage remote_addr_{};

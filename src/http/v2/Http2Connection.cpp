@@ -54,7 +54,7 @@ ssize_t data_source_read_cb(nghttp2_session*, int32_t stream_id,
 
 } // anonymous namespace
 
-Http2Connection::Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
+Http2Connection::Http2Connection(core::EventLoop& loop, core::os_socket_t client_fd, const Router& router, 
                                  const ServiceRegistry* services, OutputSender sender,
                                  const ServerConfig& config)
     : loop_(loop), client_fd_(client_fd), router_(router), services_(services), sender_(std::move(sender)),

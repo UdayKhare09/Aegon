@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Resp3.h"
+#include "core/OsSocket.h"
 #include "core/engine/IoEngine.h"
 #include "core/Task.h"
 #include <string>
@@ -35,8 +36,8 @@ public:
     core::Task<std::vector<RespValue>> execute_pipeline(const std::vector<std::vector<std::string_view>>& batch);
 
     void close();
-    [[nodiscard]] bool is_connected() const noexcept { return fd_ >= 0; }
-    [[nodiscard]] int fd() const noexcept { return fd_; }
+    [[nodiscard]] bool is_connected() const noexcept { return fd_ != core::INVALID_OS_SOCKET; }
+    [[nodiscard]] core::os_socket_t fd() const noexcept { return fd_; }
     [[nodiscard]] const RedisNodeConfig& config() const noexcept { return config_; }
 
 private:
@@ -44,7 +45,7 @@ private:
 
     core::IoEngine& engine_;
     RedisNodeConfig config_;
-    int fd_{-1};
+    core::os_socket_t fd_{core::INVALID_OS_SOCKET};
     std::string read_buffer_;
 };
 

@@ -1,4 +1,7 @@
 #include "RedisConnection.h"
+#if defined(_WIN32)
+#include <ws2tcpip.h>
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -6,9 +9,12 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
+#endif
 #include <cstring>
 
 namespace aegon::data::redis {
+
+using namespace aegon::core;
 
 RedisConnection::RedisConnection(core::IoEngine& engine, RedisNodeConfig config)
     : engine_(engine), config_(std::move(config)) {}
@@ -20,7 +26,7 @@ RedisConnection::~RedisConnection() {
 RedisConnection::RedisConnection(RedisConnection&& other) noexcept
     : engine_(other.engine_), config_(std::move(other.config_)), 
       fd_(other.fd_), read_buffer_(std::move(other.read_buffer_)) {
-    other.fd_ = -1;
+    other.fd_ = INVALID_OS_SOCKET;
 }
 
 RedisConnection& RedisConnection::operator=(RedisConnection&& other) noexcept {
@@ -29,15 +35,15 @@ RedisConnection& RedisConnection::operator=(RedisConnection&& other) noexcept {
         config_ = std::move(other.config_);
         fd_ = other.fd_;
         read_buffer_ = std::move(other.read_buffer_);
-        other.fd_ = -1;
+        other.fd_ = INVALID_OS_SOCKET;
     }
     return *this;
 }
 
 void RedisConnection::close() {
-    if (fd_ >= 0) {
-        ::close(fd_);
-        fd_ = -1;
+    if (fd_ != INVALID_OS_SOCKET) {
+        close_socket(fd_);
+        fd_ = INVALID_OS_SOCKET;
     }
     read_buffer_.clear();
 }
@@ -56,27 +62,31 @@ core::Task<bool> RedisConnection::connect() {
         co_return false;
     }
 
-    int sock = -1;
+    os_socket_t sock = INVALID_OS_SOCKET;
     for (struct addrinfo* p = res; p != nullptr; p = p->ai_next) {
+#if defined(_WIN32)
+        sock = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+#else
         sock = ::socket(p->ai_family, p->ai_socktype | SOCK_NONBLOCK | SOCK_CLOEXEC, p->ai_protocol);
-        if (sock < 0) continue;
+#endif
+        if (sock == INVALID_OS_SOCKET) continue;
 
         int flag = 1;
-        setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+        setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&flag), sizeof(flag));
 
-        int conn_res = co_await engine_.connect(sock, p->ai_addr, p->ai_addrlen);
+        int conn_res = co_await engine_.connect(sock, p->ai_addr, static_cast<int>(p->ai_addrlen));
         if (conn_res >= 0) {
             fd_ = sock;
             break;
         }
 
-        ::close(sock);
-        sock = -1;
+        close_socket(sock);
+        sock = INVALID_OS_SOCKET;
     }
 
     freeaddrinfo(res);
 
-    if (fd_ < 0) {
+    if (fd_ == INVALID_OS_SOCKET) {
         co_return false;
     }
 

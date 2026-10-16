@@ -4,10 +4,12 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#if !defined(_WIN32)
 #include <poll.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
+#endif
 #include <cctype>
 #include <algorithm>
 
@@ -71,7 +73,7 @@ Http2ClientSession::Http2ClientSession(Http2ClientSession&& other) noexcept
       ssl_ctx_(other.ssl_ctx_), ssl_(other.ssl_), session_(other.session_),
       closed_(other.closed_), streams_(std::move(other.streams_)),
       current_stream_id_(other.current_stream_id_) {
-    other.fd_ = -1;
+    other.fd_ = core::INVALID_OS_SOCKET;
     other.ssl_ = nullptr;
     other.ssl_ctx_ = nullptr;
     other.session_ = nullptr;
@@ -91,7 +93,7 @@ Http2ClientSession& Http2ClientSession::operator=(Http2ClientSession&& other) no
         streams_ = std::move(other.streams_);
         current_stream_id_ = other.current_stream_id_;
 
-        other.fd_ = -1;
+        other.fd_ = core::INVALID_OS_SOCKET;
         other.ssl_ = nullptr;
         other.ssl_ctx_ = nullptr;
         other.session_ = nullptr;
@@ -117,9 +119,9 @@ void Http2ClientSession::close() {
         SSL_CTX_free(ssl_ctx_);
         ssl_ctx_ = nullptr;
     }
-    if (fd_ >= 0) {
-        ::close(fd_);
-        fd_ = -1;
+    if (core::is_valid_socket(fd_)) {
+        core::close_socket(fd_);
+        fd_ = core::INVALID_OS_SOCKET;
     }
     streams_.clear();
 }
@@ -137,19 +139,27 @@ bool Http2ClientSession::connect_socket(const Url& url) {
     int rc = ::getaddrinfo(host_str.c_str(), port_str.c_str(), &hints, &res);
     if (rc != 0 || !res) return false;
 
+#if defined(_WIN32)
+    fd_ = ::socket(res->ai_family, SOCK_STREAM, IPPROTO_TCP);
+    if (!core::is_valid_socket(fd_)) {
+        ::freeaddrinfo(res);
+        return false;
+    }
+#else
     fd_ = ::socket(res->ai_family, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
     if (fd_ < 0) {
         ::freeaddrinfo(res);
         return false;
     }
+#endif
 
     int one = 1;
-    ::setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    ::setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one), sizeof(one));
 
-    if (::connect(fd_, res->ai_addr, res->ai_addrlen) != 0) {
+    if (::connect(fd_, res->ai_addr, static_cast<socklen_t>(res->ai_addrlen)) != 0) {
         ::freeaddrinfo(res);
-        ::close(fd_);
-        fd_ = -1;
+        core::close_socket(fd_);
+        fd_ = core::INVALID_OS_SOCKET;
         return false;
     }
 
@@ -191,7 +201,7 @@ bool Http2ClientSession::init_tls(const Url& url) {
         SSL_set_tlsext_host_name(ssl_, host_str.c_str());
     }
 
-    SSL_set_fd(ssl_, fd_);
+    SSL_set_fd(ssl_, static_cast<int>(fd_));
 
     if (SSL_connect(ssl_) <= 0) {
         return false;
@@ -299,21 +309,21 @@ ssize_t Http2ClientSession::on_data_source_read(int32_t stream_id, uint8_t* buf,
 }
 
 ssize_t Http2ClientSession::write_wire_sync(const void* data, size_t len) {
-    if (closed_ || fd_ < 0) return -1;
+    if (closed_ || !core::is_valid_socket(fd_)) return -1;
     if (is_tls_) {
         return SSL_write(ssl_, data, static_cast<int>(len));
     }
-    return ::send(fd_, data, len, 0);
+    return ::send(fd_, reinterpret_cast<const char*>(data), static_cast<int>(len), 0);
 }
 
 ssize_t Http2ClientSession::read_wire_sync(void* data, size_t len, int timeout_ms) {
-    if (closed_ || fd_ < 0) return -1;
+    if (closed_ || !core::is_valid_socket(fd_)) return -1;
 
     struct pollfd pfd{};
     pfd.fd = fd_;
     pfd.events = POLLIN;
 
-    int pr = ::poll(&pfd, 1, timeout_ms);
+    int pr = core::poll_sockets(&pfd, 1, timeout_ms);
     if (pr <= 0 || !(pfd.revents & POLLIN)) {
         return pr == 0 ? 0 : -1;
     }
@@ -322,7 +332,7 @@ ssize_t Http2ClientSession::read_wire_sync(void* data, size_t len, int timeout_m
         int n = SSL_read(ssl_, data, static_cast<int>(len));
         return n;
     }
-    return ::recv(fd_, data, len, 0);
+    return ::recv(fd_, reinterpret_cast<char*>(data), static_cast<int>(len), 0);
 }
 
 bool Http2ClientSession::flush_outbound_sync() {
@@ -350,7 +360,7 @@ bool Http2ClientSession::flush_outbound_sync() {
 }
 
 core::Task<ssize_t> Http2ClientSession::write_wire_async(const void* data, size_t len, core::EventLoop& loop) {
-    if (closed_ || fd_ < 0) co_return -1;
+    if (closed_ || !core::is_valid_socket(fd_)) co_return -1;
     if (is_tls_) {
         // Use synchronous SSL_write on non-blocking fd with loop yield if needed
         int n = SSL_write(ssl_, data, static_cast<int>(len));
@@ -361,7 +371,7 @@ core::Task<ssize_t> Http2ClientSession::write_wire_async(const void* data, size_
 }
 
 core::Task<ssize_t> Http2ClientSession::read_wire_async(void* data, size_t len, core::EventLoop& loop) {
-    if (closed_ || fd_ < 0) co_return -1;
+    if (closed_ || !core::is_valid_socket(fd_)) co_return -1;
     if (is_tls_) {
         int n = SSL_read(ssl_, data, static_cast<int>(len));
         co_return n;

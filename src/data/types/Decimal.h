@@ -14,8 +14,14 @@ namespace aegon::data::types {
 
 namespace detail {
 
-consteval __int128_t compute_pow10(uint8_t n) noexcept {
-    __int128_t r = 1;
+#if defined(__SIZEOF_INT128__) || defined(__GNUC__) || defined(__clang__)
+using int128_t = __int128_t;
+#else
+using int128_t = int64_t;
+#endif
+
+consteval int128_t compute_pow10(uint8_t n) noexcept {
+    int128_t r = 1;
     for (uint8_t i = 0; i < n; ++i) r *= 10;
     return r;
 }
@@ -31,26 +37,32 @@ consteval __int128_t compute_pow10(uint8_t n) noexcept {
 template <uint8_t Precision = 18, uint8_t Scale = 4>
 class Decimal {
     static_assert(Scale <= Precision, "Scale cannot exceed Precision");
+#if defined(__SIZEOF_INT128__) || defined(__GNUC__) || defined(__clang__)
     static_assert(Precision <= 38, "Max 128-bit decimal precision is 38 digits");
+#else
+    static_assert(Precision <= 18, "Max decimal precision on this platform is 18 digits");
+#endif
 
 public:
+    using raw_type = detail::int128_t;
+
     static constexpr uint8_t PRECISION = Precision;
     static constexpr uint8_t SCALE = Scale;
-    static constexpr __int128_t SCALE_FACTOR = detail::compute_pow10(Scale);
+    static constexpr raw_type SCALE_FACTOR = detail::compute_pow10(Scale);
 
-    __int128_t raw_{0}; // Scaled value: actual_value * 10^Scale
+    raw_type raw_{0}; // Scaled value: actual_value * 10^Scale
 
     constexpr Decimal() noexcept = default;
 
-    constexpr explicit Decimal(__int128_t raw, bool /*internal_raw*/) noexcept
+    constexpr explicit Decimal(raw_type raw, bool /*internal_raw*/) noexcept
         : raw_(raw) {}
 
     template <std::integral Int>
     constexpr Decimal(Int val) noexcept
-        : raw_(static_cast<__int128_t>(val) * SCALE_FACTOR) {}
+        : raw_(static_cast<raw_type>(val) * SCALE_FACTOR) {}
 
     constexpr explicit Decimal(double val) noexcept
-        : raw_(static_cast<__int128_t>(std::round(val * static_cast<double>(SCALE_FACTOR)))) {}
+        : raw_(static_cast<raw_type>(std::round(val * static_cast<double>(SCALE_FACTOR)))) {}
 
     explicit Decimal(std::string_view s) {
         if (auto parsed = from_string(s)) {
@@ -60,7 +72,7 @@ public:
         }
     }
 
-    [[nodiscard]] constexpr __int128_t raw_value() const noexcept { return raw_; }
+    [[nodiscard]] constexpr raw_type raw_value() const noexcept { return raw_; }
     [[nodiscard]] constexpr bool is_zero() const noexcept { return raw_ == 0; }
     [[nodiscard]] constexpr bool is_negative() const noexcept { return raw_ < 0; }
     [[nodiscard]] constexpr bool is_positive() const noexcept { return raw_ > 0; }
@@ -84,7 +96,7 @@ public:
         }
 
         bool neg = raw_ < 0;
-        __int128_t val = neg ? -raw_ : raw_;
+        raw_type val = neg ? -raw_ : raw_;
 
         std::string digits;
         while (val > 0) {
@@ -128,7 +140,7 @@ public:
 
         if (idx >= s.size()) return std::nullopt;
 
-        __int128_t integer_part = 0;
+        raw_type integer_part = 0;
         bool has_integer = false;
 
         while (idx < s.size() && s[idx] >= '0' && s[idx] <= '9') {
@@ -137,7 +149,7 @@ public:
             idx++;
         }
 
-        __int128_t frac_part = 0;
+        raw_type frac_part = 0;
         uint8_t frac_digits = 0;
 
         if (idx < s.size() && s[idx] == '.') {
@@ -159,7 +171,7 @@ public:
             frac_digits++;
         }
 
-        __int128_t total = integer_part * SCALE_FACTOR + frac_part;
+        raw_type total = integer_part * SCALE_FACTOR + frac_part;
         return Decimal(neg ? -total : total, true);
     }
 
@@ -232,7 +244,11 @@ struct std::hash<aegon::data::types::Decimal<P, S>> {
     [[nodiscard]] size_t operator()(const aegon::data::types::Decimal<P, S>& d) const noexcept {
         auto raw = d.raw_value();
         uint64_t lo = static_cast<uint64_t>(raw);
+#if defined(__SIZEOF_INT128__) || defined(__GNUC__) || defined(__clang__)
         uint64_t hi = static_cast<uint64_t>(raw >> 64);
+#else
+        uint64_t hi = static_cast<uint64_t>(static_cast<uint64_t>(raw) >> 32);
+#endif
         return std::hash<uint64_t>{}(lo ^ (hi * 0x9e3779b97f4a7c15ULL));
     }
 };

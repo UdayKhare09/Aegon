@@ -6,7 +6,23 @@
 #include <span>
 #include <array>
 #include <cstring>
+#if defined(_WIN32)
+#include <bit>
+#ifndef htobe16
+#define htobe16(x) (std::endian::native == std::endian::little ? std::byteswap(static_cast<uint16_t>(x)) : static_cast<uint16_t>(x))
+#endif
+#ifndef htobe64
+#define htobe64(x) (std::endian::native == std::endian::little ? std::byteswap(static_cast<uint64_t>(x)) : static_cast<uint64_t>(x))
+#endif
+#ifndef be16toh
+#define be16toh(x) (std::endian::native == std::endian::little ? std::byteswap(static_cast<uint16_t>(x)) : static_cast<uint16_t>(x))
+#endif
+#ifndef be64toh
+#define be64toh(x) (std::endian::native == std::endian::little ? std::byteswap(static_cast<uint64_t>(x)) : static_cast<uint64_t>(x))
+#endif
+#else
 #include <endian.h>
+#endif
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
 #elif defined(__ARM_NEON) || defined(__aarch64__)

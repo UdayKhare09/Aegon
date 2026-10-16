@@ -1,6 +1,10 @@
 #include "PostgresDriver.h"
 #include <libpq-fe.h>
+#if defined(_WIN32)
+#include "core/OsSocket.h"
+#else
 #include <poll.h>
+#endif
 #include <stdexcept>
 #include <utility>
 #include <cstdlib>
@@ -154,16 +158,28 @@ PostgresConnection::PostgresConnection(const std::string& conninfo, bool pipelin
         prepared_map_[def.sql] = def.name;
     }
 
-    PQsetnonblocking(conn_, 1);
-    fd_ = PQsocket(conn_);
+    int raw_sock = PQsocket(conn_);
+    if (raw_sock >= 0) {
+        fd_ = static_cast<core::os_socket_t>(static_cast<uintptr_t>(static_cast<unsigned int>(raw_sock)));
+    } else {
+        fd_ = core::INVALID_OS_SOCKET;
+    }
 
+#if !defined(_WIN32)
     if (pipelined_ && core::EventLoop::current() != nullptr) {
+        PQsetnonblocking(conn_, 1);
         if (PQenterPipelineMode(conn_) != 1) {
             pipelined_ = false;
+            PQsetnonblocking(conn_, 0);
         }
     } else {
         pipelined_ = false;
+        PQsetnonblocking(conn_, 0);
     }
+#else
+    pipelined_ = false;
+    PQsetnonblocking(conn_, 0);
+#endif
 }
 
 PostgresConnection::~PostgresConnection() {

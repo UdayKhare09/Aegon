@@ -4,7 +4,7 @@
 
 namespace aegon::http::websocket {
 
-WebSocketConnection::WebSocketConnection(core::EventLoop& loop, int client_fd, std::string path,
+WebSocketConnection::WebSocketConnection(core::EventLoop& loop, core::os_socket_t client_fd, std::string path,
                                          WebSocketHandler handler,
                                          WebSocketEchoHandler echo_handler,
                                          const WebSocketConfig& config)
@@ -15,7 +15,7 @@ WebSocketConnection::WebSocketConnection(core::EventLoop& loop, int client_fd, s
 }
 
 core::Task<int> WebSocketConnection::write_frame(std::span<const uint8_t> header, std::string_view payload) {
-    if (!is_open_ || client_fd_ < 0) co_return -1;
+    if (!is_open_ || !core::is_valid_socket(client_fd_)) co_return -1;
 
     if (header.size() + payload.size() <= 4096) {
         char buf[4096];
@@ -51,7 +51,7 @@ core::Task<int> WebSocketConnection::write_frame(std::span<const uint8_t> header
 }
 
 core::Task<int> WebSocketConnection::write_raw(std::string_view bytes) {
-    if (!is_open_ || client_fd_ < 0 || bytes.empty()) co_return -1;
+    if (!is_open_ || !core::is_valid_socket(client_fd_) || bytes.empty()) co_return -1;
     int sent = co_await loop_.engine().send(client_fd_, bytes);
     if (sent == static_cast<int>(bytes.size())) [[likely]] {
         co_return sent;
@@ -78,7 +78,7 @@ core::Task<void> WebSocketConnection::run(core::MultishotRecvStream stream, std:
         if (!ok || session_.is_closed()) {
             is_open_ = false;
             (void)(co_await loop_.engine().close(client_fd_));
-            client_fd_ = -1;
+            client_fd_ = core::INVALID_OS_SOCKET;
             co_return;
         }
     }
@@ -104,9 +104,9 @@ core::Task<void> WebSocketConnection::run(core::MultishotRecvStream stream, std:
     }
 
     is_open_ = false;
-    if (client_fd_ >= 0) {
+    if (core::is_valid_socket(client_fd_)) {
         (void)(co_await loop_.engine().close(client_fd_));
-        client_fd_ = -1;
+        client_fd_ = core::INVALID_OS_SOCKET;
     }
 }
 

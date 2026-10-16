@@ -267,6 +267,18 @@ core::Task<void> run_all_tests(core::IoEngine& ring) {
         .port = 6379,
         .password = "redis_secret"
     };
+
+    // Probe if Redis server is reachable
+    {
+        RedisConnection probe(ring, standalone_cfg);
+        bool live = co_await probe.connect();
+        if (!live) {
+            std::cout << "[SKIPPED] Live Redis server is not reachable at 127.0.0.1:6379.\n";
+            std::cout << "          Start Redis to run live advanced Redis suite.\n";
+            co_return;
+        }
+    }
+
     RedisClient standalone(ring, standalone_cfg, 4);
 
     co_await test_lua_scripting(standalone);
@@ -281,6 +293,9 @@ core::Task<void> run_all_tests(core::IoEngine& ring) {
 }
 
 int main() {
+#if defined(_WIN32)
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
     core::EventLoop loop(256);
 
     bool completed = false;

@@ -5,12 +5,19 @@
 #include "http/tls/TlsContext.h"
 #include "http/tls/TlsStream.h"
 #include "http/v3/Http3Server.h"
+#include "core/OsSocket.h"
 #include "log/Logger.h"
+#if defined(_WIN32)
+#include <io.h>
+#define R_OK 4
+#define access _access
+#else
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#endif
 #include <stdexcept>
 #include <iostream>
 #include <algorithm>
@@ -80,21 +87,28 @@ Server& Server::enable_tls(const std::string& cert_file, const std::string& key_
     return *this;
 }
 
-int Server::create_listen_socket(uint16_t port, const std::string& host) {
+core::os_socket_t Server::create_listen_socket(uint16_t port, const std::string& host) {
     if (port == 0) {
         throw std::runtime_error("Server configuration error: port must be greater than 0 (1-65535)");
     }
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
+    core::init_sockets();
+#if defined(_WIN32)
+    core::os_socket_t fd = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+#else
+    core::os_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
+#endif
+    if (fd == core::INVALID_OS_SOCKET) {
         throw std::runtime_error("Failed to create TCP socket");
     }
 
     int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
+#if defined(SO_REUSEPORT)
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&opt), sizeof(opt));
+#endif
     if (config_.tcp.nodelay) {
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&opt), sizeof(opt));
     }
 
     sockaddr_in addr{};
@@ -105,19 +119,19 @@ int Server::create_listen_socket(uint16_t port, const std::string& host) {
     }
 
     if (bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        close(fd);
+        core::close_socket(fd);
         throw std::runtime_error("Failed to bind socket to port " + std::to_string(port));
     }
 
     if (::listen(fd, 4096) < 0) {
-        close(fd);
+        core::close_socket(fd);
         throw std::runtime_error("Failed to listen on socket");
     }
 
     return fd;
 }
 
-core::Task<void> Server::run_h2_loop(core::EventLoop& loop, int client_fd, v2::Http2Connection& h2,
+core::Task<void> Server::run_h2_loop(core::EventLoop& loop, core::os_socket_t client_fd, v2::Http2Connection& h2,
                                      std::string initial_data,
                                      std::optional<core::MultishotRecvStream> existing_stream) {
     if (!initial_data.empty()) {
@@ -150,7 +164,7 @@ core::Task<void> Server::run_h2_loop(core::EventLoop& loop, int client_fd, v2::H
     (void)(co_await loop.engine().close(client_fd));
 }
 
-core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data,
+core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, core::os_socket_t client_fd, std::string initial_data,
                                                   std::optional<core::MultishotRecvStream> existing_stream) {
     v2::Http2Connection h2(loop, client_fd, router_, services_.get(), nullptr, config_);
     bool ok = co_await h2.init();
@@ -162,7 +176,7 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
     co_await run_h2_loop(loop, client_fd, h2, std::move(initial_data), std::move(existing_stream));
 }
 
-core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings,
+core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, core::os_socket_t client_fd, Request req, std::string http2_settings,
                                               std::string initial_data,
                                               std::optional<core::MultishotRecvStream> existing_stream) {
     v2::Http2Connection h2(loop, client_fd, router_, services_.get(), nullptr, config_);
@@ -181,7 +195,7 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_
     co_await run_h2_loop(loop, client_fd, h2, std::move(initial_data), std::move(existing_stream));
 }
 
-core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client_fd, uint16_t port) {
+core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, core::os_socket_t client_fd, uint16_t port) {
     tls::TlsStream tls_stream(loop, client_fd, tls_ctx_->native_handle());
     bool ok = co_await tls_stream.handshake();
     if (!ok) {
@@ -226,48 +240,54 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
     (void)(co_await loop.engine().close(client_fd));
 }
 
-core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd) {
+core::Task<void> Server::handle_connection(core::EventLoop& loop, core::os_socket_t client_fd) {
     v1::Http1Connection h1(loop, client_fd, router_, services_.get(), config_);
     co_await h1.run(
-        [this, &loop](int fd, std::string preface_data) -> core::Task<void> {
+        [this, &loop](core::os_socket_t fd, std::string preface_data) -> core::Task<void> {
             co_await handle_http2_connection(loop, fd, std::move(preface_data));
         },
-        [this, &loop](int fd, Request req, std::string settings, std::string trailing) -> core::Task<void> {
+        [this, &loop](core::os_socket_t fd, Request req, std::string settings, std::string trailing) -> core::Task<void> {
             co_await handle_http2_upgrade(loop, fd, std::move(req), std::move(settings), std::move(trailing));
         }
     );
 }
 
 
-core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, uint16_t port, bool is_tls) {
+core::Task<void> Server::accept_loop(core::EventLoop& loop, core::os_socket_t listen_fd, uint16_t port, bool is_tls) {
     while (running_) {
         auto stream = loop.engine().accept_multishot(listen_fd);
         while (running_) {
             auto accept_res = co_await stream.next();
-            if (accept_res.fd < 0) {
+            if (accept_res.fd == core::INVALID_OS_SOCKET || accept_res.fd < 0) {
                 // Multishot accept stream disarmed (e.g. transient ECONNABORTED).
                 // Break inner loop to re-arm multishot accept stream.
                 break;
             }
             if (config_.tcp.nodelay) {
                 int nodelay = 1;
-                ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+                ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
             }
             if (config_.tcp.keepalive) {
                 int keepalive = 1;
-                ::setsockopt(accept_res.fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+                ::setsockopt(accept_res.fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&keepalive), sizeof(keepalive));
+#if defined(TCP_KEEPIDLE)
                 if (config_.tcp.keepidle > 0) {
                     int keepidle = config_.tcp.keepidle;
-                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
+                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPIDLE, reinterpret_cast<const char*>(&keepidle), sizeof(keepidle));
                 }
+#endif
+#if defined(TCP_KEEPINTVL)
                 if (config_.tcp.keepintvl > 0) {
                     int keepintvl = config_.tcp.keepintvl;
-                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPINTVL, reinterpret_cast<const char*>(&keepintvl), sizeof(keepintvl));
                 }
+#endif
+#if defined(TCP_KEEPCNT)
                 if (config_.tcp.keepcnt > 0) {
                     int keepcnt = config_.tcp.keepcnt;
-                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPCNT, reinterpret_cast<const char*>(&keepcnt), sizeof(keepcnt));
                 }
+#endif
             }
             if (is_tls && tls_ctx_) {
                 loop.spawn(handle_tls_connection(loop, accept_res.fd, port));
@@ -282,13 +302,13 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
                             std::optional<int> cpu_core,
                             bool spawn_background) {
     struct ActiveListener {
-        int fd;
+        core::os_socket_t fd;
         uint16_t port;
         bool is_tls;
     };
     std::vector<ActiveListener> thread_listeners;
     for (const auto& l : active_listeners) {
-        int fd = create_listen_socket(l.port, l.host);
+        core::os_socket_t fd = create_listen_socket(l.port, l.host);
         thread_listeners.push_back({fd, l.port, l.tls});
     }
 
@@ -345,12 +365,14 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
     }
     local_h3_servers.clear();
     for (const auto& al : thread_listeners) {
-        close(al.fd);
+        core::close_socket(al.fd);
     }
 }
 
 void Server::run() {
+#if defined(SIGPIPE)
     ::signal(SIGPIPE, SIG_IGN);
+#endif
     running_ = true;
 
     // 1. Freeze service registry for zero-lock hot-path lookups during request handling
@@ -409,6 +431,7 @@ void Server::run(size_t threads) {
         workers_.emplace_back([this, i, active_listeners]() {
             try {
                 std::optional<int> core_id;
+#if defined(__linux__)
                 cpu_set_t current_mask;
                 if (pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &current_mask) == 0) {
                     std::vector<int> allowed;
@@ -419,6 +442,9 @@ void Server::run(size_t threads) {
                         core_id = allowed[i];
                     }
                 }
+#elif defined(_WIN32)
+                core_id = static_cast<int>(i % std::max(1u, std::thread::hardware_concurrency()));
+#endif
 
                 run_event_loop(active_listeners, core_id, i == 0);
             } catch (const std::exception& e) {

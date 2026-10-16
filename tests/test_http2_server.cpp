@@ -5,8 +5,7 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include "core/OsSocket.h"
 
 using namespace aegon::http;
 using namespace aegon::data;
@@ -105,13 +104,13 @@ int main() {
 
     server.stop();
     // Wake up accept loop
-    int dummy = socket(AF_INET, SOCK_STREAM, 0);
+    aegon::core::os_socket_t dummy = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(PORT);
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
     connect(dummy, (sockaddr*)&addr, sizeof(addr));
-    close(dummy);
+    aegon::core::close_socket(dummy);
 
     if (server_thread.joinable()) {
         server_thread.join();

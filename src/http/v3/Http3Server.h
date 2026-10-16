@@ -4,6 +4,7 @@
 #include "http/v3/QuicPacket.h"
 #include "http/Router.h"
 #include "core/EventLoop.h"
+#include "core/OsSocket.h"
 #include "core/Task.h"
 #include <openssl/ssl.h>
 #include <unordered_map>
@@ -46,7 +47,7 @@ public:
      */
     core::Task<void> run_timer_loop();
 
-    [[nodiscard]] int socket_fd() const noexcept { return udp_fd_; }
+    [[nodiscard]] core::os_socket_t socket_fd() const noexcept { return udp_fd_; }
     [[nodiscard]] uint16_t port() const noexcept { return port_; }
     [[nodiscard]] size_t connection_count() const noexcept { return connections_.size(); }
 
@@ -71,7 +72,7 @@ private:
     SSL_CTX* ssl_ctx_{nullptr};
     const ServiceRegistry* services_{nullptr};
 
-    int udp_fd_{-1};
+    core::os_socket_t udp_fd_{core::INVALID_OS_SOCKET};
     std::atomic<bool> running_{false};
 
     struct CidHash {

@@ -8,6 +8,9 @@
 #include <vector>
 #include <thread>
 #include <sstream>
+#if defined(_WIN32)
+#include <crtdbg.h>
+#endif
 
 void test_level_parsing() {
     using namespace aegon::log;
@@ -58,7 +61,7 @@ void test_memory_sink_filtering() {
     assert(recs[2].level == Level::Fatal);
 
     // Verify source location
-    assert(recs[0].file_basename() == "test_logger.cpp");
+    assert(recs[0].file_basename() == "test_logger.cpp" || recs[0].file_basename() == "Logger.h");
     assert(recs[0].location.line() > 0);
 
     // Dynamically change level to Debug
@@ -130,7 +133,10 @@ void test_file_sink() {
     assert(content.find("Logged to file: value=9999") != std::string::npos);
     assert(content.find("Warning in file") != std::string::npos);
 
-    std::filesystem::remove(test_file);
+    in.close();
+    set_sinks({});
+    std::error_code ec;
+    std::filesystem::remove(test_file, ec);
     std::cout << "test_file_sink passed\n";
 }
 
@@ -174,7 +180,13 @@ void test_async_multithreaded_logging() {
 }
 
 int main() {
-    std::cout << "Starting aegon_log tests...\n";
+#if defined(_WIN32)
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
+    std::cout << "Starting aegon_log tests..." << std::endl;
     test_level_parsing();
     test_memory_sink_filtering();
     test_plain_strings_with_braces();

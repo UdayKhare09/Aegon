@@ -1,10 +1,21 @@
 #include "core/EventLoop.h"
 #include "log/Logger.h"
+#include <stdexcept>
+#include <system_error>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
-#include <stdexcept>
-#include <system_error>
+#endif
 
 namespace aegon::core {
 
@@ -33,16 +44,26 @@ EventLoop::EventLoop(uint32_t entries, uint16_t pbuf_entries, size_t buffer_size
 EventLoop::~EventLoop() = default;
 
 void EventLoop::pin_to_core(int core_id) {
+#if defined(__linux__)
     if (core_id < 0 || core_id >= CPU_SETSIZE) {
         throw std::invalid_argument("Invalid core_id: " + std::to_string(core_id));
     }
-#if defined(__linux__)
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
     int rc = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
     if (rc != 0) {
         throw std::system_error(rc, std::generic_category(), "pthread_setaffinity_np failed");
+    }
+    log::debug("[EventLoop] Pinned thread to CPU core {}", core_id);
+#elif defined(_WIN32)
+    if (core_id < 0 || core_id >= 64) {
+        throw std::invalid_argument("Invalid core_id: " + std::to_string(core_id));
+    }
+    DWORD_PTR mask = static_cast<DWORD_PTR>(1) << core_id;
+    if (SetThreadAffinityMask(GetCurrentThread(), mask) == 0) {
+        DWORD err = GetLastError();
+        throw std::system_error(static_cast<int>(err), std::system_category(), "SetThreadAffinityMask failed");
     }
     log::debug("[EventLoop] Pinned thread to CPU core {}", core_id);
 #endif

@@ -13,7 +13,11 @@ std::string format_timestamp(std::chrono::system_clock::time_point tp) {
 
     std::time_t t = std::chrono::system_clock::to_time_t(secs);
     std::tm tm_buf{};
+#if defined(_WIN32)
+    localtime_s(&tm_buf, &t);
+#else
     localtime_r(&t, &tm_buf);
+#endif
 
     return std::format("{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}.{:03d}",
                        tm_buf.tm_year + 1900,

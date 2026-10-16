@@ -8,7 +8,20 @@
 #include <iostream>
 #include <cassert>
 #include <string>
+#if defined(_WIN32)
+#include <direct.h>
+#include <io.h>
+#include <process.h>
+#include <thread>
+#include <chrono>
+#define mkdir(p, m) _mkdir(p)
+#define rmdir _rmdir
+#define unlink _unlink
+#define getpid _getpid
+#define usleep(us) std::this_thread::sleep_for(std::chrono::microseconds(us))
+#else
 #include <unistd.h>
+#endif
 
 #define TEST_CHECK(expr) do { \
     if (!(expr)) { \

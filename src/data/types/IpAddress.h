@@ -9,7 +9,11 @@
 #include <ostream>
 #include <istream>
 #include <cstring>
+#if defined(_WIN32)
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
+#endif
 
 namespace aegon::data::types {
 

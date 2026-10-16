@@ -8,8 +8,13 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include <fstream>
+#include "core/OsSocket.h"
+
+#if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
+#endif
 
 using namespace aegon::http;
 
@@ -212,7 +217,7 @@ void test_live_forms_server() {
     // 1. Test URL-encoded form success via curl
     {
         std::string cmd = "curl -s -X POST http://127.0.0.1:" + std::to_string(PORT) +
-                          "/api/register -d 'username=sarah_connor&email=sarah%40skynet.com&age=29&terms_accepted=true'";
+                          "/api/register -d \"username=sarah_connor&email=sarah%40skynet.com&age=29&terms_accepted=true\"";
         std::string resp = exec_cmd(cmd);
         assert(resp.find(R"("registered":"sarah_connor")") != std::string::npos);
     }
@@ -220,7 +225,7 @@ void test_live_forms_server() {
     // 2. Test URL-encoded form validation failure (returns 422)
     {
         std::string cmd = "curl -s -i -X POST http://127.0.0.1:" + std::to_string(PORT) +
-                          "/api/register -d 'username=x&email=bad_email&age=12&terms_accepted=false'";
+                          "/api/register -d \"username=x&email=bad_email&age=12&terms_accepted=false\"";
         std::string resp = exec_cmd(cmd);
         assert(resp.find("422 Unprocessable Entity") != std::string::npos);
         assert(resp.find("violations") != std::string::npos);
@@ -229,14 +234,14 @@ void test_live_forms_server() {
     // 3. Test Multipart file & field upload via curl -F
     {
         // Create a temporary file to upload
-        std::string temp_upload = "/tmp/aegon_test_upload.dat";
+        std::string temp_upload = (std::filesystem::temp_directory_path() / "aegon_test_upload.dat").generic_string();
         {
             std::ofstream ofs(temp_upload, std::ios::binary);
             ofs << "Test payload bytes for multipart upload in Aegon C++26!";
         }
 
         std::string cmd = "curl -s -X POST http://127.0.0.1:" + std::to_string(PORT) +
-                          "/api/upload -F 'tag=v1_assets' -F 'attachment=@" + temp_upload + "'";
+                          "/api/upload -F \"tag=v1_assets\" -F \"attachment=@" + temp_upload + "\"";
         std::string resp = exec_cmd(cmd);
 
         assert(resp.find(R"("tag":"v1_assets")") != std::string::npos);
@@ -248,13 +253,13 @@ void test_live_forms_server() {
 
     server.stop();
     // Wake up accept loop
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    auto fd = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons(PORT);
     inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
     connect(fd, (sockaddr*)&a, sizeof(a));
-    close(fd);
+    aegon::core::close_socket(fd);
 
     if (server_thread.joinable()) {
         server_thread.join();

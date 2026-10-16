@@ -68,7 +68,7 @@ TlsClientContext& TlsClientContext::operator=(TlsClientContext&& other) noexcept
 // TlsClientStream Implementation
 // -----------------------------------------------------------------------------
 
-TlsClientStream::TlsClientStream(core::EventLoop& loop, int socket_fd, SSL_CTX* ctx,
+TlsClientStream::TlsClientStream(core::EventLoop& loop, core::os_socket_t socket_fd, SSL_CTX* ctx,
                                  std::string_view hostname, const TlsClientOptions& options)
     : loop_(&loop), socket_fd_(socket_fd), hostname_(hostname) {
     ssl_ = SSL_new(ctx);

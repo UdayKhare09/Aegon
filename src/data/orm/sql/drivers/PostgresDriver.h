@@ -4,6 +4,7 @@
 #include "data/orm/sql/PerCoreConnectionPool.h"
 #include "data/orm/sql/Expression.h"
 #include "core/EventLoop.h"
+#include "core/OsSocket.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -24,7 +25,7 @@ bool pg_is_null(void* handle, int row, int col);
 class PostgresConnection : public Connection {
     PGconn* conn_{nullptr};
     bool pipelined_{false};
-    int fd_{-1};
+    core::os_socket_t fd_{core::INVALID_OS_SOCKET};
 
     enum class AwaitKind { Tuple, Command };
     struct Waiter {

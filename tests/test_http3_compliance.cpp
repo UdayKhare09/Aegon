@@ -9,9 +9,12 @@
 #include <cstdlib>
 #include <thread>
 #include <chrono>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include "core/OsSocket.h"
+
+#if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
+#endif
 #include <cstring>
 
 #define TEST_CHECK(expr) do { \
@@ -80,8 +83,8 @@ void test_rfc9000_version_negotiation() {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    int client_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    TEST_CHECK(client_fd >= 0);
+    aegon::core::os_socket_t client_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    TEST_CHECK(aegon::core::is_valid_socket(client_fd));
 
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
@@ -113,18 +116,23 @@ void test_rfc9000_version_negotiation() {
     packet[25] = 0x00;
 
     // Send packet to server
-    ssize_t sent = sendto(client_fd, packet, sizeof(packet), 0,
+    ssize_t sent = sendto(client_fd, reinterpret_cast<const char*>(packet), sizeof(packet), 0,
                           reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
     TEST_CHECK(sent == sizeof(packet));
 
     // Wait for Version Negotiation reply
+#if defined(_WIN32)
+    DWORD timeout_ms = 2000;
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+#else
     timeval tv{.tv_sec = 2, .tv_usec = 0};
     setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
 
     uint8_t reply[1500]{};
     sockaddr_storage reply_from{};
-    socklen_t reply_len = sizeof(reply_from);
-    ssize_t recvd = recvfrom(client_fd, reply, sizeof(reply), 0,
+    aegon::core::socklen_t reply_len = sizeof(reply_from);
+    ssize_t recvd = recvfrom(client_fd, reinterpret_cast<char*>(reply), sizeof(reply), 0,
                              reinterpret_cast<sockaddr*>(&reply_from), &reply_len);
     TEST_CHECK(recvd > 0);
 
@@ -169,14 +177,14 @@ void test_rfc9000_version_negotiation() {
     }
     TEST_CHECK(found_v1);
 
-    close(client_fd);
+    aegon::core::close_socket(client_fd);
 
     if (p_h3_server) p_h3_server->stop();
     // Wake up event loop
-    int wake_fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (wake_fd >= 0) {
+    aegon::core::os_socket_t wake_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (aegon::core::is_valid_socket(wake_fd)) {
         sendto(wake_fd, "q", 1, 0, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
-        close(wake_fd);
+        aegon::core::close_socket(wake_fd);
     }
 
     if (server_thread.joinable()) {
@@ -327,14 +335,14 @@ void test_live_http3_server() {
     std::string poke_tcp = "curl -k -s https://127.0.0.1:" + std::to_string(port) + "/health > /dev/null 2>&1";
     system(poke_tcp.c_str());
 
-    int udp_poke = socket(AF_INET, SOCK_DGRAM, 0);
-    if (udp_poke >= 0) {
+    aegon::core::os_socket_t udp_poke = socket(AF_INET, SOCK_DGRAM, 0);
+    if (aegon::core::is_valid_socket(udp_poke)) {
         sockaddr_in a{};
         a.sin_family = AF_INET;
         a.sin_port = htons(port);
         inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
         sendto(udp_poke, "x", 1, 0, reinterpret_cast<sockaddr*>(&a), sizeof(a));
-        close(udp_poke);
+        aegon::core::close_socket(udp_poke);
     }
 
     if (server_thread.joinable()) {

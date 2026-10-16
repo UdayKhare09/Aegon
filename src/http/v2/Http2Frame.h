@@ -4,7 +4,7 @@
 #include <string_view>
 #include <array>
 #include <cstring>
-#include <arpa/inet.h>
+#include "core/OsSocket.h"
 
 namespace aegon::http::v2 {
 

@@ -1,9 +1,12 @@
 #include "core/engine/IoEngine.h"
 #include "core/BufferPool.h"
 #include "log/Logger.h"
-#include <unistd.h>
 #include <cstring>
 #include <cerrno>
+
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 namespace aegon::core {
 
@@ -13,21 +16,40 @@ namespace aegon::core {
 
 AcceptResult AcceptAwaiter::await_resume() noexcept {
     AcceptResult res;
+#if defined(_WIN32)
+    if (result >= 0 && client_sock != INVALID_OS_SOCKET) {
+        ::setsockopt(client_sock, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
+                     reinterpret_cast<const char*>(&listen_fd), sizeof(listen_fd));
+        res.fd = client_sock;
+    } else {
+        res.fd = INVALID_OS_SOCKET;
+    }
+    res.addr     = addr;
+    res.addr_len = addr_len;
+#else
     res.fd       = result;
     res.addr     = addr;
     res.addr_len = addr_len;
+#endif
     return res;
 }
 
 RecvResult RecvProvidedAwaiter::await_resume() noexcept {
     RecvResult res;
     res.bytes        = result;
+#if defined(_WIN32)
+    res.buffer_valid = (result >= 0);
+    res.bid          = allocated_bid;
+    res.has_more     = false;
+    res.eof          = (result == 0);
+#else
     res.buffer_valid = (flags & 0x01 /* IORING_CQE_F_BUFFER */) != 0 || (result > 0 && (flags & 0x80000000));
     if (res.buffer_valid) {
         res.bid = static_cast<uint16_t>(flags >> 16);
     }
     res.has_more = (flags & 0x02 /* IORING_CQE_F_MORE */) != 0;
     res.eof      = (result == 0);
+#endif
     return res;
 }
 
@@ -73,6 +95,11 @@ int SpliceAwaiter::await_resume() noexcept {
 }
 
 int ConnectAwaiter::await_resume() noexcept {
+#if defined(_WIN32)
+    if (result == 0 && socket_fd != INVALID_OS_SOCKET) {
+        ::setsockopt(socket_fd, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, nullptr, 0);
+    }
+#endif
     return result;
 }
 
@@ -97,6 +124,11 @@ int CancelAwaiter::await_resume() noexcept {
 }
 
 int RecvmsgAwaiter::await_resume() noexcept {
+#if defined(_WIN32)
+    if (msg && result >= 0) {
+        msg->msg_namelen = static_cast<socklen_t>(from_len);
+    }
+#endif
     return result;
 }
 
@@ -108,13 +140,36 @@ MultishotAcceptStream::StreamState::~StreamState() {
     if (armed) {
         engine.cancel_multishot_accept(*this);
     }
+#if defined(_WIN32)
+    if (client_sock != INVALID_OS_SOCKET) {
+        core::close_socket(client_sock);
+        client_sock = INVALID_OS_SOCKET;
+    }
+#endif
 }
 
 void MultishotAcceptStream::StreamState::on_completion(int res, uint32_t cqe_flags) noexcept {
     AcceptResult r;
+#if defined(_WIN32)
+    if (res >= 0 && client_sock != INVALID_OS_SOCKET) {
+        ::setsockopt(client_sock, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
+                     reinterpret_cast<const char*>(&listen_fd), sizeof(listen_fd));
+        r.fd = client_sock;
+        client_sock = INVALID_OS_SOCKET;
+    } else {
+        r.fd = (res < 0) ? res : -1;
+        if (client_sock != INVALID_OS_SOCKET) {
+            core::close_socket(client_sock);
+            client_sock = INVALID_OS_SOCKET;
+        }
+    }
+    r.has_more = false;
+    r.is_direct_fd = false;
+#else
     r.fd           = res;
     r.has_more     = (cqe_flags & 0x02 /* IORING_CQE_F_MORE */) != 0;
     r.is_direct_fd = use_direct;
+#endif
 
     bool kernel_disarmed = !r.has_more && res >= 0;
     if (kernel_disarmed) {
@@ -138,7 +193,7 @@ void MultishotAcceptStream::StreamState::on_completion(int res, uint32_t cqe_fla
     }
 }
 
-MultishotAcceptStream::MultishotAcceptStream(IoEngine& engine, int listen_fd, bool use_direct)
+MultishotAcceptStream::MultishotAcceptStream(IoEngine& engine, os_socket_t listen_fd, bool use_direct)
     : state_(std::make_shared<StreamState>(engine, listen_fd, use_direct)) {
     state_->self_ = state_;
 }
@@ -172,12 +227,19 @@ MultishotRecvStream::StreamState::~StreamState() {
 void MultishotRecvStream::StreamState::on_completion(int res, uint32_t cqe_flags) noexcept {
     RecvResult r;
     r.bytes        = res;
+#if defined(_WIN32)
+    r.buffer_valid = (res >= 0);
+    r.bid          = allocated_bid;
+    r.has_more     = false;
+    r.eof          = (res == 0);
+#else
     r.buffer_valid = (cqe_flags & 0x01 /* IORING_CQE_F_BUFFER */) != 0 || (res > 0 && (cqe_flags & 0x80000000));
     if (r.buffer_valid) {
         r.bid = static_cast<uint16_t>(cqe_flags >> 16);
     }
     r.has_more = (cqe_flags & 0x02 /* IORING_CQE_F_MORE */) != 0;
     r.eof      = (res == 0);
+#endif
 
     bool kernel_disarmed = !r.has_more && res > 0;
     if (kernel_disarmed) {
@@ -201,7 +263,7 @@ void MultishotRecvStream::StreamState::on_completion(int res, uint32_t cqe_flags
     }
 }
 
-MultishotRecvStream::MultishotRecvStream(IoEngine& engine, int socket_fd, uint16_t bgid)
+MultishotRecvStream::MultishotRecvStream(IoEngine& engine, os_socket_t socket_fd, uint16_t bgid)
     : state_(std::make_shared<StreamState>(engine, socket_fd, bgid)) {
     state_->self_ = state_;
 }
@@ -226,7 +288,7 @@ void MultishotRecvStream::cancel() noexcept {
 // send_all implementations
 // ---------------------------------------------------------------------------
 
-Task<int> IoEngine::send_all(int fd, const void* buf, size_t len) {
+Task<int> IoEngine::send_all(os_socket_t fd, const void* buf, size_t len) {
     const uint8_t* p = static_cast<const uint8_t*>(buf);
     size_t remaining = len;
     while (remaining > 0) {
@@ -240,25 +302,30 @@ Task<int> IoEngine::send_all(int fd, const void* buf, size_t len) {
     co_return static_cast<int>(len);
 }
 
-Task<int> IoEngine::send_all(int fd, const char* str) {
+Task<int> IoEngine::send_all(os_socket_t fd, const char* str) {
     co_return co_await send_all(fd, str, std::strlen(str));
 }
 
-Task<int> IoEngine::send_all(int fd, std::string_view data) {
+Task<int> IoEngine::send_all(os_socket_t fd, std::string_view data) {
     co_return co_await send_all(fd, data.data(), data.size());
 }
 
-Task<int> IoEngine::send_all(int fd, std::span<const uint8_t> data) {
+Task<int> IoEngine::send_all(os_socket_t fd, std::span<const uint8_t> data) {
     co_return co_await send_all(fd, data.data(), data.size());
 }
 
 } // namespace aegon::core
 
+#if defined(_WIN32)
+#include "core/engine/IocpEngine.h"
+#elif defined(__linux__)
 #include "core/engine/IoUringEngine.h"
 #include "core/engine/EpollEngine.h"
+#endif
 
 namespace aegon::core {
 
+#if defined(__linux__)
 enum class EffectiveEngineTarget {
     ExplicitEpoll,
     ExplicitIoUring,
@@ -281,9 +348,12 @@ static EffectiveEngineTarget resolve_engine_target(const EngineConfig& config) n
     }
     return EffectiveEngineTarget::AutoProbe;
 }
+#endif
 
 std::unique_ptr<IoEngine> IoEngine::create(const EngineConfig& config) {
-#if defined(__linux__)
+#if defined(_WIN32)
+    return std::make_unique<IocpEngine>(config, nullptr);
+#elif defined(__linux__)
     auto target = resolve_engine_target(config);
     if (target == EffectiveEngineTarget::ExplicitEpoll) {
         return std::make_unique<EpollEngine>(config, nullptr);
@@ -307,7 +377,9 @@ std::unique_ptr<IoEngine> IoEngine::create(const EngineConfig& config) {
 }
 
 std::unique_ptr<IoEngine> IoEngine::create(const EngineConfig& config, BufferPool& buffer_pool) {
-#if defined(__linux__)
+#if defined(_WIN32)
+    return std::make_unique<IocpEngine>(config, &buffer_pool);
+#elif defined(__linux__)
     auto target = resolve_engine_target(config);
     if (target == EffectiveEngineTarget::ExplicitEpoll) {
         return std::make_unique<EpollEngine>(config, &buffer_pool);

@@ -6,6 +6,7 @@
 #include "http/tls/TlsContext.h"
 #include "http/v3/Http3Server.h"
 #include "core/EventLoop.h"
+#include "core/OsSocket.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -274,18 +275,18 @@ public:
     [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
 
 private:
-    core::Task<void> handle_connection(core::EventLoop& loop, int client_fd);
-    core::Task<void> handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data,
+    core::Task<void> handle_connection(core::EventLoop& loop, core::os_socket_t client_fd);
+    core::Task<void> handle_http2_connection(core::EventLoop& loop, core::os_socket_t client_fd, std::string initial_data,
                                               std::optional<core::MultishotRecvStream> existing_stream = std::nullopt);
-    core::Task<void> handle_http2_upgrade(core::EventLoop& loop, int client_fd, Request req, std::string http2_settings,
+    core::Task<void> handle_http2_upgrade(core::EventLoop& loop, core::os_socket_t client_fd, Request req, std::string http2_settings,
                                           std::string initial_data,
                                           std::optional<core::MultishotRecvStream> existing_stream = std::nullopt);
-    core::Task<void> run_h2_loop(core::EventLoop& loop, int client_fd, v2::Http2Connection& h2,
+    core::Task<void> run_h2_loop(core::EventLoop& loop, core::os_socket_t client_fd, v2::Http2Connection& h2,
                                  std::string initial_data,
                                  std::optional<core::MultishotRecvStream> existing_stream);
-    core::Task<void> handle_tls_connection(core::EventLoop& loop, int client_fd, uint16_t port);
-    core::Task<void> accept_loop(core::EventLoop& loop, int listen_fd, uint16_t port, bool is_tls);
-    int create_listen_socket(uint16_t port, const std::string& host);
+    core::Task<void> handle_tls_connection(core::EventLoop& loop, core::os_socket_t client_fd, uint16_t port);
+    core::Task<void> accept_loop(core::EventLoop& loop, core::os_socket_t listen_fd, uint16_t port, bool is_tls);
+    core::os_socket_t create_listen_socket(uint16_t port, const std::string& host);
     void run_event_loop(const std::vector<ListenerConfig>& active_listeners,
                         std::optional<int> cpu_core,
                         bool spawn_background);

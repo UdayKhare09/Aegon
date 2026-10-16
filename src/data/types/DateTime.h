@@ -86,9 +86,9 @@ public:
 
     // Factory methods
     [[nodiscard]] static DateTime now() noexcept {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        return DateTime(static_cast<int64_t>(ts.tv_sec) * 1'000'000LL + ts.tv_nsec / 1000);
+        auto now_point = std::chrono::system_clock::now();
+        auto micros = std::chrono::duration_cast<std::chrono::microseconds>(now_point.time_since_epoch()).count();
+        return DateTime(micros);
     }
 
     [[nodiscard]] static DateTime utc_now() noexcept {

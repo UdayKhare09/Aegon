@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Task.h"
+#include "core/OsSocket.h"
 #include <coroutine>
 #include <cstdint>
 #include <cstddef>
@@ -10,8 +11,7 @@
 #include <memory>
 #include <algorithm>
 #include <cstring>
-#include <sys/socket.h>
-#include <netinet/in.h>
+#include <atomic>
 
 namespace aegon::core {
 
@@ -44,7 +44,7 @@ struct EngineConfig {
  * @brief Result of an accepted connection.
  */
 struct AcceptResult {
-    int fd{-1};
+    os_socket_t fd{INVALID_OS_SOCKET};
     sockaddr_storage addr{};
     socklen_t addr_len{sizeof(sockaddr_storage)};
     bool has_more{false};
@@ -67,6 +67,9 @@ struct RecvResult {
  * Zero heap allocation: awaiters live on the coroutine stack frame.
  */
 struct IoAwaiter {
+#if defined(_WIN32)
+    OVERLAPPED overlapped{};
+#endif
     std::coroutine_handle<> continuation{nullptr};
     int32_t result{0};
     uint32_t flags{0};
@@ -97,21 +100,29 @@ struct IoAwaiter {
 
 struct AcceptAwaiter : IoAwaiter {
     IoEngine& engine;
-    int listen_fd;
+    os_socket_t listen_fd{INVALID_OS_SOCKET};
     sockaddr_storage addr{};
     socklen_t addr_len{sizeof(sockaddr_storage)};
+#if defined(_WIN32)
+    os_socket_t client_sock{INVALID_OS_SOCKET};
+    alignas(8) uint8_t accept_buf[(sizeof(sockaddr_storage) + 16) * 2]{};
+#endif
 
-    AcceptAwaiter(IoEngine& e, int fd) noexcept : engine(e), listen_fd(fd) {}
+    AcceptAwaiter(IoEngine& e, os_socket_t fd) noexcept : engine(e), listen_fd(fd) {}
     void submit() noexcept override;
     [[nodiscard]] AcceptResult await_resume() noexcept;
 };
 
 struct RecvProvidedAwaiter : IoAwaiter {
     IoEngine& engine;
-    int socket_fd;
-    uint16_t bgid;
+    os_socket_t socket_fd{INVALID_OS_SOCKET};
+    uint16_t bgid{0};
+#if defined(_WIN32)
+    WSABUF wsa_buf{};
+    uint16_t allocated_bid{0};
+#endif
 
-    RecvProvidedAwaiter(IoEngine& e, int fd, uint16_t b) noexcept
+    RecvProvidedAwaiter(IoEngine& e, os_socket_t fd, uint16_t b) noexcept
         : engine(e), socket_fd(fd), bgid(b) {}
     void submit() noexcept override;
     [[nodiscard]] RecvResult await_resume() noexcept;
@@ -119,12 +130,15 @@ struct RecvProvidedAwaiter : IoAwaiter {
 
 struct RecvAwaiter : IoAwaiter {
     IoEngine& engine;
-    int socket_fd;
-    void* buf;
-    size_t len;
+    os_socket_t socket_fd{INVALID_OS_SOCKET};
+    void* buf{nullptr};
+    size_t len{0};
     int flags_arg{0};
+#if defined(_WIN32)
+    WSABUF wsa_buf{};
+#endif
 
-    RecvAwaiter(IoEngine& e, int fd, void* b, size_t l, int fl = 0) noexcept
+    RecvAwaiter(IoEngine& e, os_socket_t fd, void* b, size_t l, int fl = 0) noexcept
         : engine(e), socket_fd(fd), buf(b), len(l), flags_arg(fl) {}
     void submit() noexcept override;
     [[nodiscard]] int await_resume() noexcept;
@@ -132,11 +146,14 @@ struct RecvAwaiter : IoAwaiter {
 
 struct SendAwaiter : IoAwaiter {
     IoEngine& engine;
-    int socket_fd;
-    const void* buf;
-    size_t len;
+    os_socket_t socket_fd{INVALID_OS_SOCKET};
+    const void* buf{nullptr};
+    size_t len{0};
+#if defined(_WIN32)
+    WSABUF wsa_buf{};
+#endif
 
-    SendAwaiter(IoEngine& e, int fd, const void* b, size_t l) noexcept
+    SendAwaiter(IoEngine& e, os_socket_t fd, const void* b, size_t l) noexcept
         : engine(e), socket_fd(fd), buf(b), len(l) {}
     void submit() noexcept override;
     [[nodiscard]] int await_resume() noexcept;
@@ -144,16 +161,19 @@ struct SendAwaiter : IoAwaiter {
 
 struct SendZcAwaiter : IoAwaiter {
     IoEngine& engine;
-    int socket_fd;
-    const void* buf;
-    size_t len;
+    os_socket_t socket_fd{INVALID_OS_SOCKET};
+    const void* buf{nullptr};
+    size_t len{0};
     int zc_flags{0};
     int fixed_buf_idx{-1};
     int bytes_sent{0};
     bool send_completed{false};
     bool notif_received{false};
+#if defined(_WIN32)
+    WSABUF wsa_buf{};
+#endif
 
-    SendZcAwaiter(IoEngine& e, int fd, const void* b, size_t l, int zc_fl = 0, int buf_idx = -1) noexcept
+    SendZcAwaiter(IoEngine& e, os_socket_t fd, const void* b, size_t l, int zc_fl = 0, int buf_idx = -1) noexcept
         : engine(e), socket_fd(fd), buf(b), len(l), zc_flags(zc_fl), fixed_buf_idx(buf_idx) {}
     void submit() noexcept override;
     void on_completion(int res, uint32_t flags) noexcept override;
@@ -164,12 +184,12 @@ struct SpliceAwaiter : IoAwaiter {
     IoEngine& engine;
     int fd_in;
     int64_t off_in;
-    int fd_out;
+    os_socket_t fd_out{INVALID_OS_SOCKET};
     int64_t off_out;
     unsigned int nbytes;
     unsigned int splice_flags;
 
-    SpliceAwaiter(IoEngine& e, int in, int64_t o_in, int out, int64_t o_out,
+    SpliceAwaiter(IoEngine& e, int in, int64_t o_in, os_socket_t out, int64_t o_out,
                   unsigned int bytes, unsigned int fl = 0) noexcept
         : engine(e), fd_in(in), off_in(o_in), fd_out(out), off_out(o_out),
           nbytes(bytes), splice_flags(fl) {}
@@ -179,11 +199,11 @@ struct SpliceAwaiter : IoAwaiter {
 
 struct ConnectAwaiter : IoAwaiter {
     IoEngine& engine;
-    int socket_fd;
+    os_socket_t socket_fd{INVALID_OS_SOCKET};
     sockaddr_storage addr{};
     socklen_t addr_len{0};
 
-    ConnectAwaiter(IoEngine& e, int fd, const sockaddr* a, socklen_t l) noexcept
+    ConnectAwaiter(IoEngine& e, os_socket_t fd, const sockaddr* a, socklen_t l) noexcept
         : engine(e), socket_fd(fd), addr_len(std::min<socklen_t>(l, sizeof(sockaddr_storage))) {
         if (a && addr_len > 0) {
             std::memcpy(&addr, a, addr_len);
@@ -195,10 +215,10 @@ struct ConnectAwaiter : IoAwaiter {
 
 struct PollAwaiter : IoAwaiter {
     IoEngine& engine;
-    int fd;
+    os_socket_t fd{INVALID_OS_SOCKET};
     unsigned poll_mask;
 
-    PollAwaiter(IoEngine& e, int f, unsigned mask) noexcept
+    PollAwaiter(IoEngine& e, os_socket_t f, unsigned mask) noexcept
         : engine(e), fd(f), poll_mask(mask) {}
     void submit() noexcept override;
     [[nodiscard]] int await_resume() noexcept;
@@ -220,19 +240,19 @@ struct TimeoutAwaiter : IoAwaiter {
 
 struct CloseAwaiter : IoAwaiter {
     IoEngine& engine;
-    int fd;
+    os_socket_t fd{INVALID_OS_SOCKET};
 
-    CloseAwaiter(IoEngine& e, int f) noexcept : engine(e), fd(f) {}
+    CloseAwaiter(IoEngine& e, os_socket_t f) noexcept : engine(e), fd(f) {}
     void submit() noexcept override;
     [[nodiscard]] int await_resume() noexcept;
 };
 
 struct ShutdownAwaiter : IoAwaiter {
     IoEngine& engine;
-    int fd;
+    os_socket_t fd{INVALID_OS_SOCKET};
     int how;
 
-    ShutdownAwaiter(IoEngine& e, int f, int h) noexcept : engine(e), fd(f), how(h) {}
+    ShutdownAwaiter(IoEngine& e, os_socket_t f, int h) noexcept : engine(e), fd(f), how(h) {}
     void submit() noexcept override;
     [[nodiscard]] int await_resume() noexcept;
 };
@@ -250,10 +270,14 @@ struct CancelAwaiter : IoAwaiter {
 
 struct RecvmsgAwaiter : IoAwaiter {
     IoEngine& engine;
-    int socket_fd;
+    os_socket_t socket_fd{INVALID_OS_SOCKET};
     msghdr* msg;
+#if defined(_WIN32)
+    WSABUF wsa_buf{};
+    INT from_len{0};
+#endif
 
-    RecvmsgAwaiter(IoEngine& e, int fd, msghdr* m) noexcept
+    RecvmsgAwaiter(IoEngine& e, os_socket_t fd, msghdr* m) noexcept
         : engine(e), socket_fd(fd), msg(m) {}
     void submit() noexcept override;
     [[nodiscard]] int await_resume() noexcept;
@@ -267,7 +291,7 @@ class MultishotAcceptStream {
 public:
     struct StreamState : IoAwaiter, std::enable_shared_from_this<StreamState> {
         IoEngine& engine;
-        int listen_fd{-1};
+        os_socket_t listen_fd{INVALID_OS_SOCKET};
         bool armed{false};
         bool finished{false};
         bool cancelled{false};
@@ -275,8 +299,12 @@ public:
         std::deque<AcceptResult> backlog{};
         AcceptResult current_result{};
         std::shared_ptr<StreamState> self_{nullptr};
+#if defined(_WIN32)
+        os_socket_t client_sock{INVALID_OS_SOCKET};
+        alignas(8) uint8_t accept_buf[(sizeof(sockaddr_storage) + 16) * 2]{};
+#endif
 
-        StreamState(IoEngine& e, int fd, bool direct = false) noexcept
+        StreamState(IoEngine& e, os_socket_t fd, bool direct = false) noexcept
             : engine(e), listen_fd(fd), use_direct(direct) {}
         ~StreamState();
 
@@ -284,7 +312,7 @@ public:
         void on_completion(int res, uint32_t flags) noexcept override;
     };
 
-    MultishotAcceptStream(IoEngine& engine, int listen_fd, bool use_direct = false);
+    MultishotAcceptStream(IoEngine& engine, os_socket_t listen_fd, bool use_direct = false);
     ~MultishotAcceptStream();
 
     MultishotAcceptStream(const MultishotAcceptStream&) = delete;
@@ -324,7 +352,7 @@ public:
 
     [[nodiscard]] bool is_armed()    const noexcept { return state_ && state_->armed; }
     [[nodiscard]] bool is_finished() const noexcept { return !state_ || state_->finished; }
-    [[nodiscard]] int  listen_fd()   const noexcept { return state_ ? state_->listen_fd : -1; }
+    [[nodiscard]] os_socket_t listen_fd() const noexcept { return state_ ? state_->listen_fd : INVALID_OS_SOCKET; }
 
 private:
     std::shared_ptr<StreamState> state_;
@@ -334,7 +362,7 @@ class MultishotRecvStream {
 public:
     struct StreamState : IoAwaiter, std::enable_shared_from_this<StreamState> {
         IoEngine& engine;
-        int socket_fd{-1};
+        os_socket_t socket_fd{INVALID_OS_SOCKET};
         uint16_t bgid{0};
         bool armed{false};
         bool finished{false};
@@ -342,8 +370,12 @@ public:
         std::deque<RecvResult> backlog{};
         RecvResult current_result{};
         std::shared_ptr<StreamState> self_{nullptr};
+#if defined(_WIN32)
+        WSABUF wsa_buf{};
+        uint16_t allocated_bid{0};
+#endif
 
-        StreamState(IoEngine& e, int fd, uint16_t b) noexcept
+        StreamState(IoEngine& e, os_socket_t fd, uint16_t b) noexcept
             : engine(e), socket_fd(fd), bgid(b) {}
         ~StreamState();
 
@@ -351,7 +383,7 @@ public:
         void on_completion(int res, uint32_t flags) noexcept override;
     };
 
-    MultishotRecvStream(IoEngine& engine, int socket_fd, uint16_t bgid);
+    MultishotRecvStream(IoEngine& engine, os_socket_t socket_fd, uint16_t bgid);
     ~MultishotRecvStream();
 
     MultishotRecvStream(const MultishotRecvStream&) = delete;
@@ -399,7 +431,7 @@ public:
 
     [[nodiscard]] bool is_armed()    const noexcept { return state_ && state_->armed; }
     [[nodiscard]] bool is_finished() const noexcept { return !state_ || state_->finished; }
-    [[nodiscard]] int  socket_fd()   const noexcept { return state_ ? state_->socket_fd : -1; }
+    [[nodiscard]] os_socket_t socket_fd() const noexcept { return state_ ? state_->socket_fd : INVALID_OS_SOCKET; }
 
 private:
     std::shared_ptr<StreamState> state_;
@@ -449,65 +481,65 @@ public:
     virtual void register_buffer_pool(BufferPool& pool, bool register_buffers = true) { (void)pool; (void)register_buffers; }
 
     // High-level awaiter factory methods
-    [[nodiscard]] AcceptAwaiter accept_once(int listen_fd) noexcept {
+    [[nodiscard]] AcceptAwaiter accept_once(os_socket_t listen_fd) noexcept {
         return AcceptAwaiter{*this, listen_fd};
     }
 
-    [[nodiscard]] MultishotAcceptStream accept_multishot(int listen_fd) noexcept {
+    [[nodiscard]] MultishotAcceptStream accept_multishot(os_socket_t listen_fd) noexcept {
         return MultishotAcceptStream{*this, listen_fd, false};
     }
 
-    [[nodiscard]] virtual MultishotAcceptStream accept_multishot_direct(int listen_fd) noexcept {
+    [[nodiscard]] virtual MultishotAcceptStream accept_multishot_direct(os_socket_t listen_fd) noexcept {
         return MultishotAcceptStream{*this, listen_fd, true};
     }
 
-    [[nodiscard]] RecvProvidedAwaiter recv_provided(int fd, uint16_t bgid) noexcept {
+    [[nodiscard]] RecvProvidedAwaiter recv_provided(os_socket_t fd, uint16_t bgid) noexcept {
         return RecvProvidedAwaiter{*this, fd, bgid};
     }
 
-    [[nodiscard]] MultishotRecvStream recv_multishot_stream(int fd, uint16_t bgid) noexcept {
+    [[nodiscard]] MultishotRecvStream recv_multishot_stream(os_socket_t fd, uint16_t bgid) noexcept {
         return MultishotRecvStream{*this, fd, bgid};
     }
 
-    [[nodiscard]] RecvAwaiter recv(int fd, void* buf, size_t len, int flags = 0) noexcept {
+    [[nodiscard]] RecvAwaiter recv(os_socket_t fd, void* buf, size_t len, int flags = 0) noexcept {
         return RecvAwaiter{*this, fd, buf, len, flags};
     }
 
-    [[nodiscard]] SendAwaiter send(int fd, const void* buf, size_t len) noexcept {
+    [[nodiscard]] SendAwaiter send(os_socket_t fd, const void* buf, size_t len) noexcept {
         return SendAwaiter{*this, fd, buf, len};
     }
 
-    [[nodiscard]] SendAwaiter send(int fd, std::span<const uint8_t> data) noexcept {
+    [[nodiscard]] SendAwaiter send(os_socket_t fd, std::span<const uint8_t> data) noexcept {
         return SendAwaiter{*this, fd, data.data(), data.size()};
     }
 
-    [[nodiscard]] SendAwaiter send(int fd, std::string_view data) noexcept {
+    [[nodiscard]] SendAwaiter send(os_socket_t fd, std::string_view data) noexcept {
         return SendAwaiter{*this, fd, data.data(), data.size()};
     }
 
-    [[nodiscard]] SendZcAwaiter send_zc(int fd, std::span<const uint8_t> data, int zc_flags = 0) noexcept {
+    [[nodiscard]] SendZcAwaiter send_zc(os_socket_t fd, std::span<const uint8_t> data, int zc_flags = 0) noexcept {
         return SendZcAwaiter{*this, fd, data.data(), data.size(), zc_flags, -1};
     }
 
-    [[nodiscard]] SendZcAwaiter send_zc(int fd, std::string_view data, int zc_flags = 0) noexcept {
+    [[nodiscard]] SendZcAwaiter send_zc(os_socket_t fd, std::string_view data, int zc_flags = 0) noexcept {
         return SendZcAwaiter{*this, fd, data.data(), data.size(), zc_flags, -1};
     }
 
-    [[nodiscard]] SendZcAwaiter send_zc_fixed(int fd, const void* buf, size_t len,
+    [[nodiscard]] SendZcAwaiter send_zc_fixed(os_socket_t fd, const void* buf, size_t len,
                                               unsigned buf_index, int zc_flags = 0) noexcept {
         return SendZcAwaiter{*this, fd, buf, len, zc_flags, static_cast<int>(buf_index)};
     }
 
-    [[nodiscard]] SpliceAwaiter splice(int fd_in, int64_t off_in, int fd_out, int64_t off_out,
+    [[nodiscard]] SpliceAwaiter splice(int fd_in, int64_t off_in, os_socket_t fd_out, int64_t off_out,
                                        unsigned int nbytes, unsigned int flags = 0) noexcept {
         return SpliceAwaiter{*this, fd_in, off_in, fd_out, off_out, nbytes, flags};
     }
 
-    [[nodiscard]] ConnectAwaiter connect(int fd, const sockaddr* addr, socklen_t addr_len) noexcept {
+    [[nodiscard]] ConnectAwaiter connect(os_socket_t fd, const sockaddr* addr, socklen_t addr_len) noexcept {
         return ConnectAwaiter{*this, fd, addr, addr_len};
     }
 
-    [[nodiscard]] PollAwaiter poll(int fd, unsigned poll_mask) noexcept {
+    [[nodiscard]] PollAwaiter poll(os_socket_t fd, unsigned poll_mask) noexcept {
         return PollAwaiter{*this, fd, poll_mask};
     }
 
@@ -515,11 +547,11 @@ public:
         return TimeoutAwaiter{*this, ns};
     }
 
-    [[nodiscard]] CloseAwaiter close(int fd) noexcept {
+    [[nodiscard]] CloseAwaiter close(os_socket_t fd) noexcept {
         return CloseAwaiter{*this, fd};
     }
 
-    [[nodiscard]] ShutdownAwaiter shutdown(int fd, int how) noexcept {
+    [[nodiscard]] ShutdownAwaiter shutdown(os_socket_t fd, int how) noexcept {
         return ShutdownAwaiter{*this, fd, how};
     }
 
@@ -527,19 +559,21 @@ public:
         return CancelAwaiter{*this, user_data, flags};
     }
 
-    [[nodiscard]] RecvmsgAwaiter recvmsg(int fd, msghdr* msg) noexcept {
+    [[nodiscard]] RecvmsgAwaiter recvmsg(os_socket_t fd, msghdr* msg) noexcept {
         return RecvmsgAwaiter{*this, fd, msg};
     }
 
     // Engine-level send_all loop (reusable across all engines)
-    [[nodiscard]] Task<int> send_all(int fd, const void* buf, size_t len);
-    [[nodiscard]] Task<int> send_all(int fd, const char* str);
-    [[nodiscard]] Task<int> send_all(int fd, std::string_view data);
-    [[nodiscard]] Task<int> send_all(int fd, std::span<const uint8_t> data);
+    [[nodiscard]] Task<int> send_all(os_socket_t fd, const void* buf, size_t len);
+    [[nodiscard]] Task<int> send_all(os_socket_t fd, const char* str);
+    [[nodiscard]] Task<int> send_all(os_socket_t fd, std::string_view data);
+    [[nodiscard]] Task<int> send_all(os_socket_t fd, std::span<const uint8_t> data);
 
     // Factory
     static std::unique_ptr<IoEngine> create(const EngineConfig& config = {});
     static std::unique_ptr<IoEngine> create(const EngineConfig& config, BufferPool& buffer_pool);
+
+    [[nodiscard]] uint64_t id() const noexcept { return engine_id_; }
 
     // Helper: resume continuation safely
     static void resume_continuation(IoAwaiter& aw) noexcept {
@@ -548,6 +582,15 @@ public:
             aw.continuation = nullptr;
             cont.resume();
         }
+    }
+
+protected:
+    uint64_t engine_id_{next_engine_id()};
+
+private:
+    static uint64_t next_engine_id() noexcept {
+        static std::atomic<uint64_t> s_id{1};
+        return s_id.fetch_add(1, std::memory_order_relaxed);
     }
 };
 

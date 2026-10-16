@@ -12,9 +12,14 @@
 #include <unordered_map>
 #include <expected>
 #include <cctype>
+#if defined(_WIN32)
+#include <stdlib.h>
+#define aegon_environ _environ
+#else
 #include <unistd.h>
-
 extern char** environ;
+#define aegon_environ environ
+#endif
 
 namespace aegon::config {
 
@@ -331,8 +336,8 @@ public:
                 }
             };
 
-            if (environ != nullptr) {
-                for (char** env = environ; *env != nullptr; ++env) {
+            if (aegon_environ != nullptr) {
+                for (char** env = aegon_environ; *env != nullptr; ++env) {
                     std::string_view entry = *env;
                     size_t eq = entry.find('=');
                     if (eq == std::string_view::npos) continue;

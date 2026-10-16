@@ -5,6 +5,7 @@
 #include "http/websocket/WebSocketTransport.h"
 #include "http/websocket/WebSocketSession.h"
 #include "core/EventLoop.h"
+#include "core/OsSocket.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -18,7 +19,7 @@ namespace aegon::http::websocket {
  */
 class WebSocketConnection : public IWebSocketTransport {
 public:
-    WebSocketConnection(core::EventLoop& loop, int client_fd, std::string path,
+    WebSocketConnection(core::EventLoop& loop, core::os_socket_t client_fd, std::string path,
                         WebSocketHandler handler = nullptr,
                         WebSocketEchoHandler echo_handler = nullptr,
                         const WebSocketConfig& config = {});
@@ -30,7 +31,7 @@ public:
     }
 
     [[nodiscard]] bool is_open() const noexcept override {
-        return is_open_ && client_fd_ >= 0;
+        return is_open_ && core::is_valid_socket(client_fd_);
     }
 
     core::Task<int> write_frame(std::span<const uint8_t> header, std::string_view payload) override;
@@ -52,7 +53,7 @@ public:
 
 private:
     core::EventLoop& loop_;
-    int client_fd_{-1};
+    core::os_socket_t client_fd_{core::INVALID_OS_SOCKET};
     bool is_open_{true};
     WebSocketSession session_;
 };

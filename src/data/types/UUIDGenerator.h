@@ -31,7 +31,10 @@ struct alignas(32) FastRng {
         return (x << k) | (x >> (64 - k));
     }
 
-    [[gnu::cold]] void seed_from_hardware() noexcept;
+#if defined(__GNUC__) || defined(__clang__)
+    [[gnu::cold]]
+#endif
+    void seed_from_hardware() noexcept;
 
     inline uint64_t next_u64() noexcept {
         if (++generated_count >= 65536) [[unlikely]] {

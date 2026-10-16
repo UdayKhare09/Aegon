@@ -1,5 +1,6 @@
 #include "config/EnvExpander.h"
 #include <cstdlib>
+#include <optional>
 
 namespace aegon::config {
 
