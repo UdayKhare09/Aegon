@@ -1,7 +1,7 @@
 #pragma once
 
 #include "RedisConnection.h"
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -19,8 +19,8 @@ struct RedisMessage {
 
 class RedisSubscriber {
 public:
-    RedisSubscriber(core::IoUring& ring, RedisNodeConfig config)
-        : ring_(ring), config_(std::move(config)), conn_(ring_, config_) {}
+    RedisSubscriber(core::IoEngine& engine, RedisNodeConfig config)
+        : engine_(engine), config_(std::move(config)), conn_(engine_, config_) {}
 
     core::Task<bool> connect() {
         co_return co_await conn_.connect();
@@ -98,7 +98,7 @@ public:
     }
 
 private:
-    core::IoUring& ring_;
+    core::IoEngine& engine_;
     RedisNodeConfig config_;
     RedisConnection conn_;
 };

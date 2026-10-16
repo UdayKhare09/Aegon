@@ -1,5 +1,5 @@
 #include "core/Task.h"
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
 #include "core/BufferPool.h"
 #include "core/EventLoop.h"
 #include <iostream>
@@ -34,11 +34,12 @@ int main() {
         std::cout << "  -> PASS: Coroutine Task chaining verified (result: 52)\n";
     }
 
-    // 2. IoUring & BufferPool Initialization Test
-    std::cout << "[TEST 2] Testing io_uring and Provided Buffer Ring (PBUF_RING)...\n";
+    // 2. IoEngine & BufferPool Initialization Test
+    std::cout << "[TEST 2] Testing IoEngine and Provided Buffer Ring (PBUF_RING)...\n";
     {
-        IoUring ring(1024);
-        BufferPool pool(ring.raw_ring(), 1, 128, 4096);
+        auto engine = IoEngine::create(EngineConfig{.type = EngineType::IoUring, .entries = 1024});
+        BufferPool pool(1, 128, 4096);
+        engine->register_buffer_pool(pool);
         assert(pool.bgid() == 1);
         assert(pool.entries() == 128);
         assert(pool.buffer_size() == 4096);
@@ -79,11 +80,11 @@ int main() {
 
         // Server coroutine
         auto server_task = [&](EventLoop& el) -> Task<void> {
-            auto accept_res = co_await el.ring().accept_once(listen_fd);
+            auto accept_res = co_await el.engine().accept_once(listen_fd);
             assert(accept_res.fd >= 0);
 
             // Multishot recv using buffer pool
-            auto recv_res = co_await el.ring().recv_provided(accept_res.fd, el.buffer_pool().bgid());
+            auto recv_res = co_await el.engine().recv_provided(accept_res.fd, el.buffer_pool().bgid());
             assert(recv_res.buffer_valid);
             assert(recv_res.bytes > 0);
 
@@ -95,15 +96,15 @@ int main() {
             el.buffer_pool().return_buffer(recv_res.bid);
 
             // Echo response
-            int bytes_sent = co_await el.ring().send(accept_res.fd, "PONG_AEGON");
+            int bytes_sent = co_await el.engine().send(accept_res.fd, "PONG_AEGON");
             assert(bytes_sent == 10);
             (void)bytes_sent;
 
-            int c1 = co_await el.ring().close(accept_res.fd);
+            int c1 = co_await el.engine().close(accept_res.fd);
             assert(c1 == 0);
             (void)c1;
 
-            int c2 = co_await el.ring().close(listen_fd);
+            int c2 = co_await el.engine().close(listen_fd);
             assert(c2 == 0);
             (void)c2;
 
@@ -136,8 +137,7 @@ int main() {
     // 4. Edge-Case Hardening Tests
     std::cout << "[TEST 4] Testing BufferPool bounds clamping & Coroutine exception handling...\n";
     {
-        IoUring ring(256);
-        BufferPool pool(ring.raw_ring(), 2, 32, 2048);
+        BufferPool pool(2, 32, 2048);
 
         // SEC-CORE-004: Length exceeding buffer_size_ is clamped
         auto clamped = pool.get_buffer(0, 5000);

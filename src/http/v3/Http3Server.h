@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <memory>
 #include <string>
+#include <atomic>
 
 #include "http/ServerConfig.h"
 
@@ -71,7 +72,7 @@ private:
     const ServiceRegistry* services_{nullptr};
 
     int udp_fd_{-1};
-    bool running_{false};
+    std::atomic<bool> running_{false};
 
     struct CidHash {
         using is_transparent = void;

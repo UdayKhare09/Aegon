@@ -105,7 +105,7 @@ core::Task<bool> TlsClientStream::flush_outbound() {
     while (BIO_pending(out_bio_) > 0) {
         int n = BIO_read(out_bio_, out_buf, sizeof(out_buf));
         if (n > 0) {
-            int sent = co_await loop_->ring().send_all(
+            int sent = co_await loop_->engine().send_all(
                 socket_fd_,
                 std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(out_buf), static_cast<size_t>(n)));
             if (sent != n) {
@@ -131,7 +131,7 @@ core::Task<bool> TlsClientStream::handshake() {
         int err = SSL_get_error(ssl_, ret);
         if (err == SSL_ERROR_WANT_READ) {
             char net_buf[4096];
-            int n = co_await loop_->ring().recv(socket_fd_, net_buf, sizeof(net_buf), 0);
+            int n = co_await loop_->engine().recv(socket_fd_, net_buf, sizeof(net_buf), 0);
             if (n <= 0) {
                 co_return false;
             }
@@ -161,7 +161,7 @@ core::Task<int> TlsClientStream::read_plaintext(void* buf, size_t max_len) {
 
         if (err == SSL_ERROR_WANT_READ) {
             char net_buf[4096];
-            int n = co_await loop_->ring().recv(socket_fd_, net_buf, sizeof(net_buf), 0);
+            int n = co_await loop_->engine().recv(socket_fd_, net_buf, sizeof(net_buf), 0);
             if (n <= 0) {
                 co_return 0; // EOF
             }

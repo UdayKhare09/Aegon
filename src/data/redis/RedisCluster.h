@@ -2,7 +2,7 @@
 
 #include "Crc16.h"
 #include "RedisConnectionPool.h"
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
 #include "core/Task.h"
 #include <string>
 #include <vector>
@@ -21,8 +21,8 @@ struct ClusterConfig {
 
 class RedisClusterRouter {
 public:
-    RedisClusterRouter(core::IoUring& ring, ClusterConfig config)
-        : ring_(ring), config_(std::move(config)) {}
+    RedisClusterRouter(core::IoEngine& engine, ClusterConfig config)
+        : engine_(engine), config_(std::move(config)) {}
 
     core::Task<bool> initialize() {
         co_return co_await refresh_slots();
@@ -40,7 +40,7 @@ public:
             .port = port,
             .password = config_.password
         };
-        auto pool = std::make_shared<RedisConnectionPool>(ring_, cfg, config_.pool_size_per_node);
+        auto pool = std::make_shared<RedisConnectionPool>(engine_, cfg, config_.pool_size_per_node);
         node_pools_[key] = pool;
         return pool;
     }
@@ -148,7 +148,7 @@ public:
     }
 
 private:
-    core::IoUring& ring_;
+    core::IoEngine& engine_;
     ClusterConfig config_;
     std::array<std::shared_ptr<RedisConnectionPool>, 16384> slots_{};
     std::unordered_map<std::string, std::shared_ptr<RedisConnectionPool>> node_pools_;

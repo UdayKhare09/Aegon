@@ -10,15 +10,15 @@
 
 namespace aegon::data::redis {
 
-RedisConnection::RedisConnection(core::IoUring& ring, RedisNodeConfig config)
-    : ring_(ring), config_(std::move(config)) {}
+RedisConnection::RedisConnection(core::IoEngine& engine, RedisNodeConfig config)
+    : engine_(engine), config_(std::move(config)) {}
 
 RedisConnection::~RedisConnection() {
     close();
 }
 
 RedisConnection::RedisConnection(RedisConnection&& other) noexcept
-    : ring_(other.ring_), config_(std::move(other.config_)), 
+    : engine_(other.engine_), config_(std::move(other.config_)), 
       fd_(other.fd_), read_buffer_(std::move(other.read_buffer_)) {
     other.fd_ = -1;
 }
@@ -64,7 +64,7 @@ core::Task<bool> RedisConnection::connect() {
         int flag = 1;
         setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
-        int conn_res = co_await ring_.connect(sock, p->ai_addr, p->ai_addrlen);
+        int conn_res = co_await engine_.connect(sock, p->ai_addr, p->ai_addrlen);
         if (conn_res >= 0) {
             fd_ = sock;
             break;
@@ -128,7 +128,7 @@ core::Task<RespValue> RedisConnection::read_response() {
 
         // Need more data from socket
         char buf[4096];
-        int bytes = co_await ring_.recv(fd_, buf, sizeof(buf), 0);
+        int bytes = co_await engine_.recv(fd_, buf, sizeof(buf), 0);
         if (bytes <= 0) {
             close();
             RespValue err;
@@ -154,7 +154,7 @@ core::Task<RespValue> RedisConnection::execute(const std::vector<std::string_vie
 
     if (!args.empty()) {
         std::string wire_cmd = Resp3Serializer::serialize_command(args);
-        int sent = co_await ring_.send(fd_, wire_cmd);
+        int sent = co_await engine_.send(fd_, wire_cmd);
         if (sent <= 0) {
             close();
             RespValue err;
@@ -188,7 +188,7 @@ core::Task<std::vector<RespValue>> RedisConnection::execute_pipeline(const std::
         all_cmds.append(Resp3Serializer::serialize_command(args));
     }
 
-    int sent = co_await ring_.send(fd_, all_cmds);
+    int sent = co_await engine_.send(fd_, all_cmds);
     if (sent <= 0) {
         close();
         results.resize(batch.size());

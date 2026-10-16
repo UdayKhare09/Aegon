@@ -1,4 +1,5 @@
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
+#include "core/engine/IoUringEngine.h"
 #include "core/BufferPool.h"
 #include "core/EventLoop.h"
 #include "http/Server.h"
@@ -22,8 +23,9 @@ using namespace aegon::http;
 
 void test_buffer_pool_registration() {
     std::cout << "[TEST 1] Testing IORING_REGISTER_BUFFERS in BufferPool...\n";
-    IoUring ring(128);
-    BufferPool pool(ring.raw_ring(), 1, 64, 4096, true);
+    IoUringEngine engine(EngineConfig{.entries = 128});
+    BufferPool pool(1, 64, 4096);
+    engine.register_buffer_pool(pool, true);
 
     std::cout << "  -> BufferPool registered: " << (pool.is_registered() ? "YES" : "FALLBACK (unprivileged)") << "\n";
     assert(pool.entries() == 64);
@@ -46,16 +48,17 @@ void test_buffer_pool_registration() {
 
 void test_modern_ring_initialization() {
     std::cout << "[TEST 2] Testing Modern Linux 6.0+ Single-Issuer & Cooperative Taskrun Engine...\n";
-    IoUringConfig cfg;
+    EngineConfig cfg;
     cfg.entries = 128;
+    cfg.type = EngineType::IoUring;
 
-    IoUring ring(cfg);
-    assert(ring.raw_ring() != nullptr);
+    auto engine = IoEngine::create(cfg);
+    assert(engine != nullptr);
 
     // Test a basic async timeout under the modern ring
     bool timer_completed = false;
     auto run_timer = [&]() -> Task<void> {
-        co_await ring.timeout(10'000'000); // 10ms
+        co_await engine->timeout(10'000'000); // 10ms
         timer_completed = true;
     };
 
@@ -63,8 +66,8 @@ void test_modern_ring_initialization() {
     task.resume();
 
     while (!timer_completed) {
-        ring.submit_and_wait(1);
-        ring.process_completions();
+        engine->submit_and_wait(1);
+        engine->process_completions();
     }
 
     assert(timer_completed);
@@ -92,14 +95,14 @@ void test_send_zc() {
     int server = accept(listen_fd, nullptr, nullptr);
     if (server < 0) abort();
 
-    IoUring ring(128);
+    IoUringEngine engine(EngineConfig{.entries = 128});
 
     const std::string payload = "Hello Aegon Zero-Copy Network Engine!";
     bool send_done = false;
     int send_bytes = 0;
 
     auto send_task = [&]() -> Task<void> {
-        send_bytes = co_await ring.send_zc(client, payload);
+        send_bytes = co_await engine.send_zc(client, payload);
         send_done = true;
     };
 
@@ -107,8 +110,8 @@ void test_send_zc() {
     t.resume();
 
     while (!send_done) {
-        ring.submit_and_wait(1);
-        ring.process_completions();
+        engine.submit_and_wait(1);
+        engine.process_completions();
     }
 
     assert(send_done);
@@ -143,8 +146,8 @@ void test_multishot_accept_stream() {
     uint16_t port = ntohs(addr.sin_port);
     if (::listen(listen_fd, 128) != 0) abort();
 
-    IoUring ring(256);
-    auto stream = ring.accept_multishot(listen_fd);
+    IoUringEngine engine(EngineConfig{.entries = 256});
+    auto stream = engine.accept_multishot(listen_fd);
 
     std::vector<int> accepted_fds;
     constexpr int TOTAL_CLIENTS = 30;
@@ -182,8 +185,8 @@ void test_multishot_accept_stream() {
     });
 
     while (accepted_fds.size() < TOTAL_CLIENTS) {
-        ring.submit_and_wait(1);
-        ring.process_completions();
+        engine.submit_and_wait(1);
+        engine.process_completions();
     }
 
     client_thread.join();
@@ -294,10 +297,11 @@ void test_multishot_recv_stream() {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) abort();
 
-    IoUring ring(256);
-    BufferPool pool(ring.raw_ring(), 1, 64, 4096);
+    IoUringEngine engine(EngineConfig{.entries = 256});
+    BufferPool pool(1, 64, 4096);
+    engine.register_buffer_pool(pool);
 
-    auto stream = ring.recv_multishot_stream(sv[0], pool.bgid());
+    auto stream = engine.recv_multishot_stream(sv[0], pool.bgid());
 
     std::vector<std::string> received_chunks;
     constexpr int TOTAL_MESSAGES = 10;
@@ -321,8 +325,8 @@ void test_multishot_recv_stream() {
         std::string msg = "CHUNK_" + std::to_string(i);
         (void)send(sv[1], msg.data(), msg.size(), 0);
         while (received_chunks.size() <= static_cast<size_t>(i)) {
-            ring.submit_and_wait(1);
-            ring.process_completions();
+            engine.submit_and_wait(1);
+            engine.process_completions();
         }
     }
 

@@ -55,7 +55,7 @@ core::Task<int> PooledConnection::write(const void* buf, size_t len) {
         co_return co_await tls_stream_->write_plaintext(buf, len);
     }
 
-    int n = co_await loop_->ring().send(
+    int n = co_await loop_->engine().send(
         fd_, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(buf), len));
     co_return n;
 }
@@ -66,7 +66,7 @@ core::Task<int> PooledConnection::read(void* buf, size_t max_len) {
         co_return co_await tls_stream_->read_plaintext(buf, max_len);
     }
 
-    int n = co_await loop_->ring().recv(fd_, buf, max_len, 0);
+    int n = co_await loop_->engine().recv(fd_, buf, max_len, 0);
     co_return n;
 }
 
@@ -166,7 +166,7 @@ ConnectionPool::create_connection(const Url& url, core::EventLoop& loop) {
     int flag = 1;
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 
-    int connect_rc = co_await loop.ring().connect(fd, res->ai_addr, res->ai_addrlen);
+    int connect_rc = co_await loop.engine().connect(fd, res->ai_addr, res->ai_addrlen);
     ::freeaddrinfo(res);
 
     if (connect_rc < 0 && connect_rc != -EINPROGRESS) {

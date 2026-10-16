@@ -179,7 +179,6 @@ void test_live_websocket_server() {
     std::thread server_thread([&]() {
         server.run();
     });
-    server_thread.detach();
 
     // Wait for server to bind
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -286,6 +285,9 @@ void test_live_websocket_server() {
     std::cout << "  -> Reject non-upgrade GET /ws (426 Upgrade Required) OK\n";
 
     server.stop();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
 }
 
 // 5. Test pipelined WebSocket upgrade with initial frame and rapid reconnections (HttpArena echo-ws-limited pattern)
@@ -298,7 +300,6 @@ void test_pipelined_handshake_and_reconnection() {
     std::thread server_thread([&]() {
         server.run();
     });
-    server_thread.detach();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
@@ -368,6 +369,9 @@ void test_pipelined_handshake_and_reconnection() {
 
     std::cout << "  -> 50 Pipelined Handshake & Reconnect cycles succeeded with zero drops\n";
     server.stop();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
 }
 
 void test_websocket_config_limits_and_masking() {

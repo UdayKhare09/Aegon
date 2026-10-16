@@ -39,11 +39,11 @@ public:
 
         std::unique_ptr<RedisClient> client;
         if (mode_ == RedisMode::Standalone) {
-            client = std::make_unique<RedisClient>(loop->ring(), std::get<RedisNodeConfig>(config_), pool_size_);
+            client = std::make_unique<RedisClient>(loop->engine(), std::get<RedisNodeConfig>(config_), pool_size_);
         } else if (mode_ == RedisMode::Sentinel) {
-            client = std::make_unique<RedisClient>(loop->ring(), std::get<SentinelConfig>(config_), pool_size_);
+            client = std::make_unique<RedisClient>(loop->engine(), std::get<SentinelConfig>(config_), pool_size_);
         } else if (mode_ == RedisMode::Cluster) {
-            client = std::make_unique<RedisClient>(loop->ring(), std::get<ClusterConfig>(config_));
+            client = std::make_unique<RedisClient>(loop->engine(), std::get<ClusterConfig>(config_));
         }
 
         auto* ptr = client.get();

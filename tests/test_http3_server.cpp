@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdlib>
 #include <arpa/inet.h>
+#include <unistd.h>
 
 using namespace aegon;
 using namespace aegon::http;

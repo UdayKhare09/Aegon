@@ -1,6 +1,5 @@
 #pragma once
 
-#include "core/IoUring.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -18,7 +17,6 @@
 
 #include <sys/eventfd.h>
 #include <unistd.h>
-#include <liburing.h>
 
 namespace aegon::data::memory {
 
@@ -173,35 +171,6 @@ private:
 
     mutable std::atomic<uint64_t> hits_{0};
     mutable std::atomic<uint64_t> misses_{0};
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// EventFdReadAwaiter — suspends coroutine until MemStore signals the eventfd
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * @brief Submits io_uring_prep_read on an eventfd and suspends the calling
- *        coroutine. Resumed by IoUring::process_completions() when the MemStore
- *        thread writes 1 to the fd.
- */
-struct EventFdReadAwaiter : core::IoAwaiter {
-    core::IoUring& ring;
-    int            efd;
-    uint64_t       buf{0};
-
-    EventFdReadAwaiter(core::IoUring& r, int fd) noexcept
-        : ring(r), efd(fd) {}
-
-    void submit() noexcept override {
-        struct io_uring_sqe* sqe = io_uring_get_sqe(ring.raw_ring());
-        if (!sqe) [[unlikely]] return;
-        io_uring_prep_read(sqe, efd, &buf, sizeof(buf), 0);
-        io_uring_sqe_set_data(sqe, static_cast<core::IoAwaiter*>(this));
-        io_uring_submit(ring.raw_ring());
-    }
-
-    // The result is in the MemRequest struct; nothing to return here.
-    void await_resume() noexcept {}
 };
 
 } // namespace aegon::data::memory

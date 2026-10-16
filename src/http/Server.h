@@ -14,6 +14,7 @@
 #include <thread>
 #include <atomic>
 #include <optional>
+#include <mutex>
 
 namespace aegon::http {
 
@@ -303,7 +304,8 @@ private:
     ServerConfig config_{};
     bool tls_enabled_{false};
     std::unique_ptr<tls::TlsContext> tls_ctx_;
-    std::vector<std::unique_ptr<v3::Http3Server>> h3_servers_;
+    std::mutex loops_mutex_;
+    std::vector<core::EventLoop*> active_loops_;
 };
 
 } // namespace aegon::http

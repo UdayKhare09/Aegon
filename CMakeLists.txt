@@ -60,10 +60,12 @@ target_link_libraries(aegon_log PUBLIC
     Threads::Threads
 )
 
-# 1. Async io_uring Core (aegon_core)
+# 1. Async I/O Engine Core (aegon_core)
 add_library(aegon_core
     src/core/BufferPool.cpp
-    src/core/IoUring.cpp
+    src/core/engine/IoEngine.cpp
+    src/core/engine/IoUringEngine.cpp
+    src/core/engine/EpollEngine.cpp
     src/core/EventLoop.cpp
 )
 target_link_libraries(aegon_core PUBLIC
@@ -267,6 +269,7 @@ aegon_add_test(logger aegon_log)
 aegon_add_test(foundational_types)
 aegon_add_test(dto_validation)
 aegon_add_test(advanced_io)
+aegon_add_test(epoll_engine aegon_core aegon_http)
 aegon_add_test(error_handling)
 
 # HTTP & Web Protocols

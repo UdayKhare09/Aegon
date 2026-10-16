@@ -1,7 +1,7 @@
 #include "data/redis/RedisClient.h"
 #include "data/redis/RedisLock.h"
 #include "data/redis/RedisPipeline.h"
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
 #include "core/EventLoop.h"
 #include <cassert>
 #include <iostream>
@@ -221,7 +221,7 @@ core::Task<void> test_streams(RedisClient& client) {
     std::cout << "  -> XDEL removed message from stream, remaining: " << len_after_del << "\n";
 }
 
-core::Task<void> test_cluster_pipeline(core::IoUring& ring) {
+core::Task<void> test_cluster_pipeline(core::IoEngine& ring) {
     std::cout << "\n[5] Testing Redis Cluster-Aware Pipeline...\n";
 
     // Proves that only a SINGLE seed node is needed: the router dynamically discovers
@@ -261,7 +261,7 @@ core::Task<void> test_cluster_pipeline(core::IoUring& ring) {
     std::cout << "     item:500 -> " << results[5].as_string() << "\n";
 }
 
-core::Task<void> run_all_tests(core::IoUring& ring) {
+core::Task<void> run_all_tests(core::IoEngine& ring) {
     RedisNodeConfig standalone_cfg{
         .host = "127.0.0.1",
         .port = 6379,
@@ -286,7 +286,7 @@ int main() {
     bool completed = false;
     loop.spawn([&]() -> core::Task<void> {
         try {
-            co_await run_all_tests(loop.ring());
+            co_await run_all_tests(loop.engine());
             completed = true;
         } catch (const std::exception& e) {
             std::cerr << "FATAL TEST FAILURE: " << e.what() << "\n";

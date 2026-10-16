@@ -76,8 +76,10 @@ bool Http3Server::start() {
 }
 
 void Http3Server::stop() noexcept {
-    if (!running_) return;
-    running_ = false;
+    bool expected = true;
+    if (!running_.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
+        return;
+    }
 
     // Gracefully signal GOAWAY to all active connections
     for (auto& [_, conn] : connections_) {
@@ -156,7 +158,7 @@ void Http3Server::prune_connections() {
 
 core::Task<void> Http3Server::run_timer_loop() {
     while (running_) {
-        co_await loop_.ring().timeout(10'000'000ULL); // 10ms tick for RFC 9002 loss detection & PTO
+        co_await loop_.engine().timeout(10'000'000ULL); // 10ms tick for RFC 9002 loss detection & PTO
         if (!running_) break;
         check_expiries();
         prune_connections();
@@ -288,7 +290,7 @@ core::Task<void> Http3Server::run_receive_loop() {
         msg.msg_controllen = 0;
         msg.msg_flags = 0;
 
-        int bytes = co_await loop_.ring().recvmsg(udp_fd_, &msg);
+        int bytes = co_await loop_.engine().recvmsg(udp_fd_, &msg);
         if (bytes <= 0 || !running_) {
             if (!running_) break;
             continue;

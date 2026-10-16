@@ -36,8 +36,7 @@ Server::Server(Server&& other) noexcept
       workers_(std::move(other.workers_)),
       config_(other.config_),
       tls_enabled_(other.tls_enabled_),
-      tls_ctx_(std::move(other.tls_ctx_)),
-      h3_servers_(std::move(other.h3_servers_))
+      tls_ctx_(std::move(other.tls_ctx_))
 {
 }
 
@@ -56,7 +55,6 @@ Server& Server::operator=(Server&& other) noexcept {
         config_ = other.config_;
         tls_enabled_ = other.tls_enabled_;
         tls_ctx_ = std::move(other.tls_ctx_);
-        h3_servers_ = std::move(other.h3_servers_);
     }
     return *this;
 }
@@ -125,14 +123,14 @@ core::Task<void> Server::run_h2_loop(core::EventLoop& loop, int client_fd, v2::H
     if (!initial_data.empty()) {
         bool ok = co_await h2.feed_data(initial_data.data(), initial_data.size());
         if (!ok) {
-            (void)(co_await loop.ring().close(client_fd));
+            (void)(co_await loop.engine().close(client_fd));
             co_return;
         }
     }
 
     auto stream = existing_stream.has_value()
         ? std::move(*existing_stream)
-        : loop.ring().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
+        : loop.engine().recv_multishot_stream(client_fd, loop.buffer_pool().bgid());
     while (running_ && !h2.is_closed() && h2.wants_read()) {
         auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
@@ -148,8 +146,8 @@ core::Task<void> Server::run_h2_loop(core::EventLoop& loop, int client_fd, v2::H
         }
     }
 
-    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
-    (void)(co_await loop.ring().close(client_fd));
+    (void)(co_await loop.engine().shutdown(client_fd, SHUT_WR));
+    (void)(co_await loop.engine().close(client_fd));
 }
 
 core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int client_fd, std::string initial_data,
@@ -157,7 +155,7 @@ core::Task<void> Server::handle_http2_connection(core::EventLoop& loop, int clie
     v2::Http2Connection h2(loop, client_fd, router_, services_.get(), nullptr, config_);
     bool ok = co_await h2.init();
     if (!ok) {
-        (void)(co_await loop.ring().close(client_fd));
+        (void)(co_await loop.engine().close(client_fd));
         co_return;
     }
 
@@ -170,13 +168,13 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, int client_
     v2::Http2Connection h2(loop, client_fd, router_, services_.get(), nullptr, config_);
     bool ok = co_await h2.init();
     if (!ok) {
-        (void)(co_await loop.ring().close(client_fd));
+        (void)(co_await loop.engine().close(client_fd));
         co_return;
     }
 
     ok = co_await h2.upgrade_request(std::move(req), http2_settings);
     if (!ok) {
-        (void)(co_await loop.ring().close(client_fd));
+        (void)(co_await loop.engine().close(client_fd));
         co_return;
     }
 
@@ -187,7 +185,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
     tls::TlsStream tls_stream(loop, client_fd, tls_ctx_->native_handle());
     bool ok = co_await tls_stream.handshake();
     if (!ok) {
-        (void)(co_await loop.ring().close(client_fd));
+        (void)(co_await loop.engine().close(client_fd));
         co_return;
     }
 
@@ -205,7 +203,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
         }
         ok = co_await h2.init();
         if (!ok) {
-            (void)(co_await loop.ring().close(client_fd));
+            (void)(co_await loop.engine().close(client_fd));
             co_return;
         }
 
@@ -224,8 +222,8 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, int client
         co_await h1.run_tls(tls_stream, alt_svc_hdr);
     }
 
-    (void)(co_await loop.ring().shutdown(client_fd, SHUT_WR));
-    (void)(co_await loop.ring().close(client_fd));
+    (void)(co_await loop.engine().shutdown(client_fd, SHUT_WR));
+    (void)(co_await loop.engine().close(client_fd));
 }
 
 core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd) {
@@ -243,7 +241,7 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, int client_fd)
 
 core::Task<void> Server::accept_loop(core::EventLoop& loop, int listen_fd, uint16_t port, bool is_tls) {
     while (running_) {
-        auto stream = loop.ring().accept_multishot(listen_fd);
+        auto stream = loop.engine().accept_multishot(listen_fd);
         while (running_) {
             auto accept_res = co_await stream.next();
             if (accept_res.fd < 0) {
@@ -294,13 +292,28 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
         thread_listeners.push_back({fd, l.port, l.tls});
     }
 
-    core::IoUringConfig ring_cfg;
-    ring_cfg.entries = config_.ring_entries;
+    core::EngineConfig engine_cfg;
+    engine_cfg.entries = config_.ring_entries;
 
-    core::EventLoop loop(ring_cfg, config_.buffer_pool_entries, config_.buffer_size);
+    core::EventLoop loop(engine_cfg, config_.buffer_pool_entries, config_.buffer_size);
     if (cpu_core) {
         loop.pin_to_core(*cpu_core);
     }
+
+    {
+        std::lock_guard lock(loops_mutex_);
+        if (!running_) return;
+        active_loops_.push_back(&loop);
+    }
+    struct LoopGuard {
+        Server& s;
+        core::EventLoop* l;
+        ~LoopGuard() {
+            std::lock_guard lock(s.loops_mutex_);
+            std::erase(s.active_loops_, l);
+        }
+    } loop_guard{*this, &loop};
+
     for (const auto& al : thread_listeners) {
         loop.spawn(accept_loop(loop, al.fd, al.port, al.is_tls));
     }
@@ -312,7 +325,6 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
     }
 
     std::vector<std::unique_ptr<v3::Http3Server>> local_h3_servers;
-    auto& h3_dest = cpu_core.has_value() ? local_h3_servers : h3_servers_;
     if (tls_enabled_ && config_.enable_http3 && tls_ctx_) {
         for (const auto& l : active_listeners) {
             if (l.tls) {
@@ -320,7 +332,7 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
                 if (h3->start()) {
                     loop.spawn(h3->run_receive_loop());
                     loop.spawn(h3->run_timer_loop());
-                    h3_dest.push_back(std::move(h3));
+                    local_h3_servers.push_back(std::move(h3));
                 }
             }
         }
@@ -328,12 +340,10 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
 
     loop.run();
 
-    for (auto& h3 : h3_dest) {
+    for (auto& h3 : local_h3_servers) {
         if (h3) h3->stop();
     }
-    if (!cpu_core.has_value()) {
-        h3_servers_.clear();
-    }
+    local_h3_servers.clear();
     for (const auto& al : thread_listeners) {
         close(al.fd);
     }
@@ -428,17 +438,19 @@ void Server::stop() {
     running_ = false;
     log::info("Aegon server stopping");
 
+    {
+        std::lock_guard lock(loops_mutex_);
+        for (auto* l : active_loops_) {
+            if (l) l->stop();
+        }
+    }
+
     // Run asynchronous shutdown lifecycle hooks
     for (const auto& hook : shutdown_hooks_) {
         core::EventLoop stop_loop;
         stop_loop.spawn(hook(*this));
         stop_loop.run();
     }
-
-    for (auto& h3 : h3_servers_) {
-        if (h3) h3->stop();
-    }
-    h3_servers_.clear();
 }
 
 } // namespace aegon::http

@@ -696,7 +696,7 @@ core::Task<Response> Http3ClientSession::execute(std::shared_ptr<RequestState> s
             flush_outbound();
         }
 
-        int n = co_await loop.ring().recv(udp_fd_, pkt_buf, sizeof(pkt_buf), 0);
+        int n = co_await loop.engine().recv(udp_fd_, pkt_buf, sizeof(pkt_buf), 0);
         if (n > 0) {
             process_datagram(pkt_buf, static_cast<size_t>(n));
             while (true) {

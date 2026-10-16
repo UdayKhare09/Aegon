@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Resp3.h"
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -22,7 +22,7 @@ struct RedisNodeConfig {
 
 class RedisConnection {
 public:
-    RedisConnection(core::IoUring& ring, RedisNodeConfig config);
+    RedisConnection(core::IoEngine& engine, RedisNodeConfig config);
     ~RedisConnection();
 
     RedisConnection(const RedisConnection&) = delete;
@@ -42,7 +42,7 @@ public:
 private:
     core::Task<RespValue> read_response();
 
-    core::IoUring& ring_;
+    core::IoEngine& engine_;
     RedisNodeConfig config_;
     int fd_{-1};
     std::string read_buffer_;

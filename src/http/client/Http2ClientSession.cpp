@@ -356,7 +356,7 @@ core::Task<ssize_t> Http2ClientSession::write_wire_async(const void* data, size_
         int n = SSL_write(ssl_, data, static_cast<int>(len));
         co_return n;
     }
-    int n = co_await loop.ring().send(fd_, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data), len));
+    int n = co_await loop.engine().send(fd_, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data), len));
     co_return n;
 }
 
@@ -366,7 +366,7 @@ core::Task<ssize_t> Http2ClientSession::read_wire_async(void* data, size_t len, 
         int n = SSL_read(ssl_, data, static_cast<int>(len));
         co_return n;
     }
-    int n = co_await loop.ring().recv(fd_, data, len, 0);
+    int n = co_await loop.engine().recv(fd_, data, len, 0);
     co_return n;
 }
 

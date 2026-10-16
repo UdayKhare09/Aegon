@@ -97,7 +97,7 @@ struct PostgresConnection::PipelineAwaiter {
 
 core::Task<void> PostgresConnection::run_reader(core::EventLoop& loop) {
     while (conn_ && pipelined_) {
-        (void)co_await loop.ring().poll(fd_, POLLIN);
+        (void)co_await loop.engine().poll(fd_, POLLIN);
         if (!conn_ || PQconsumeInput(conn_) == 0) {
             break;
         }
@@ -239,7 +239,7 @@ core::Task<size_t> PostgresConnection::execute(std::string_view sql, std::span<c
             while (true) {
                 int flush_res = PQflush(conn_);
                 if (flush_res <= 0) break;
-                (void)co_await loop->ring().poll(fd_, POLLOUT);
+                (void)co_await loop->engine().poll(fd_, POLLOUT);
             }
         }
 
@@ -337,7 +337,7 @@ core::Task<std::vector<DriverRowView>> PostgresConnection::query(std::string_vie
             while (true) {
                 int flush_res = PQflush(conn_);
                 if (flush_res <= 0) break;
-                (void)co_await loop->ring().poll(fd_, POLLOUT);
+                (void)co_await loop->engine().poll(fd_, POLLOUT);
             }
         }
 

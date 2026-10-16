@@ -124,7 +124,7 @@ private:
         req.notify_fd = efd;
         setup_fn(req);
 
-        // Get the current thread's io_uring ring
+        // Get the current thread's EventLoop
         auto* loop = core::EventLoop::current();
         if (!loop) [[unlikely]] {
             ::close(efd);
@@ -135,8 +135,9 @@ private:
         store_->submit(&req);
 
         // Suspend coroutine until MemStore signals eventfd
-        EventFdReadAwaiter awaiter{loop->ring(), efd};
-        co_await awaiter;
+        (void)co_await loop->engine().poll(efd, POLLIN);
+        uint64_t val = 0;
+        ::eventfd_read(efd, &val);
 
         ::close(efd);
         co_return extract_fn(req);
