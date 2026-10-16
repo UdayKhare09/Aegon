@@ -452,6 +452,10 @@ public:
     virtual int submit_and_wait(uint32_t min_complete = 1) = 0;
     virtual size_t process_completions() noexcept = 0;
     virtual void wakeup() noexcept = 0;
+    virtual void post_completion(IoAwaiter* aw, int res = 0) noexcept {
+        (void)aw;
+        (void)res;
+    }
 
     // Low-level submit dispatchers invoked by awaiters
     virtual void submit_accept(AcceptAwaiter& aw) noexcept = 0;

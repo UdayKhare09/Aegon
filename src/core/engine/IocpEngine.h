@@ -39,6 +39,7 @@ public:
     int submit_and_wait(uint32_t min_complete = 1) override;
     size_t process_completions() noexcept override;
     void wakeup() noexcept override;
+    void post_completion(IoAwaiter* aw, int res = 0) noexcept override;
 
     // Low-level submit dispatchers invoked by awaiters
     void submit_accept(AcceptAwaiter& aw) noexcept override;

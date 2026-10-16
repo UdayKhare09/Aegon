@@ -15,6 +15,9 @@ if(TARGET aegon_core AND TARGET aegon_config)
         Aegon::core
         Aegon::config
     )
+    if(WIN32)
+        target_link_libraries(aegon_cli PRIVATE ws2_32)
+    endif()
 
     install(
         TARGETS aegon_cli

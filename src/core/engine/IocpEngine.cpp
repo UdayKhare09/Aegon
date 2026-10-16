@@ -92,6 +92,12 @@ void IocpEngine::wakeup() noexcept {
     }
 }
 
+void IocpEngine::post_completion(IoAwaiter* aw, int res) noexcept {
+    if (!aw || iocp_ == INVALID_HANDLE_VALUE) return;
+    std::memset(&aw->overlapped, 0, sizeof(aw->overlapped));
+    PostQueuedCompletionStatus(iocp_, static_cast<DWORD>(res), 0, &aw->overlapped);
+}
+
 int IocpEngine::submit_and_wait(uint32_t /*min_complete*/) {
     DWORD timeout_ms = INFINITE;
 

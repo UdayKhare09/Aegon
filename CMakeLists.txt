@@ -112,14 +112,14 @@ if(WIN32)
 endif()
 
 # 4. In-Memory Store (aegon_memory)
-if(NOT WIN32)
-    add_library(aegon_memory
-        src/data/memory/MemStore.cpp
-    )
-    target_link_libraries(aegon_memory PUBLIC
-        aegon_core
-        uring
-    )
+add_library(aegon_memory
+    src/data/memory/MemStore.cpp
+)
+target_link_libraries(aegon_memory PUBLIC
+    aegon_core
+)
+if(NOT WIN32 AND TARGET uring)
+    target_link_libraries(aegon_memory PUBLIC uring)
 endif()
 
 # 5. Unified ORM & SQL Query Engine (aegon_orm)
@@ -218,7 +218,7 @@ include(cmake/InstallAndExport.cmake)
 # ==============================================================================
 # Developer CLI Tool (aegon)
 # ==============================================================================
-if(AEGON_BUILD_CLI AND NOT WIN32)
+if(AEGON_BUILD_CLI)
     add_subdirectory(tools/cli)
 endif()
 

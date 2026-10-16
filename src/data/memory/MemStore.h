@@ -14,9 +14,17 @@
 #include <list>
 #include <memory>
 #include <cstdint>
+#include <functional>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <sys/eventfd.h>
 #include <unistd.h>
+#endif
 
 namespace aegon::data::memory {
 
@@ -66,8 +74,16 @@ struct MemRequest {
     bool                                    result_bool{false};
     int64_t                                 result_i64{0};
 
-    /// eventfd created by the worker. MemStore writes 1 here when done.
+    /// eventfd created by the worker on Linux. MemStore writes 1 here when done.
     int notify_fd{-1};
+
+#if defined(_WIN32)
+    /// Event handle created by the worker on Windows.
+    void* notify_handle{nullptr};
+#endif
+
+    /// Generic completion callback (e.g., invoked to post an IOCP completion token)
+    std::function<void()> on_complete;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
