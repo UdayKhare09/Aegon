@@ -1,6 +1,6 @@
-#include <aegon/http/Server.h>
-#include <aegon/core/Task.h>
-#include <aegon/data/types/UUID.h>
+#include "http/Server.h"
+#include "core/Task.h"
+#include "data/types/UUID.h"
 #include <glaze/glaze.hpp>
 #include <iostream>
 #include <cstdlib>
@@ -66,13 +66,26 @@ int main(int argc, char* argv[]) {
 
     std::string cert_file = "benchmarks/http3/certs/server.crt";
     std::string key_file = "benchmarks/http3/certs/server.key";
-    if (argc > 3) cert_file = argv[3];
-    if (argc > 4) key_file = argv[4];
+    bool use_tls = true;
+    bool use_h3 = true;
 
-    server.enable_tls(cert_file, key_file);
-    server.enable_http3(true);
+    if (argc > 3) {
+        if (std::string(argv[3]) == "plain") {
+            use_tls = false;
+            use_h3 = false;
+        } else {
+            cert_file = argv[3];
+        }
+    }
+    if (argc > 4 && use_tls) key_file = argv[4];
+
+    if (use_tls) {
+        server.enable_tls(cert_file, key_file);
+    }
+    server.enable_http3(use_h3);
     server.listen(port);
-    std::cout << "Aegon HTTP/3 listening on https://0.0.0.0:" << port << " with " << threads << " worker threads" << std::endl;
+    std::cout << "Aegon listening on " << (use_tls ? "https" : "http") << "://0.0.0.0:" << port
+              << " with " << threads << " worker threads" << (use_h3 ? " (HTTP/3 enabled)" : "") << std::endl;
     server.run(threads);
     return 0;
 }

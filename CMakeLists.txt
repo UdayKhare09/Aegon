@@ -544,3 +544,15 @@ if(TARGET aegon_http AND TARGET aegon_orm AND TARGET aegon_redis)
     add_subdirectory(samples/adv)
     add_subdirectory(samples/sse)
 endif()
+
+# ==============================================================================
+# Benchmarks Server
+# ==============================================================================
+if(TARGET aegon_http AND TARGET aegon_orm)
+    add_executable(bench_aegon benchmarks/http3/servers/aegon/main.cpp)
+    target_link_libraries(bench_aegon PRIVATE aegon_http aegon_core aegon_orm)
+    target_include_directories(bench_aegon PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    if(MSVC)
+        target_compile_options(bench_aegon PRIVATE /std:c++latest /EHsc)
+    endif()
+endif()
