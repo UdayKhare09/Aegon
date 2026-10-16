@@ -1,21 +1,26 @@
 # Getting Started
 
-Welcome to **Aegon**, a next-generation, asynchronous C++26 web framework and compile-time ORM engineered specifically for modern Linux systems.
+Welcome to **Aegon**, a next-generation, asynchronous C++26 web framework and compile-time ORM engineered for high-throughput, low-latency networked applications.
 
-Aegon uses Linux `io_uring` kernel features (multishot accept/recv, provided buffer rings, zero-copy socket operations) paired with C++26 coroutines (`co_await`, symmetric transfer) to provide top-tier throughput with zero-overhead async I/O.
+Aegon features a pluggable I/O architecture supporting:
+- **`io_uring` Backend (Default)**: Leverages Linux 6.1+ kernel features (multishot accept/recv, provided buffer rings `PBUF_RING`, zero-copy socket operations) for maximum throughput.
+- **`epoll` Backend**: Seamless fallback for Linux kernels < 6.1, WSL2, and Docker container environments where `io_uring` is unprivileged or unavailable, delivering over 450k req/s and 1.3M H2 req/s with zero code changes.
 
 ---
 
 ## System Requirements
 
-Because Aegon directly drives modern Linux kernel interfaces and modern C++ standard features, ensure your environment meets the following requirements:
+Because Aegon drives modern kernel interfaces and modern C++ standard features, ensure your environment meets the following requirements:
 
 | Requirement | Minimum Version | Notes |
 | :--- | :--- | :--- |
-| **Linux Kernel** | `6.0+` (Recommended: `6.5+`) | Requires `io_uring` features: `IORING_FEAT_FAST_POLL`, multishot accept/recv, provided buffer rings (`BGID`). |
+| **Linux Kernel** | `6.1+` (Recommended for `io_uring`)<br>`2.6+` (for `epoll` engine) | `io_uring` provides peak zero-syscall performance; `epoll` backend automatically activates on older kernels, WSL2, or Docker. |
 | **C++ Compiler** | `GCC 14+` or `Clang 19+` | Full C++26 language flag (`-std=c++26`) and coroutine support. |
 | **Build System** | `CMake 3.20+` | Standard CMake toolchain with Ninja or Make. |
 | **System Libraries** | `liburing`, `OpenSSL`, `libnghttp2` | Core dependencies for ring I/O, TLS, and HTTP/2 framing. |
+
+> [!TIP]
+> You can force Aegon to run using the `epoll` backend in any environment by setting the environment variable `AEGON_ENGINE=epoll`. See the [I/O Engine & Backends Guide](./core/io-engine.md) for details.
 
 ### Installing Dependencies (Arch Linux)
 

@@ -71,6 +71,23 @@ Raw performance is only valuable when accompanied by rigorous protocol correctne
 
 ---
 
+## ⚡ Cross-Platform Engine Benchmarks (`io_uring`, `epoll`, `IOCP`)
+
+Aegon features a pluggable I/O engine architecture with zero-allocation stack awaiters. Below are comparative benchmarks executed on isolated physical CPU cores (Server on 2 dedicated cores; Client on 4 dedicated cores):
+
+| Protocol Suite | Workload | Linux `io_uring` (Kernel 6.1+) | Linux `epoll` | Windows `IOCP` (MSVC Native) | Windows Profile |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **HTTP/1.1 Plaintext** | `h2load/wrk -t4 -c100 -D10s` | **529,980 req/s** (199 µs) | **460,914 req/s** (213 µs) | **94,431 req/s** (1.04 ms) | WinSock overlapped I/O |
+| **HTTP/1.1 TLS 1.3** | `h2load/wrk -t4 -c100 -D10s` | **398,164 req/s** (248 µs) | **358,038 req/s** (273 µs) | **86,655 req/s** (1.14 ms) | 91.8% of plaintext throughput |
+| **HTTP/2 Multiplexing** | `h2load -t4 -c100 -m10` | **1,392,360 req/s** (656 µs) | **1,324,911 req/s** (728 µs) | **355,548 req/s** (2.42 ms) | 3.76x multiplexing speedup |
+| **HTTP/3 (QUIC)** | `h2load --h3 -t4 -c50 -m10` | **875,254 req/s** (570 µs) | **876,920 req/s** (573 µs) | **283,238 req/s** (1.62 ms) | 0% packet loss (0 / 403k) |
+
+> [!NOTE]
+> - **Linux**: Leverages zero-syscall ring submission via `io_uring` and kernel-mapped buffer pools (`PBUF_RING`) for maximum throughput, with `epoll` providing seamless fallback on Docker and WSL2.
+> - **Windows**: Native Windows NT IOCP (`GetQueuedCompletionStatusEx`) delivers stable microsecond-range dispatch, zero packet loss under sustained QUIC load, and sub-3.8 ms p99 latencies.
+
+---
+
 ## 🔬 Hardware Architecture & Why Aegon Leads
 
 Aegon achieves these results through architectural innovations across kernel, CPU, and memory boundaries:

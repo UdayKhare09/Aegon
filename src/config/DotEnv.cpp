@@ -107,7 +107,11 @@ std::optional<std::unordered_map<std::string, std::string>> DotEnv::load_file(
 
     if (set_environment) {
         for (const auto& [k, v] : env_map) {
+#if defined(_WIN32)
+            ::_putenv_s(k.c_str(), v.c_str());
+#else
             ::setenv(k.c_str(), v.c_str(), 1);
+#endif
         }
     }
 

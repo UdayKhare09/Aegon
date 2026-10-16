@@ -1,7 +1,7 @@
 #pragma once
 
 #include "RedisConnection.h"
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
 #include "core/Task.h"
 #include <string>
 #include <vector>
@@ -20,8 +20,8 @@ struct SentinelConfig {
 
 class RedisSentinelResolver {
 public:
-    RedisSentinelResolver(core::IoUring& ring, SentinelConfig config)
-        : ring_(ring), config_(std::move(config)) {}
+    RedisSentinelResolver(core::IoEngine& engine, SentinelConfig config)
+        : engine_(engine), config_(std::move(config)) {}
 
     core::Task<std::optional<RedisNodeConfig>> discover_master() {
         for (const auto& [shost, sport] : config_.sentinels) {
@@ -29,7 +29,7 @@ public:
                 .host = shost,
                 .port = sport
             };
-            RedisConnection sconn(ring_, sconfig);
+            RedisConnection sconn(engine_, sconfig);
             bool ok = co_await sconn.connect();
             if (!ok) continue;
 
@@ -52,7 +52,7 @@ public:
     }
 
 private:
-    core::IoUring& ring_;
+    core::IoEngine& engine_;
     SentinelConfig config_;
 };
 

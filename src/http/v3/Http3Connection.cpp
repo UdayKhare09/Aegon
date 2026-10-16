@@ -7,9 +7,17 @@
 #include <iostream>
 #include <cstdarg>
 #include <atomic>
-#include <sys/socket.h>
-#include <netinet/in.h>
+#include "core/OsSocket.h"
+#if defined(_WIN32)
+#ifndef strncasecmp
+#define strncasecmp _strnicmp
+#endif
+#ifndef strcasecmp
+#define strcasecmp _stricmp
+#endif
+#else
 #include <netinet/udp.h>
+#endif
 #include <openssl/rand.h>
 
 #ifndef UDP_SEGMENT
@@ -70,7 +78,7 @@ nghttp3_ssize h3_read_data(nghttp3_conn*, int64_t stream_id, nghttp3_vec* vec, s
 
 } // anonymous namespace
 
-Http3Connection::Http3Connection(core::EventLoop& loop, int udp_fd, const sockaddr_storage& remote_addr,
+Http3Connection::Http3Connection(core::EventLoop& loop, core::os_socket_t udp_fd, const sockaddr_storage& remote_addr,
                                  socklen_t remote_addr_len, const Router& router, SSL_CTX* ssl_ctx,
                                  const ServiceRegistry* services, const ServerConfig& config)
     : loop_(loop), udp_fd_(udp_fd), remote_addr_(remote_addr), remote_addr_len_(remote_addr_len),
@@ -782,6 +790,34 @@ bool Http3Connection::flush_outbound() {
                              reinterpret_cast<const ngtcp2_sockaddr*>(&remote_addr_), remote_addr_len_, nullptr);
 
     constexpr size_t BATCH_SIZE = 64;
+#if defined(_WIN32)
+    struct FlushBuffers {
+        alignas(64) uint8_t packet_bufs[BATCH_SIZE][1500];
+        iovec iovs[BATCH_SIZE];
+    };
+    static thread_local FlushBuffers fb;
+    size_t batch_count = 0;
+
+    auto flush_batch = [&]() -> bool {
+        if (batch_count == 0) return true;
+        for (size_t k = 0; k < batch_count; ++k) {
+            int sent = ::sendto(udp_fd_, reinterpret_cast<const char*>(fb.iovs[k].iov_base),
+                                static_cast<int>(fb.iovs[k].iov_len), 0,
+                                reinterpret_cast<const sockaddr*>(&remote_addr_), remote_addr_len_);
+            if (sent < 0) {
+                int err = WSAGetLastError();
+                if (err == WSAEWOULDBLOCK) {
+                    batch_count = 0;
+                    return true;
+                }
+                batch_count = 0;
+                return false;
+            }
+        }
+        batch_count = 0;
+        return true;
+    };
+#else
     struct FlushBuffers {
         alignas(64) uint8_t packet_bufs[BATCH_SIZE][1500];
         iovec iovs[BATCH_SIZE];
@@ -863,6 +899,7 @@ bool Http3Connection::flush_outbound() {
         batch_count = 0;
         return true;
     };
+#endif
 
     const uint64_t now_ts = get_timestamp_ns();
     bool write_more = false;
@@ -1010,8 +1047,8 @@ core::Task<bool> Http3Connection::feed_datagram(std::span<const uint8_t> pkt,
                 nwrite = ngtcp2_crypto_write_connection_close(
                     out, sizeof(out), version_, &client_scid_, &client_dcid_, ccerr.error_code, nullptr, 0);
             }
-            if (nwrite > 0 && udp_fd_ >= 0) {
-                sendto(udp_fd_, out, static_cast<size_t>(nwrite), 0,
+            if (nwrite > 0 && udp_fd_ != core::INVALID_OS_SOCKET) {
+                sendto(udp_fd_, reinterpret_cast<const char*>(out), static_cast<int>(nwrite), 0,
                        reinterpret_cast<const sockaddr*>(&remote_addr_), remote_addr_len_);
             }
         }

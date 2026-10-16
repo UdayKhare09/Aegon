@@ -7,11 +7,8 @@
 #include <cstring>
 #include <thread>
 #include <chrono>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
 #include <csignal>
+#include "core/OsSocket.h"
 
 using namespace aegon::http;
 using namespace aegon::http::websocket;
@@ -179,22 +176,24 @@ void test_live_websocket_server() {
     std::thread server_thread([&]() {
         server.run();
     });
-    server_thread.detach();
 
     // Wait for server to bind
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     // Connect raw TCP socket
-    int sock = ::socket(AF_INET, SOCK_STREAM, 0);
-    assert(sock >= 0);
-
+    aegon::core::os_socket_t sock = aegon::core::INVALID_OS_SOCKET;
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
     int conn_res = -1;
-    for (int retry = 0; retry < 10; ++retry) {
+    for (int retry = 0; retry < 20; ++retry) {
+        if (aegon::core::is_valid_socket(sock)) {
+            aegon::core::close_socket(sock);
+        }
+        sock = ::socket(AF_INET, SOCK_STREAM, 0);
+        assert(aegon::core::is_valid_socket(sock));
         conn_res = ::connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
         if (conn_res == 0) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -210,7 +209,7 @@ void test_live_websocket_server() {
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
         "Sec-WebSocket-Version: 13\r\n\r\n";
 
-    ssize_t sent = ::send(sock, upgrade_req.data(), upgrade_req.size(), 0);
+    ssize_t sent = ::send(sock, upgrade_req.data(), static_cast<int>(upgrade_req.size()), 0);
     assert(sent == static_cast<ssize_t>(upgrade_req.size()));
 
     char buf[4096]{};
@@ -232,7 +231,7 @@ void test_live_websocket_server() {
         frame.push_back(static_cast<char>(msg[i] ^ mask[i % 4]));
     }
 
-    sent = ::send(sock, frame.data(), frame.size(), 0);
+    sent = ::send(sock, frame.data(), static_cast<int>(frame.size()), 0);
     assert(sent == static_cast<ssize_t>(frame.size()));
 
     recvd = ::recv(sock, buf, sizeof(buf), 0);
@@ -257,7 +256,7 @@ void test_live_websocket_server() {
     close_frame.push_back(static_cast<char>(code_bytes[0] ^ mask[0]));
     close_frame.push_back(static_cast<char>(code_bytes[1] ^ mask[1]));
 
-    sent = ::send(sock, close_frame.data(), close_frame.size(), MSG_NOSIGNAL);
+    sent = ::send(sock, close_frame.data(), static_cast<int>(close_frame.size()), 0);
     assert(sent == static_cast<ssize_t>(close_frame.size()));
 
     recvd = ::recv(sock, buf, sizeof(buf), 0);
@@ -266,26 +265,40 @@ void test_live_websocket_server() {
         parse_frame_header(std::string_view(buf, static_cast<size_t>(recvd)), close_resp);
         assert(close_resp.opcode == Opcode::Close);
     }
-    ::close(sock);
+    aegon::core::close_socket(sock);
     std::cout << "  -> Clean Close OK\n";
 
     // 4. Test bad non-upgrade GET to /ws returns 426
-    int sock2 = ::socket(AF_INET, SOCK_STREAM, 0);
-    assert(::connect(sock2, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+    aegon::core::os_socket_t sock2 = aegon::core::INVALID_OS_SOCKET;
+    int c2 = -1;
+    for (int retry = 0; retry < 20; ++retry) {
+        if (aegon::core::is_valid_socket(sock2)) {
+            aegon::core::close_socket(sock2);
+        }
+        sock2 = ::socket(AF_INET, SOCK_STREAM, 0);
+        assert(aegon::core::is_valid_socket(sock2));
+        c2 = ::connect(sock2, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+        if (c2 == 0) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    assert(c2 == 0);
     std::string plain_get =
         "GET /ws HTTP/1.1\r\n"
         "Host: 127.0.0.1:19890\r\n"
         "Connection: close\r\n\r\n";
-    ::send(sock2, plain_get.data(), plain_get.size(), MSG_NOSIGNAL);
+    sent = ::send(sock2, plain_get.data(), static_cast<int>(plain_get.size()), 0);
     recvd = ::recv(sock2, buf, sizeof(buf) - 1, 0);
     assert(recvd > 0);
     buf[recvd] = '\0';
     std::string_view plain_resp(buf, static_cast<size_t>(recvd));
     assert(plain_resp.find("426 Upgrade Required") != std::string_view::npos);
-    ::close(sock2);
+    aegon::core::close_socket(sock2);
     std::cout << "  -> Reject non-upgrade GET /ws (426 Upgrade Required) OK\n";
 
     server.stop();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
 }
 
 // 5. Test pipelined WebSocket upgrade with initial frame and rapid reconnections (HttpArena echo-ws-limited pattern)
@@ -298,7 +311,6 @@ void test_pipelined_handshake_and_reconnection() {
     std::thread server_thread([&]() {
         server.run();
     });
-    server_thread.detach();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
@@ -329,8 +341,8 @@ void test_pipelined_handshake_and_reconnection() {
 
     // Run 50 reconnect iterations verifying zero frame drops
     for (int iter = 0; iter < 50; ++iter) {
-        int sock = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (sock < 0) {
+        aegon::core::os_socket_t sock = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (!aegon::core::is_valid_socket(sock)) {
             std::cerr << "Socket failed: " << errno << "\n";
             abort();
         }
@@ -341,7 +353,7 @@ void test_pipelined_handshake_and_reconnection() {
         }
 
         // Send upgrade request AND first frame in a single write
-        ssize_t sent = ::send(sock, pipelined_payload.data(), pipelined_payload.size(), MSG_NOSIGNAL);
+        ssize_t sent = ::send(sock, pipelined_payload.data(), static_cast<int>(pipelined_payload.size()), MSG_NOSIGNAL);
         if (sent != static_cast<ssize_t>(pipelined_payload.size())) {
             std::cerr << "Send failed: " << errno << "\n";
             abort();
@@ -360,14 +372,17 @@ void test_pipelined_handshake_and_reconnection() {
             accumulated.append(buf, static_cast<size_t>(recvd));
         }
 
-        assert(accumulated.find("101 Switching Protocols") != std::string::npos);
-        assert(accumulated.find(msg) != std::string::npos);
+        assert(accumulated.find("101 Switching Protocols") != std::string_view::npos);
+        assert(accumulated.find(msg) != std::string_view::npos);
 
-        ::close(sock);
+        aegon::core::close_socket(sock);
     }
 
     std::cout << "  -> 50 Pipelined Handshake & Reconnect cycles succeeded with zero drops\n";
     server.stop();
+    if (server_thread.joinable()) {
+        server_thread.join();
+    }
 }
 
 void test_websocket_config_limits_and_masking() {
@@ -485,7 +500,9 @@ void test_websocket_config_limits_and_masking() {
 }
 
 int main() {
+#if defined(SIGPIPE)
     std::signal(SIGPIPE, SIG_IGN);
+#endif
     std::cout << "=== Running Aegon WebSocket Tests ===\n";
     test_handshake_rfc_vector();
     test_frame_header_parsing_and_serializing();

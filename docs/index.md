@@ -3,26 +3,29 @@ layout: home
 
 hero:
   name: "Aegon"
-  text: "Ultra High-Performance Linux-Native Web Framework"
-  tagline: "C++26 Coroutines • io_uring Kernel Engine • Zero-Reflection ORM • Native Async Redis"
+  text: "Ultra High-Performance Cross-Platform Web Framework"
+  tagline: "C++26 Coroutines • io_uring, epoll & Windows IOCP • Compile-Time ORM • Native Redis"
   actions:
     - theme: brand
       text: Get Started
       link: /guide/getting-started
     - theme: alt
-      text: CLI Tooling
-      link: /guide/cli
+      text: Benchmarks Matrix
+      link: /guide/benchmarks
+    - theme: alt
+      text: I/O Engine Architecture
+      link: /guide/core/io-engine
     - theme: alt
       text: View on GitHub
       link: https://github.com/UdayKhare09/Aegon
 
 features:
   - icon: ⚡
-    title: Linux-Native io_uring Engine
-    details: Complete kernel bypass and zero-contention runtime leveraging multishot accept, multishot recv, buffer rings, and single-issuer cooperative task work.
+    title: Multi-Backend I/O Engines
+    details: Zero-allocation IoEngine with Linux 6.1+ io_uring (multishot & PBUF_RING), automatic epoll fallback (Linux < 6.1, Docker, WSL2), and native Windows NT IOCP via MSVC.
   - icon: 🔄
     title: Pure C++26 Coroutines
-    details: Symmetric transfer coroutines via Task<T> with zero heap allocations in hot paths, eliminating thread pool exhaustion and context switching.
+    details: Symmetric transfer coroutines via Task<T> with zero heap allocations on hot paths, eliminating thread pool exhaustion and context switching.
   - icon: 🛠️
     title: First-Class Developer CLI
     details: Built-in developer tooling with project scaffolding (aegon new), system environment diagnostics (aegon doctor), and streamlined build/run commands.
@@ -31,10 +34,10 @@ features:
     details: Type-safe SQL builder with zero reflection overhead. Fluent expressions, eager relation loading, migrations, and atomic transactions.
   - icon: 🚀
     title: Native Async Redis Engine
-    details: Built from scratch on io_uring. Supports standalone, Sentinel high availability, and multi-node Redis Cluster with per-core connection pools.
+    details: Built from scratch with per-core connection pools. Supports standalone, Sentinel high availability, and multi-node Redis Cluster.
   - icon: 🌐
-    title: Full-Stack Protocol Support
-    details: First-class native HTTP/1.1 pipelining, HTTP/2 stream multiplexing with HPACK, and industry-pioneering HTTP/3 over QUIC (RFC 9000 / 9114).
+    title: Full-Stack Protocol Suite
+    details: Native HTTP/1.1 pipelining, HTTP/2 multiplexing with HPACK, RFC 6455 WebSockets with SIMD unmasking, and HTTP/3 over QUIC (RFC 9000 / 9114).
 ---
 
 <div class="vp-doc" style="max-width: 100%; margin: 40px auto 0 auto; padding: 0 48px;">
@@ -45,9 +48,23 @@ Aegon is in active early development (`v0.1.a2`). **Public APIs and internal beh
 
 ---
 
+## ⚡ Cross-Platform Performance (2 Dedicated Cores)
+
+Aegon delivers peak throughput across Linux and Windows without compromising safety or RFC compliance:
+
+| Protocol Suite | Linux `io_uring` | Linux `epoll` | Windows `IOCP` (MSVC) | Verification Status |
+| :--- | :--- | :--- | :--- | :---: |
+| **HTTP/1.1 Plaintext** | **529,980 req/s** | **460,914 req/s** | **94,431 req/s** | 100% Passed |
+| **HTTP/1.1 TLS 1.3** | **398,164 req/s** | **358,038 req/s** | **86,655 req/s** | 100% Passed |
+| **HTTP/2 Multiplexing** | **1,392,360 req/s** | **1,324,911 req/s** | **355,548 req/s** | 100% Passed |
+| **HTTP/3 (QUIC)** | **875,254 req/s** | **876,920 req/s** | **283,238 req/s** | **0% packet loss** |
+| **Test Suite Pass Rate** | **46 / 46 (100%)** | **46 / 46 (100%)** | **41 / 41 (100%)** | **Zero Regressions** |
+
+---
+
 ## 10-Line "Hello World"
 
-A complete, asynchronous, io_uring-backed HTTP server in modern C++26:
+A complete, asynchronous, multi-backend HTTP server in modern C++26:
 
 ```cpp
 #include <aegon/http/Server.h>
@@ -74,3 +91,4 @@ curl http://localhost:8080/hello
 ```
 
 </div>
+

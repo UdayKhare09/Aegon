@@ -9,7 +9,7 @@
 
 #include <nghttp2/nghttp2.h>
 #include <openssl/ssl.h>
-#include <netinet/in.h>
+#include "core/OsSocket.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -47,7 +47,7 @@ public:
 
     void close();
 
-    [[nodiscard]] bool is_connected() const noexcept { return fd_ >= 0 && !closed_; }
+    [[nodiscard]] bool is_connected() const noexcept { return core::is_valid_socket(fd_) && !closed_; }
     [[nodiscard]] bool is_tls() const noexcept { return is_tls_; }
 
     // Internal nghttp2 callbacks
@@ -73,7 +73,7 @@ private:
     core::Task<bool> flush_outbound_async(core::EventLoop& loop);
 
     TlsClientOptions tls_opts_{};
-    int fd_{-1};
+    core::os_socket_t fd_{core::INVALID_OS_SOCKET};
     bool is_tls_{false};
     SSL_CTX* ssl_ctx_{nullptr};
     SSL* ssl_{nullptr};

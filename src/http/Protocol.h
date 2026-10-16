@@ -28,6 +28,10 @@ constexpr std::string_view to_string(HttpVersion v) noexcept {
     return "HTTP/1.1";
 }
 
+#ifdef DELETE
+#undef DELETE
+#endif
+
 enum class Method : uint8_t {
     GET,
     POST,
@@ -198,7 +202,11 @@ inline std::string_view get_http_date() noexcept {
     if (now != last_time) {
         last_time = now;
         struct tm gmt;
+#if defined(_WIN32)
+        gmtime_s(&gmt, &now);
+#else
         gmtime_r(&now, &gmt);
+#endif
         date_len = strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
     }
     return {date_buf, date_len};
@@ -216,7 +224,11 @@ inline std::string_view get_http_date_header() noexcept {
     if (now != last_time) {
         last_time = now;
         struct tm gmt;
+#if defined(_WIN32)
+        gmtime_s(&gmt, &now);
+#else
         gmtime_r(&now, &gmt);
+#endif
         std::memcpy(date_hdr_buf, "Date: ", 6);
         size_t dlen = strftime(date_hdr_buf + 6, sizeof(date_hdr_buf) - 8, "%a, %d %b %Y %H:%M:%S GMT\r\n", &gmt);
         date_hdr_len = 6 + dlen;
@@ -329,7 +341,7 @@ inline bool parse_path_header(std::string_view target, Method method,
 inline bool validate_request_header(std::string_view name, std::string_view value,
                                     StatusCode& error_status,
                                     size_t max_body_size = DEFAULT_LIMITS.max_body_size) noexcept {
-    if (core::simd::SimdString::iequals(name, "content-length")) {
+    if (aegon::core::simd::SimdString::iequals(name, "content-length")) {
         auto cl_opt = parse_valid_content_length(value);
         if (!cl_opt) {
             return false;
@@ -337,8 +349,8 @@ inline bool validate_request_header(std::string_view name, std::string_view valu
         if (*cl_opt > max_body_size && error_status == StatusCode::Ok) {
             error_status = StatusCode::PayloadTooLarge;
         }
-    } else if (core::simd::SimdString::iequals(name, "expect")) {
-        if (!core::simd::SimdString::iequals(value, "100-continue") && error_status == StatusCode::Ok) {
+    } else if (aegon::core::simd::SimdString::iequals(name, "expect")) {
+        if (!aegon::core::simd::SimdString::iequals(value, "100-continue") && error_status == StatusCode::Ok) {
             error_status = StatusCode::ExpectationFailed;
         }
     }

@@ -8,6 +8,7 @@
 #include "http/v1/Http1Serializer.h"
 #include "http/tls/TlsStream.h"
 #include "core/EventLoop.h"
+#include "core/OsSocket.h"
 #include "core/Task.h"
 #include <functional>
 #include <optional>
@@ -18,8 +19,8 @@
 
 namespace aegon::http::v1 {
 
-using H2DirectCallback = std::function<core::Task<void>(int client_fd, std::string preface_data)>;
-using H2UpgradeCallback = std::function<core::Task<void>(int client_fd, Request req, std::string settings, std::string trailing)>;
+using H2DirectCallback = std::function<core::Task<void>(core::os_socket_t client_fd, std::string preface_data)>;
+using H2UpgradeCallback = std::function<core::Task<void>(core::os_socket_t client_fd, Request req, std::string settings, std::string trailing)>;
 
 /**
  * @brief Manages the full lifecycle of an HTTP/1.x connection (both plaintext and TLS).
@@ -28,7 +29,7 @@ using H2UpgradeCallback = std::function<core::Task<void>(int client_fd, Request 
  */
 class Http1Connection {
 public:
-    Http1Connection(core::EventLoop& loop, int client_fd, const Router& router,
+    Http1Connection(core::EventLoop& loop, core::os_socket_t client_fd, const Router& router,
                     const ServiceRegistry* services = nullptr,
                     const ServerConfig& config = {});
     ~Http1Connection() = default;
@@ -70,12 +71,12 @@ public:
     /**
      * @brief Zero-copy file streaming via kernel splice pipes.
      */
-    static core::Task<bool> stream_file_zero_copy(core::EventLoop& loop, int client_fd,
+    static core::Task<bool> stream_file_zero_copy(core::EventLoop& loop, core::os_socket_t client_fd,
                                                   const std::string& file_path, size_t file_size);
 
 private:
     core::EventLoop& loop_;
-    int client_fd_;
+    core::os_socket_t client_fd_;
     const Router& router_;
     const ServiceRegistry* services_;
     ServerConfig config_{};

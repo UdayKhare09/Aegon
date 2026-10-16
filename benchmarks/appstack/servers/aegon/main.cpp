@@ -79,7 +79,7 @@ aegon::core::Task<void> handle_delay(Context& ctx) {
         std::from_chars(ms_str->data(), ms_str->data() + ms_str->size(), ms);
     }
     if (ms > 0) {
-        co_await aegon::core::EventLoop::current()->ring().timeout(ms * 1'000'000ULL);
+        co_await aegon::core::EventLoop::current()->engine().timeout(ms * 1'000'000ULL);
     }
     char buf[32];
     auto [p, _] = std::to_chars(buf, buf + sizeof(buf), ms);
@@ -296,7 +296,7 @@ inline thread_local std::string tls_db_scratch;
 
 aegon::core::Task<void> run_slot_reader(aegon::core::EventLoop& loop, PipelineSlot* slot) {
     while (true) {
-        (void)co_await loop.ring().poll(slot->fd, POLLIN);
+        (void)co_await loop.engine().poll(slot->fd, POLLIN);
         if (PQconsumeInput(slot->conn) == 0) {
             break;
         }
@@ -389,7 +389,7 @@ aegon::core::Task<void> handle_async_db(Context& ctx) {
     while (true) {
         int flush_res = PQflush(slot->conn);
         if (flush_res <= 0) break;
-        (void)co_await loop->ring().poll(slot->fd, POLLOUT);
+        (void)co_await loop->engine().poll(slot->fd, POLLOUT);
     }
 
     PGresult* res = co_await PipelineAwaiter{*slot};

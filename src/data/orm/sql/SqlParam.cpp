@@ -1,4 +1,5 @@
 #include "SqlParam.h"
+#include <format>
 
 namespace aegon::data::orm::sql {
 
@@ -59,7 +60,7 @@ std::string SqlParam::to_debug_string() const {
         case Kind::Null:   return "<NULL>";
         case Kind::Text:   return std::string(text_view);
         case Kind::Int64:  return std::to_string(i64);
-        case Kind::Double: return std::to_string(f64);
+        case Kind::Double: return std::format("{}", f64);
         case Kind::Bool:   return b ? "true" : "false";
         case Kind::Bytes: {
             std::string hex;

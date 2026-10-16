@@ -56,19 +56,19 @@ static std::vector<StreamReadResult> parse_stream_read_results(const RespValue& 
 }
 
 
-RedisClient::RedisClient(core::IoUring& ring, RedisNodeConfig config, size_t pool_size)
-    : ring_(ring), mode_(RedisMode::Standalone), standalone_config_(config), pool_size_(pool_size) {
-    standalone_pool_ = std::make_shared<RedisConnectionPool>(ring_, std::move(config), pool_size_);
+RedisClient::RedisClient(core::IoEngine& engine, RedisNodeConfig config, size_t pool_size)
+    : engine_(engine), mode_(RedisMode::Standalone), standalone_config_(config), pool_size_(pool_size) {
+    standalone_pool_ = std::make_shared<RedisConnectionPool>(engine_, std::move(config), pool_size_);
 }
 
-RedisClient::RedisClient(core::IoUring& ring, SentinelConfig config, size_t pool_size)
-    : ring_(ring), mode_(RedisMode::Sentinel), sentinel_config_(config), pool_size_(pool_size) {
-    sentinel_resolver_ = std::make_unique<RedisSentinelResolver>(ring_, std::move(config));
+RedisClient::RedisClient(core::IoEngine& engine, SentinelConfig config, size_t pool_size)
+    : engine_(engine), mode_(RedisMode::Sentinel), sentinel_config_(config), pool_size_(pool_size) {
+    sentinel_resolver_ = std::make_unique<RedisSentinelResolver>(engine_, std::move(config));
 }
 
-RedisClient::RedisClient(core::IoUring& ring, ClusterConfig config)
-    : ring_(ring), mode_(RedisMode::Cluster) {
-    cluster_router_ = std::make_unique<RedisClusterRouter>(ring_, std::move(config));
+RedisClient::RedisClient(core::IoEngine& engine, ClusterConfig config)
+    : engine_(engine), mode_(RedisMode::Cluster) {
+    cluster_router_ = std::make_unique<RedisClusterRouter>(engine_, std::move(config));
 }
 
 core::Task<RespValue> RedisClient::execute(const std::vector<std::string_view>& args) {
@@ -89,7 +89,7 @@ core::Task<RespValue> RedisClient::execute(const std::vector<std::string_view>& 
         if (!standalone_pool_) {
             auto mcfg = co_await sentinel_resolver_->discover_master();
             if (mcfg) {
-                standalone_pool_ = std::make_shared<RedisConnectionPool>(ring_, std::move(*mcfg), pool_size_);
+                standalone_pool_ = std::make_shared<RedisConnectionPool>(engine_, std::move(*mcfg), pool_size_);
             } else {
                 RespValue err;
                 err.type = RespType::Error;
@@ -104,7 +104,7 @@ core::Task<RespValue> RedisClient::execute(const std::vector<std::string_view>& 
     if (mode_ == RedisMode::Sentinel && resp.is_error()) {
         auto mcfg = co_await sentinel_resolver_->discover_master();
         if (mcfg) {
-            standalone_pool_ = std::make_shared<RedisConnectionPool>(ring_, std::move(*mcfg), pool_size_);
+            standalone_pool_ = std::make_shared<RedisConnectionPool>(engine_, std::move(*mcfg), pool_size_);
             co_return co_await standalone_pool_->execute(args);
         }
     }
@@ -759,7 +759,7 @@ core::Task<std::optional<RedisTransaction>> RedisClient::multi() {
     if (mode_ == RedisMode::Sentinel && !standalone_pool_) {
         auto mcfg = co_await sentinel_resolver_->discover_master();
         if (mcfg) {
-            standalone_pool_ = std::make_shared<RedisConnectionPool>(ring_, std::move(*mcfg), pool_size_);
+            standalone_pool_ = std::make_shared<RedisConnectionPool>(engine_, std::move(*mcfg), pool_size_);
         } else {
             co_return std::nullopt;
         }
@@ -776,7 +776,7 @@ RedisPipeline RedisClient::pipeline() {
 
 RedisSubscriber RedisClient::subscriber() {
     if (mode_ == RedisMode::Standalone) {
-        return RedisSubscriber(ring_, standalone_config_);
+        return RedisSubscriber(engine_, standalone_config_);
     }
     // Sentinel mode config
     RedisNodeConfig cfg{
@@ -786,7 +786,7 @@ RedisSubscriber RedisClient::subscriber() {
         .password = sentinel_config_.password,
         .database = sentinel_config_.database
     };
-    return RedisSubscriber(ring_, cfg);
+    return RedisSubscriber(engine_, cfg);
 }
 
 } // namespace aegon::data::redis

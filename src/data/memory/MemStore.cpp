@@ -133,10 +133,20 @@ void MemStore::process(MemRequest* req) noexcept {
         break;
     }
 
-    // Signal the waiting coroutine
+    // Signal the waiting coroutine or thread
+#if defined(_WIN32)
+    if (req->notify_handle) {
+        SetEvent(static_cast<HANDLE>(req->notify_handle));
+    }
+#else
     if (req->notify_fd >= 0) {
         uint64_t val = 1;
         (void)::write(req->notify_fd, &val, sizeof(val));
+    }
+#endif
+
+    if (req->on_complete) {
+        req->on_complete();
     }
 }
 

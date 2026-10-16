@@ -13,6 +13,9 @@ find_dependency(SQLite3)
 # TLS & Cryptography dependencies for Aegon::http and Aegon::redis
 find_dependency(OpenSSL)
 
+# Compression dependency for Aegon::http
+find_dependency(libdeflate)
+
 # Import the Aegon targets
 include("${CMAKE_CURRENT_LIST_DIR}/AegonTargets.cmake")
 

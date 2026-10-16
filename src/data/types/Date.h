@@ -29,9 +29,8 @@ public:
         : year_(y), month_(m), day_(d) {}
 
     [[nodiscard]] static Date today() noexcept {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        int64_t days = ts.tv_sec / 86400;
+        auto now_point = std::chrono::system_clock::now();
+        int64_t days = std::chrono::duration_cast<std::chrono::seconds>(now_point.time_since_epoch()).count() / 86400;
         int y = 0;
         unsigned m = 0, d = 0;
         detail::days_to_civil(days, y, m, d);

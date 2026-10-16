@@ -6,8 +6,7 @@
 #include <thread>
 #include <csignal>
 #include <atomic>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include "core/OsSocket.h"
 
 using namespace aegon::http;
 
@@ -187,21 +186,21 @@ int main(int argc, char* argv[]) {
 
     // Trigger local wakeups to exit accept loops
     {
-        int fd1 = socket(AF_INET, SOCK_STREAM, 0);
+        aegon::core::os_socket_t fd1 = socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in a1{};
         a1.sin_family = AF_INET;
         a1.sin_port = htons(port_plain);
         inet_pton(AF_INET, "127.0.0.1", &a1.sin_addr);
         connect(fd1, (sockaddr*)&a1, sizeof(a1));
-        close(fd1);
+        aegon::core::close_socket(fd1);
 
-        int fd2 = socket(AF_INET, SOCK_STREAM, 0);
+        aegon::core::os_socket_t fd2 = socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in a2{};
         a2.sin_family = AF_INET;
         a2.sin_port = htons(port_tls);
         inet_pton(AF_INET, "127.0.0.1", &a2.sin_addr);
         connect(fd2, (sockaddr*)&a2, sizeof(a2));
-        close(fd2);
+        aegon::core::close_socket(fd2);
     }
 
     if (server_thread.joinable()) {

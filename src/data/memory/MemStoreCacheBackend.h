@@ -4,8 +4,10 @@
 #include "data/cache/CacheBackend.h"
 #include "core/EventLoop.h"
 
+#if !defined(_WIN32)
 #include <sys/eventfd.h>
 #include <unistd.h>
+#endif
 #include <stdexcept>
 
 namespace aegon::data::memory {
@@ -114,7 +116,38 @@ private:
     {
         using ResultT = std::invoke_result_t<ExtractFn, MemRequest&>;
 
-        // Create eventfd for this request
+        // Get the current thread's EventLoop
+        auto* loop = core::EventLoop::current();
+        if (!loop) [[unlikely]] {
+            co_return ResultT{};
+        }
+
+#if defined(_WIN32)
+        MemRequest req;
+        setup_fn(req);
+
+        struct MemStoreAwaiter : core::IoAwaiter {
+            core::IoEngine& engine;
+            MemRequest& request;
+            MemStore& store;
+
+            MemStoreAwaiter(core::IoEngine& e, MemRequest& r, MemStore& s) noexcept
+                : engine(e), request(r), store(s) {}
+
+            void submit() noexcept override {
+                request.on_complete = [this]() {
+                    engine.post_completion(this, 0);
+                };
+                store.submit(&request);
+            }
+        };
+
+        MemStoreAwaiter aw{loop->engine(), req, *store_};
+        co_await aw;
+
+        co_return extract_fn(req);
+#else
+        // Create eventfd for this request on Linux
         int efd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
         if (efd < 0) [[unlikely]] {
             co_return ResultT{};
@@ -124,22 +157,17 @@ private:
         req.notify_fd = efd;
         setup_fn(req);
 
-        // Get the current thread's io_uring ring
-        auto* loop = core::EventLoop::current();
-        if (!loop) [[unlikely]] {
-            ::close(efd);
-            co_return ResultT{};
-        }
-
         // Submit to MemStore thread
         store_->submit(&req);
 
         // Suspend coroutine until MemStore signals eventfd
-        EventFdReadAwaiter awaiter{loop->ring(), efd};
-        co_await awaiter;
+        (void)co_await loop->engine().poll(efd, POLLIN);
+        uint64_t val = 0;
+        ::eventfd_read(efd, &val);
 
         ::close(efd);
         co_return extract_fn(req);
+#endif
     }
 
     std::shared_ptr<MemStore> store_;

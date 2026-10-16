@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/EventLoop.h"
+#include "core/OsSocket.h"
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/x509v3.h>
@@ -41,7 +42,7 @@ private:
 
 class TlsClientStream {
 public:
-    TlsClientStream(core::EventLoop& loop, int socket_fd, SSL_CTX* ctx, 
+    TlsClientStream(core::EventLoop& loop, core::os_socket_t socket_fd, SSL_CTX* ctx, 
                     std::string_view hostname, const TlsClientOptions& options = {});
     ~TlsClientStream();
 
@@ -77,7 +78,7 @@ private:
     core::Task<bool> flush_outbound();
 
     core::EventLoop* loop_{nullptr};
-    int socket_fd_{-1};
+    core::os_socket_t socket_fd_{core::INVALID_OS_SOCKET};
     SSL* ssl_{nullptr};
     BIO* in_bio_{nullptr};
     BIO* out_bio_{nullptr};

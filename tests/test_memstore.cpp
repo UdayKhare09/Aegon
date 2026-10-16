@@ -15,15 +15,31 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <sys/eventfd.h>
 #include <unistd.h>
+#endif
 
 using namespace aegon::data::memory;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper: synchronous submit + wait (no io_uring needed for unit tests)
+// Helper: synchronous submit + wait (no io_uring/iocp needed for unit tests)
 // ─────────────────────────────────────────────────────────────────────────────
 static void sync_submit(MemStore& store, MemRequest& req) {
+#if defined(_WIN32)
+    HANDLE ev = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    assert(ev != nullptr);
+    req.notify_handle = ev;
+    store.submit(&req);
+    WaitForSingleObject(ev, INFINITE);
+    CloseHandle(ev);
+    req.notify_handle = nullptr;
+#else
     int efd = ::eventfd(0, 0); // blocking eventfd for tests
     assert(efd >= 0);
     req.notify_fd = efd;
@@ -33,6 +49,7 @@ static void sync_submit(MemStore& store, MemRequest& req) {
     [[maybe_unused]] auto n = ::read(efd, &val, sizeof(val));
     ::close(efd);
     req.notify_fd = -1;
+#endif
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

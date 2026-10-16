@@ -23,7 +23,7 @@ inline int execute_build() {
     }
 
     std::cout << "\033[1;36m==>\033[0m Compiling project...\n";
-    int bld_res = std::system("cmake --build build -j$(nproc)");
+    int bld_res = std::system("cmake --build build --parallel");
     if (bld_res != 0) {
         std::cerr << "\033[1;31mError:\033[0m Build failed.\n";
         return bld_res;
@@ -43,8 +43,17 @@ inline int execute_run() {
     fs::path build_dir = fs::current_path() / "build";
     fs::path target_exe;
 
-    for (const auto& entry : fs::directory_iterator(build_dir)) {
+    for (const auto& entry : fs::recursive_directory_iterator(build_dir)) {
         if (entry.is_regular_file()) {
+#if defined(_WIN32)
+            if (entry.path().extension() == ".exe") {
+                std::string fname = entry.path().stem().string();
+                if (fname != "cmake" && fname != "ninja" && fname != "aegon") {
+                    target_exe = entry.path();
+                    break;
+                }
+            }
+#else
             auto perms = entry.status().permissions();
             if ((perms & fs::perms::owner_exec) != fs::perms::none) {
                 std::string fname = entry.path().filename().string();
@@ -53,6 +62,7 @@ inline int execute_run() {
                     break;
                 }
             }
+#endif
         }
     }
 
@@ -62,7 +72,7 @@ inline int execute_run() {
     }
 
     std::cout << "\033[1;36m==>\033[0m Executing \033[1m" << target_exe.filename().string() << "\033[0m...\n\n";
-    return std::system(target_exe.c_str());
+    return std::system(target_exe.string().c_str());
 }
 
 } // namespace aegon::cli::commands

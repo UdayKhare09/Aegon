@@ -5,7 +5,9 @@
 using namespace aegon::http;
 
 int main() {
+#if defined(SIGPIPE)
     std::signal(SIGPIPE, SIG_IGN);
+#endif
 
     Server server;
     server.router().ws_echo("/");

@@ -10,11 +10,10 @@
 #include <memory>
 #include <chrono>
 #include <expected>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
+#include "core/OsSocket.h"
+#if !defined(_WIN32)
 #include <netdb.h>
-#include <unistd.h>
+#endif
 
 namespace aegon::http::client {
 
@@ -32,7 +31,7 @@ enum class ConnectionError {
  */
 class PooledConnection {
 public:
-    PooledConnection(core::EventLoop& loop, int fd, std::string origin, 
+    PooledConnection(core::EventLoop& loop, core::os_socket_t fd, std::string origin, 
                      std::unique_ptr<TlsClientStream> tls = nullptr);
     ~PooledConnection();
 
@@ -48,12 +47,13 @@ public:
 
     void set_loop(core::EventLoop& loop) noexcept {
         loop_ = &loop;
+        engine_id_ = loop.engine().id();
         if (tls_stream_) {
             tls_stream_->set_loop(loop);
         }
     }
 
-    [[nodiscard]] bool is_valid() const noexcept { return fd_ >= 0 && !is_closed_; }
+    [[nodiscard]] bool is_valid() const noexcept { return core::is_valid_socket(fd_) && !is_closed_; }
     [[nodiscard]] bool is_tls() const noexcept { return tls_stream_ != nullptr; }
     [[nodiscard]] const std::string& origin() const noexcept { return origin_; }
     [[nodiscard]] std::string_view alpn() const noexcept {
@@ -64,7 +64,8 @@ public:
     }
 
     core::EventLoop* loop_{nullptr};
-    int fd_{-1};
+    uint64_t engine_id_{0};
+    core::os_socket_t fd_{core::INVALID_OS_SOCKET};
     std::string origin_{};
     std::unique_ptr<TlsClientStream> tls_stream_{nullptr};
     bool is_closed_{false};

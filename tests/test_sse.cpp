@@ -7,9 +7,12 @@
 #include <chrono>
 #include <cstdlib>
 #include <string>
-#include <vector>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include "core/OsSocket.h"
+
+#if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
+#endif
 
 using namespace aegon::http;
 
@@ -372,21 +375,21 @@ int main() {
     server.stop();
     // Wake up accept loops
     {
-        int fd1 = socket(AF_INET, SOCK_STREAM, 0);
+        auto fd1 = socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in a1{};
         a1.sin_family = AF_INET;
         a1.sin_port = htons(H1_H2C_PORT);
         inet_pton(AF_INET, "127.0.0.1", &a1.sin_addr);
         connect(fd1, (sockaddr*)&a1, sizeof(a1));
-        close(fd1);
+        aegon::core::close_socket(fd1);
 
-        int fd2 = socket(AF_INET, SOCK_STREAM, 0);
+        auto fd2 = socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in a2{};
         a2.sin_family = AF_INET;
         a2.sin_port = htons(TLS_H3_PORT);
         inet_pton(AF_INET, "127.0.0.1", &a2.sin_addr);
         connect(fd2, (sockaddr*)&a2, sizeof(a2));
-        close(fd2);
+        aegon::core::close_socket(fd2);
     }
 
     if (server_thread.joinable()) {

@@ -1,14 +1,14 @@
 # Aegon
 
 <p align="center">
-  <strong>Linux-Native C++26 Asynchronous Web Framework & Compile-Time ORM</strong><br>
-  <em>Powered by <code>io_uring</code> multishot primitives, C++26 symmetric-transfer coroutines, stepped SIMD vectorization, and compile-time reflection-free data engines.</em>
+  <strong>Cross-Platform C++26 Asynchronous Web Framework & Compile-Time ORM</strong><br>
+  <em>Powered by <code>io_uring</code>, <code>epoll</code>, and native Windows <code>IOCP</code>, C++26 symmetric-transfer coroutines, stepped SIMD vectorization, and compile-time reflection-free data engines.</em>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-0.1.a2--alpha-blue.svg" alt="Version 0.1.a2" />
   <img src="https://img.shields.io/badge/C%2B%2B-26-orange.svg" alt="C++26" />
-  <img src="https://img.shields.io/badge/kernel-io__uring-green.svg" alt="io_uring" />
+  <img src="https://img.shields.io/badge/engines-io__uring%20%7C%20epoll%20%7C%20IOCP-green.svg" alt="I/O Engines" />
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License" />
 </p>
 
@@ -38,7 +38,7 @@
 
 ## ⚡ Highlights
 
-- **Linux-Native `io_uring` Engine**: Complete kernel bypass with zero-syscall request loops via `IORING_OP_RECV_MULTISHOT`, `IORING_OP_ACCEPT_DIRECT`, and kernel-managed buffer rings (`io_uring_buf_ring`).
+- **Pluggable Cross-Platform I/O Architecture**: Unified polymorphic `IoEngine` interface supporting native Linux 6.1+ `io_uring` multishot pipelines with `PBUF_RING`, automatic high-speed `epoll` fallback for Linux < 6.1, WSL2, and Docker, and native Windows NT `IOCP` via MSVC (delivering 355k H2 req/s and 283k H3 req/s with 0% packet loss).
 - **C++26 Symmetric-Transfer Coroutines**: Pure `aegon::core::Task<T>` async programming with zero heap frame allocations on hot paths.
 - **Hardware-Aware Stepped SIMD**: 4-tier vector fallback engine (`AVX-512BW/VL` → `AVX2/BMI2` → `SSE4.2` → `Scalar`) accelerating case-insensitive header matching, URL decoding, and token discovery.
 - **Pure Native Protocols (HTTP/1.1, HTTP/2, HTTP/3 & WebSocket)**:
@@ -67,6 +67,20 @@ Aegon ranks **#1 Worldwide Overall** among standard web frameworks across all 4 
 | **[WebSocket](https://http-arena.com/#scope=ws&type=emerging,experimental,flagship&tuned=0)** | 🥇 **#1** of 31 | **3,000.00** / 3,000 (**100.0%**) | **63.6M msg/s** (Pipelined Echo) | [View on HttpArena ↗](https://http-arena.com/#scope=ws&type=emerging,experimental,flagship&tuned=0) |
 | **[HTTP/3](https://http-arena.com/#scope=h3&type=emerging,experimental,flagship&tuned=0)** | 🥉 **#3** of 17 | **884.57** / 2,000 (44.2%) | **2.98M req/s** (QUIC / UDP) | [View on HttpArena ↗](https://http-arena.com/#scope=h3&type=emerging,experimental,flagship&tuned=0) |
 | **High Concurrency** | — | — | **2.65M req/s** @ 32,000 concurrent held connections | — |
+
+---
+
+### ⚡ Cross-Platform Engine Benchmarks (2 Dedicated Cores)
+
+Aegon provides a zero-allocation pluggable engine abstraction (`IoEngine`) ensuring identical application code runs natively across platforms:
+
+| Protocol Suite | Workload | Linux `io_uring` (Kernel 6.1+) | Linux `epoll` | Windows `IOCP` (MSVC Native) |
+| :--- | :--- | :--- | :--- | :--- |
+| **HTTP/1.1 Plaintext** | `h2load/wrk -t4 -c100 -D10s` | **529,980 req/s** (199 µs) | **460,914 req/s** (213 µs) | **94,431 req/s** (1.04 ms) |
+| **HTTP/1.1 TLS 1.3** | `h2load/wrk -t4 -c100 -D10s` | **398,164 req/s** (248 µs) | **358,038 req/s** (273 µs) | **86,655 req/s** (1.14 ms) |
+| **HTTP/2 Multiplexing** | `h2load -t4 -c100 -m10` | **1,392,360 req/s** (656 µs) | **1,324,911 req/s** (728 µs) | **355,548 req/s** (2.42 ms) |
+| **HTTP/3 (QUIC)** | `h2load --h3 -t4 -c50 -m10` | **875,254 req/s** (570 µs) | **876,920 req/s** (573 µs) | **283,238 req/s** (1.62 ms, 0% loss) |
+| **Test Suite Pass Rate**| `ctest` | **46 / 46 (100%)** | **46 / 46 (100%)** | **41 / 41 (100%)** |
 
 ---
 

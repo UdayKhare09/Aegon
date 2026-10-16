@@ -7,7 +7,7 @@
 #include "RedisTransaction.h"
 #include "RedisSubscriber.h"
 #include "RedisStreamTypes.h"
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -29,13 +29,13 @@ enum class RedisMode {
 class RedisClient {
 public:
     // Standalone constructor
-    RedisClient(core::IoUring& ring, RedisNodeConfig config, size_t pool_size = 8);
+    RedisClient(core::IoEngine& engine, RedisNodeConfig config, size_t pool_size = 8);
 
     // Sentinel constructor
-    RedisClient(core::IoUring& ring, SentinelConfig config, size_t pool_size = 8);
+    RedisClient(core::IoEngine& engine, SentinelConfig config, size_t pool_size = 8);
 
     // Cluster constructor
-    RedisClient(core::IoUring& ring, ClusterConfig config);
+    RedisClient(core::IoEngine& engine, ClusterConfig config);
 
     ~RedisClient() = default;
 
@@ -130,7 +130,7 @@ public:
     [[nodiscard]] const std::shared_ptr<RedisConnectionPool>& pool() const noexcept { return standalone_pool_; }
 
 private:
-    core::IoUring& ring_;
+    core::IoEngine& engine_;
     RedisMode mode_{RedisMode::Standalone};
     RedisNodeConfig standalone_config_{};
     SentinelConfig sentinel_config_{};

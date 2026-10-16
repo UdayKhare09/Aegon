@@ -5,6 +5,16 @@
 #include <filesystem>
 #include <cstdlib>
 
+namespace {
+inline void set_env_var(const char* name, const char* value) {
+#if defined(_WIN32)
+    ::_putenv_s(name, value);
+#else
+    ::setenv(name, value, 1);
+#endif
+}
+}
+
 using namespace aegon::config;
 
 namespace fs = std::filesystem;
@@ -103,7 +113,7 @@ server:
     assert(res1->server.port == 7777);
 
     // 2. Set environment variable
-    ::setenv("AEGON_APP_ENV_NAME", "super_server", 1);
+    set_env_var("AEGON_APP_ENV_NAME", "super_server");
     std::string yaml_env = R"(
 app_name: ${AEGON_APP_ENV_NAME}
 server:
@@ -239,10 +249,10 @@ database:
 void test_env_prefix_mapping() {
     std::cout << "[TEST 7] Environment Variable Prefix Mapping (AEGON__*)..." << std::endl;
 
-    ::setenv("AEGON__SERVER__PORT", "7788", 1);
-    ::setenv("AEGON__SERVER__HOST", "192.168.1.100", 1);
-    ::setenv("AEGON__APP_NAME", "prefixed_app", 1);
-    ::setenv("AEGON__DATABASE__MAX_CONNECTIONS", "25", 1);
+    set_env_var("AEGON__SERVER__PORT", "7788");
+    set_env_var("AEGON__SERVER__HOST", "192.168.1.100");
+    set_env_var("AEGON__APP_NAME", "prefixed_app");
+    set_env_var("AEGON__DATABASE__MAX_CONNECTIONS", "25");
 
     std::string yaml = R"(
 app_name: "initial_name"
@@ -308,7 +318,7 @@ void test_12factor_precedence() {
     // Layer 5: Env Prefix (AEGON_PREC__SERVER__PORT=8084)
     // Layer 6: CLI Flag (--server.port=8085)
 
-    ::setenv("AEGON_PREC__SERVER__PORT", "8084", 1);
+    set_env_var("AEGON_PREC__SERVER__PORT", "8084");
     std::vector<std::string> cli_args = {"./app", "--server.port=8085"};
 
     // Test up to Layer 2

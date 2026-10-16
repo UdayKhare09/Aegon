@@ -130,7 +130,7 @@ Generated projects use Aegon's 3-layer configuration hierarchy:
    ```
 
 2. **`.env` (Environment overrides)**:
-   ```env
+   ```ini
    APP_ENV=development
    PORT=8080
    DATABASE_URL=sqlite:///app.db

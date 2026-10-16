@@ -7,9 +7,7 @@
 #include <cassert>
 #include <thread>
 #include <chrono>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "core/OsSocket.h"
 
 using namespace aegon;
 using namespace aegon::http;
@@ -17,19 +15,19 @@ using namespace aegon::http::client;
 
 void stop_server(Server& server, uint16_t port, std::thread& server_thread, bool is_h3 = false) {
     server.stop();
-    int dummy = socket(AF_INET, SOCK_STREAM, 0);
+    auto dummy = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
     connect(dummy, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-    close(dummy);
+    core::close_socket(dummy);
 
     if (is_h3) {
-        int udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
-        if (udp_sock >= 0) {
+        auto udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (core::is_valid_socket(udp_sock)) {
             sendto(udp_sock, "x", 1, 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-            close(udp_sock);
+            core::close_socket(udp_sock);
         }
     }
 

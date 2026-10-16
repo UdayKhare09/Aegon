@@ -413,7 +413,7 @@ core::Task<void> run_cache_test_for_topology(
 // ============================================================================
 // Main Runner across all Connection Types
 // ============================================================================
-core::Task<void> run_postgres_orm_cache_all_topologies(core::IoUring& ring) {
+core::Task<void> run_postgres_orm_cache_all_topologies(core::IoEngine& engine) {
     std::cout << "\n=======================================================\n";
     std::cout << " AEGON POSTGRESQL 17 + REDIS ORM CACHE MULTI-TOPOLOGY  \n";
     std::cout << " (Testing Standalone, Sentinel, and Cluster Modes)     \n";
@@ -435,7 +435,7 @@ core::Task<void> run_postgres_orm_cache_all_topologies(core::IoUring& ring) {
             .port = 6379,
             .password = "redis_secret"
         };
-        auto redis_client = std::make_shared<RedisClient>(ring, cfg, 4);
+        auto redis_client = std::make_shared<RedisClient>(engine, cfg, 4);
         co_await redis_client->execute({"FLUSHDB"});
         auto cache = std::make_shared<RedisCacheBackend>(redis_client, "standalone_cache:");
         co_await run_cache_test_for_topology(client, cache, "Redis Standalone (Port 6379)");
@@ -450,7 +450,7 @@ core::Task<void> run_postgres_orm_cache_all_topologies(core::IoUring& ring) {
             .sentinels = {{"127.0.0.1", 26379}},
             .password = "sentinel_secret"
         };
-        auto sentinel_client = std::make_shared<RedisClient>(ring, scfg, 4);
+        auto sentinel_client = std::make_shared<RedisClient>(engine, scfg, 4);
         co_await sentinel_client->execute({"FLUSHDB"});
         auto cache = std::make_shared<RedisCacheBackend>(sentinel_client, "sentinel_cache:");
         co_await run_cache_test_for_topology(client, cache, "Redis Sentinel (Port 26379, Master: 6380)");
@@ -466,10 +466,10 @@ core::Task<void> run_postgres_orm_cache_all_topologies(core::IoUring& ring) {
         };
         for (const auto& [h, p] : ccfg.seed_nodes) {
             RedisNodeConfig ncfg{.host = h, .port = p, .password = ccfg.password};
-            RedisClient nc(ring, ncfg, 1);
+            RedisClient nc(engine, ncfg, 1);
             co_await nc.execute({"FLUSHDB"});
         }
-        auto cluster_client = std::make_shared<RedisClient>(ring, ccfg);
+        auto cluster_client = std::make_shared<RedisClient>(engine, ccfg);
         auto cache = std::make_shared<RedisCacheBackend>(cluster_client, "cluster_cache:");
         co_await run_cache_test_for_topology(client, cache, "Redis Cluster (Ports 7000..7005)");
     }
@@ -485,7 +485,7 @@ int main() {
 
         bool completed = false;
         loop.spawn([&]() -> core::Task<void> {
-            co_await run_postgres_orm_cache_all_topologies(loop.ring());
+            co_await run_postgres_orm_cache_all_topologies(loop.engine());
             completed = true;
             loop.stop();
         }());

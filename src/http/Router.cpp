@@ -1,7 +1,22 @@
 #include "http/Router.h"
+#include "core/OsSocket.h"
 #include <sys/stat.h>
 #include <fcntl.h>
+#if defined(_WIN32)
+#include <io.h>
+#define O_BINARY _O_BINARY
+#ifndef S_ISREG
+#define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
+#endif
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+#else
 #include <unistd.h>
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+#endif
 #include <shared_mutex>
 #include <mutex>
 #include <memory>
@@ -15,7 +30,11 @@ namespace detail {
 inline std::string format_http_date(time_t t) {
     char buf[36];
     struct tm tm_buf;
+#if defined(_WIN32)
+    if (gmtime_s(&tm_buf, &t) == 0) {
+#else
     if (gmtime_r(&t, &tm_buf)) {
+#endif
         if (strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &tm_buf)) {
             return std::string(buf);
         }
@@ -99,10 +118,24 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
             }
 
 #if defined(__linux__)
+            time_t current_mtime = st.st_mtime;
             long current_nsec = st.st_mtim.tv_nsec;
 #elif defined(__APPLE__)
+            time_t current_mtime = st.st_mtime;
             long current_nsec = st.st_mtimespec.tv_nsec;
+#elif defined(_WIN32)
+            time_t current_mtime = st.st_mtime;
+            long current_nsec = 0;
+            WIN32_FILE_ATTRIBUTE_DATA fad;
+            if (::GetFileAttributesExA(file_path.c_str(), GetFileExInfoStandard, &fad)) {
+                ULARGE_INTEGER ull;
+                ull.LowPart = fad.ftLastWriteTime.dwLowDateTime;
+                ull.HighPart = fad.ftLastWriteTime.dwHighDateTime;
+                current_mtime = static_cast<time_t>((ull.QuadPart - 116444736000000000ULL) / 10000000ULL);
+                current_nsec = static_cast<long>(((ull.QuadPart - 116444736000000000ULL) % 10000000ULL) * 100);
+            }
 #else
+            time_t current_mtime = st.st_mtime;
             long current_nsec = 0;
 #endif
 
@@ -114,7 +147,7 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                 std::shared_lock lock(*mtx);
                 auto it = cache->find(file_path);
                 if (it != cache->end()) {
-                    if (it->second.mtime == st.st_mtime && it->second.mtime_nsec == current_nsec) {
+                    if (it->second.mtime == current_mtime && it->second.mtime_nsec == current_nsec) {
                         entry = it->second;
                         found_in_cache = true;
                     }
@@ -122,27 +155,39 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
             }
 
             if (!found_in_cache) {
+#if defined(_WIN32)
+                int fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
+#else
                 int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+#endif
                 if (fd < 0) return false;
 
                 std::string data;
                 data.resize(static_cast<size_t>(st.st_size));
                 size_t total_read = 0;
                 while (total_read < data.size()) {
+#if defined(_WIN32)
+                    int n = ::_read(fd, data.data() + total_read, static_cast<unsigned int>(data.size() - total_read));
+#else
                     ssize_t n = ::read(fd, data.data() + total_read, data.size() - total_read);
+#endif
                     if (n <= 0) break;
                     total_read += static_cast<size_t>(n);
                 }
+#if defined(_WIN32)
+                ::_close(fd);
+#else
                 ::close(fd);
+#endif
 
                 if (total_read != data.size()) return false;
 
                 entry = CachedStaticFile{
-                    .mtime = st.st_mtime,
+                    .mtime = current_mtime,
                     .mtime_nsec = current_nsec,
                     .size = static_cast<size_t>(st.st_size),
-                    .etag = options.etag ? detail::generate_etag(st.st_mtime, current_nsec, st.st_size) : "",
-                    .last_modified = options.last_modified ? detail::format_http_date(st.st_mtime) : "",
+                    .etag = options.etag ? detail::generate_etag(current_mtime, current_nsec, st.st_size) : "",
+                    .last_modified = options.last_modified ? detail::format_http_date(current_mtime) : "",
                     .content = std::move(data),
                     .content_type = std::string(content_type),
                     .content_encoding = std::string(encoding)

@@ -3,7 +3,7 @@
 
 namespace aegon::http::tls {
 
-TlsStream::TlsStream(core::EventLoop& loop, int client_fd, SSL_CTX* ctx)
+TlsStream::TlsStream(core::EventLoop& loop, core::os_socket_t client_fd, SSL_CTX* ctx)
     : loop_(loop), client_fd_(client_fd) {
     ssl_ = SSL_new(ctx);
     in_bio_ = BIO_new(BIO_s_mem());
@@ -24,7 +24,7 @@ core::Task<bool> TlsStream::flush_outbound() {
     while (BIO_pending(out_bio_) > 0) {
         int n = BIO_read(out_bio_, out_buf, sizeof(out_buf));
         if (n > 0) {
-            int sent = co_await loop_.ring().send_all(
+            int sent = co_await loop_.engine().send_all(
                 client_fd_,
                 std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(out_buf), static_cast<size_t>(n)));
             if (sent != n) {
@@ -49,7 +49,7 @@ core::Task<bool> TlsStream::handshake() {
 
         int err = SSL_get_error(ssl_, ret);
         if (err == SSL_ERROR_WANT_READ) {
-            auto recv_res = co_await loop_.ring().recv_provided(client_fd_, loop_.buffer_pool().bgid());
+            auto recv_res = co_await loop_.engine().recv_provided(client_fd_, loop_.buffer_pool().bgid());
             if (recv_res.bytes <= 0) {
                 co_return false;
             }
@@ -81,7 +81,7 @@ core::Task<int> TlsStream::read_plaintext(void* buf, size_t max_len) {
         }
 
         if (err == SSL_ERROR_WANT_READ) {
-            auto recv_res = co_await loop_.ring().recv_provided(client_fd_, loop_.buffer_pool().bgid());
+            auto recv_res = co_await loop_.engine().recv_provided(client_fd_, loop_.buffer_pool().bgid());
             if (recv_res.bytes <= 0) {
                 co_return 0; // EOF
             }

@@ -4,9 +4,11 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#if !defined(_WIN32)
 #include <poll.h>
 #include <unistd.h>
 #include <netdb.h>
+#endif
 #include <openssl/rand.h>
 
 namespace aegon::http::client {
@@ -58,7 +60,7 @@ Http3ClientSession::Http3ClientSession(Http3ClientSession&& other) noexcept
     other.ossl_ctx_ = nullptr;
     other.qconn_ = nullptr;
     other.h3conn_ = nullptr;
-    other.udp_fd_ = -1;
+    other.udp_fd_ = core::INVALID_OS_SOCKET;
     other.closed_ = true;
 }
 
@@ -88,7 +90,7 @@ Http3ClientSession& Http3ClientSession::operator=(Http3ClientSession&& other) no
         other.ossl_ctx_ = nullptr;
         other.qconn_ = nullptr;
         other.h3conn_ = nullptr;
-        other.udp_fd_ = -1;
+        other.udp_fd_ = core::INVALID_OS_SOCKET;
         other.closed_ = true;
     }
     return *this;
@@ -119,9 +121,9 @@ void Http3ClientSession::close() {
         SSL_CTX_free(ssl_ctx_);
         ssl_ctx_ = nullptr;
     }
-    if (udp_fd_ >= 0) {
-        ::close(udp_fd_);
-        udp_fd_ = -1;
+    if (core::is_valid_socket(udp_fd_)) {
+        core::close_socket(udp_fd_);
+        udp_fd_ = core::INVALID_OS_SOCKET;
     }
     streams_.clear();
 }
@@ -163,21 +165,31 @@ bool Http3ClientSession::init_quic(const Url& url) {
     int rc = ::getaddrinfo(host_str.c_str(), port_str.c_str(), &hints, &res);
     if (rc != 0 || !res) return false;
 
-    udp_fd_ = ::socket(res->ai_family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_UDP);
-    if (udp_fd_ < 0) {
+#if defined(_WIN32)
+    udp_fd_ = WSASocketW(res->ai_family, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    if (!core::is_valid_socket(udp_fd_)) {
         ::freeaddrinfo(res);
         return false;
     }
-
-    if (::connect(udp_fd_, res->ai_addr, res->ai_addrlen) != 0) {
+    u_long mode = 1;
+    ioctlsocket(udp_fd_, FIONBIO, &mode);
+#else
+    udp_fd_ = ::socket(res->ai_family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_UDP);
+    if (!core::is_valid_socket(udp_fd_)) {
         ::freeaddrinfo(res);
-        ::close(udp_fd_);
-        udp_fd_ = -1;
+        return false;
+    }
+#endif
+
+    if (::connect(udp_fd_, res->ai_addr, static_cast<socklen_t>(res->ai_addrlen)) != 0) {
+        ::freeaddrinfo(res);
+        core::close_socket(udp_fd_);
+        udp_fd_ = core::INVALID_OS_SOCKET;
         return false;
     }
 
     std::memcpy(&remote_addr_, res->ai_addr, res->ai_addrlen);
-    remote_addr_len_ = res->ai_addrlen;
+    remote_addr_len_ = static_cast<socklen_t>(res->ai_addrlen);
     ::freeaddrinfo(res);
 
     local_addr_len_ = sizeof(local_addr_);
@@ -467,7 +479,7 @@ nghttp3_ssize Http3ClientSession::on_stream_read(int64_t stream_id, uint32_t* pf
 }
 
 bool Http3ClientSession::flush_outbound() {
-    if (!qconn_ || closed_ || udp_fd_ < 0) return false;
+    if (!qconn_ || closed_ || !core::is_valid_socket(udp_fd_)) return false;
 
     alignas(64) uint8_t out[65536];
     size_t max_payload = ngtcp2_conn_get_max_tx_udp_payload_size(qconn_);
@@ -514,7 +526,7 @@ bool Http3ClientSession::flush_outbound() {
             nghttp3_conn_add_write_offset(h3conn_, stream_id, pdatalen);
         }
 
-        ::send(udp_fd_, out, nwrite, 0);
+        ::send(udp_fd_, reinterpret_cast<const char*>(out), static_cast<int>(nwrite), 0);
     }
     return true;
 }
@@ -590,10 +602,10 @@ Response Http3ClientSession::execute_sync(std::shared_ptr<RequestState> state) {
         pfd.fd = udp_fd_;
         pfd.events = POLLIN;
 
-        int pr = ::poll(&pfd, 1, poll_timeout_ms);
+        int pr = core::poll_sockets(&pfd, 1, poll_timeout_ms);
         if (pr > 0 && (pfd.revents & POLLIN)) {
             while (true) {
-                ssize_t n = ::recv(udp_fd_, pkt_buf, sizeof(pkt_buf), 0);
+                ssize_t n = ::recv(udp_fd_, reinterpret_cast<char*>(pkt_buf), static_cast<int>(sizeof(pkt_buf)), 0);
                 if (n <= 0) break;
                 process_datagram(pkt_buf, static_cast<size_t>(n));
             }
@@ -696,11 +708,15 @@ core::Task<Response> Http3ClientSession::execute(std::shared_ptr<RequestState> s
             flush_outbound();
         }
 
-        int n = co_await loop.ring().recv(udp_fd_, pkt_buf, sizeof(pkt_buf), 0);
+        int n = co_await loop.engine().recv(udp_fd_, pkt_buf, sizeof(pkt_buf), 0);
         if (n > 0) {
             process_datagram(pkt_buf, static_cast<size_t>(n));
             while (true) {
+#if defined(_WIN32)
+                ssize_t n2 = ::recv(udp_fd_, reinterpret_cast<char*>(pkt_buf), static_cast<int>(sizeof(pkt_buf)), 0);
+#else
                 ssize_t n2 = ::recv(udp_fd_, pkt_buf, sizeof(pkt_buf), MSG_DONTWAIT);
+#endif
                 if (n2 <= 0) break;
                 process_datagram(pkt_buf, static_cast<size_t>(n2));
             }

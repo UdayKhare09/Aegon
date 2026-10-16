@@ -2,7 +2,7 @@
 #include "data/redis/RedisPipeline.h"
 #include "data/redis/RedisTransaction.h"
 #include "data/redis/RedisSubscriber.h"
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
 #include "core/EventLoop.h"
 #include <cassert>
 #include <iostream>
@@ -12,7 +12,7 @@
 using namespace aegon;
 using namespace aegon::data::redis;
 
-core::Task<void> test_standalone(core::IoUring& ring) {
+core::Task<void> test_standalone(core::IoEngine& ring) {
     std::cout << "\n--- [1] Testing Live Redis Standalone (Port 6379) ---\n";
     RedisNodeConfig cfg{
         .host = "127.0.0.1",
@@ -173,7 +173,7 @@ core::Task<void> test_standalone(core::IoUring& ring) {
     std::cout << "[PASS] Redis Standalone Topology Complete!\n";
 }
 
-core::Task<void> test_sentinel(core::IoUring& ring) {
+core::Task<void> test_sentinel(core::IoEngine& ring) {
     std::cout << "\n--- [2] Testing Live Redis Sentinel (Port 26379) ---\n";
     SentinelConfig scfg{
         .master_name = "mymaster",
@@ -197,7 +197,7 @@ core::Task<void> test_sentinel(core::IoUring& ring) {
     std::cout << "[PASS] Redis Sentinel Topology Complete!\n";
 }
 
-core::Task<void> test_cluster(core::IoUring& ring) {
+core::Task<void> test_cluster(core::IoEngine& ring) {
     std::cout << "\n--- [3] Testing Live Redis Cluster (Ports 7000..7005) ---\n";
     ClusterConfig ccfg{
         .seed_nodes = {{"127.0.0.1", 7000}, {"127.0.0.1", 7001}, {"127.0.0.1", 7002}},
@@ -256,6 +256,9 @@ core::Task<void> test_cluster(core::IoUring& ring) {
 }
 
 int main() {
+#if defined(_WIN32)
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
     std::cout << "=======================================================\n";
     std::cout << "   AEGON LIVE REDIS CLIENT & TOPOLOGIES TEST SUITE     \n";
     std::cout << "=======================================================\n";
@@ -264,9 +267,21 @@ int main() {
 
     bool completed = false;
     loop.spawn([&]() -> core::Task<void> {
-        co_await test_standalone(loop.ring());
-        co_await test_sentinel(loop.ring());
-        co_await test_cluster(loop.ring());
+        // Probe if Redis server is reachable
+        RedisNodeConfig probe_cfg{.host = "127.0.0.1", .port = 6379};
+        RedisConnection probe(loop.engine(), probe_cfg);
+        bool live = co_await probe.connect();
+        if (!live) {
+            std::cout << "[SKIPPED] Live Redis server is not reachable at 127.0.0.1:6379.\n";
+            std::cout << "          Start Redis to run live topologies suite.\n";
+            completed = true;
+            loop.stop();
+            co_return;
+        }
+
+        co_await test_standalone(loop.engine());
+        co_await test_sentinel(loop.engine());
+        co_await test_cluster(loop.engine());
         completed = true;
         loop.stop();
     }());

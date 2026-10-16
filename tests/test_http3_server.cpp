@@ -9,7 +9,12 @@
 #include <chrono>
 #include <array>
 #include <cstdlib>
-#include <arpa/inet.h>
+#include "core/OsSocket.h"
+
+#if defined(_WIN32)
+#define popen _popen
+#define pclose _pclose
+#endif
 
 using namespace aegon;
 using namespace aegon::http;
@@ -164,14 +169,14 @@ void test_http3_server_live() {
     system(poke_cmd.c_str());
 
     // Also poke UDP to wake up recvmsg
-    int udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (udp_sock >= 0) {
+    aegon::core::os_socket_t udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (aegon::core::is_valid_socket(udp_sock)) {
         sockaddr_in a{};
         a.sin_family = AF_INET;
         a.sin_port = htons(port);
         inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
         sendto(udp_sock, "x", 1, 0, reinterpret_cast<sockaddr*>(&a), sizeof(a));
-        close(udp_sock);
+        aegon::core::close_socket(udp_sock);
     }
 
     if (server_thread.joinable()) {

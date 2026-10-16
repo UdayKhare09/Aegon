@@ -1,7 +1,7 @@
 #pragma once
 
 #include "RedisConnection.h"
-#include "core/IoUring.h"
+#include "core/engine/IoEngine.h"
 #include "core/Task.h"
 #include <vector>
 #include <memory>
@@ -11,8 +11,8 @@ namespace aegon::data::redis {
 
 class RedisConnectionPool {
 public:
-    RedisConnectionPool(core::IoUring& ring, RedisNodeConfig config, size_t pool_size = 8)
-        : ring_(ring), config_(std::move(config)), max_size_(pool_size) {}
+    RedisConnectionPool(core::IoEngine& engine, RedisNodeConfig config, size_t pool_size = 8)
+        : engine_(engine), config_(std::move(config)), max_size_(pool_size) {}
 
     ~RedisConnectionPool() {
         connections_.clear();
@@ -60,7 +60,7 @@ public:
         }
 
         if (!conn) {
-            conn = std::make_unique<RedisConnection>(ring_, config_);
+            conn = std::make_unique<RedisConnection>(engine_, config_);
             co_await conn->connect();
         } else if (!conn->is_connected()) {
             co_await conn->connect();
@@ -90,7 +90,7 @@ public:
     [[nodiscard]] const RedisNodeConfig& config() const noexcept { return config_; }
 
 private:
-    core::IoUring& ring_;
+    core::IoEngine& engine_;
     RedisNodeConfig config_;
     size_t max_size_{8};
     std::mutex mutex_;

@@ -311,14 +311,14 @@ public:
         }
 
         // Fast-path hot path: Exact route found, no global middleware
-        if (__builtin_expect(match_res.route_found && match_res.handler != nullptr && global_middleware_.empty(), 1)) {
+        if (match_res.route_found && match_res.handler != nullptr && global_middleware_.empty()) [[likely]] {
             std::exception_ptr ex{nullptr};
             try {
                 co_await (*match_res.handler)(ctx);
             } catch (...) {
                 ex = std::current_exception();
             }
-            if (__builtin_expect(!ex, 1)) {
+            if (!ex) [[likely]] {
                 co_return;
             }
             if (error_handler_) {

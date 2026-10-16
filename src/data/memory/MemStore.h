@@ -1,6 +1,5 @@
 #pragma once
 
-#include "core/IoUring.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -15,10 +14,17 @@
 #include <list>
 #include <memory>
 #include <cstdint>
+#include <functional>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <sys/eventfd.h>
 #include <unistd.h>
-#include <liburing.h>
+#endif
 
 namespace aegon::data::memory {
 
@@ -68,8 +74,16 @@ struct MemRequest {
     bool                                    result_bool{false};
     int64_t                                 result_i64{0};
 
-    /// eventfd created by the worker. MemStore writes 1 here when done.
+    /// eventfd created by the worker on Linux. MemStore writes 1 here when done.
     int notify_fd{-1};
+
+#if defined(_WIN32)
+    /// Event handle created by the worker on Windows.
+    void* notify_handle{nullptr};
+#endif
+
+    /// Generic completion callback (e.g., invoked to post an IOCP completion token)
+    std::function<void()> on_complete;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,35 +187,6 @@ private:
 
     mutable std::atomic<uint64_t> hits_{0};
     mutable std::atomic<uint64_t> misses_{0};
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// EventFdReadAwaiter — suspends coroutine until MemStore signals the eventfd
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * @brief Submits io_uring_prep_read on an eventfd and suspends the calling
- *        coroutine. Resumed by IoUring::process_completions() when the MemStore
- *        thread writes 1 to the fd.
- */
-struct EventFdReadAwaiter : core::IoAwaiter {
-    core::IoUring& ring;
-    int            efd;
-    uint64_t       buf{0};
-
-    EventFdReadAwaiter(core::IoUring& r, int fd) noexcept
-        : ring(r), efd(fd) {}
-
-    void submit() noexcept override {
-        struct io_uring_sqe* sqe = io_uring_get_sqe(ring.raw_ring());
-        if (!sqe) [[unlikely]] return;
-        io_uring_prep_read(sqe, efd, &buf, sizeof(buf), 0);
-        io_uring_sqe_set_data(sqe, static_cast<core::IoAwaiter*>(this));
-        io_uring_submit(ring.raw_ring());
-    }
-
-    // The result is in the MemRequest struct; nothing to return here.
-    void await_resume() noexcept {}
 };
 
 } // namespace aegon::data::memory

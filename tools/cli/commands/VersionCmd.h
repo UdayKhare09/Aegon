@@ -21,10 +21,12 @@ inline int execute_version() {
     std::cout << "  Version          : \033[1;32m" << aegon::version.string << "\033[0m\n";
     std::cout << "  Standard         : \033[33mC++26\033[0m\n";
 
-#if defined(__GNUC__)
-    std::cout << "  Compiler         : GCC " << __GNUC__ << "." << __GNUC_MINOR__ << "." << __GNUC_PATCHLEVEL__ << "\n";
+#if defined(_MSC_VER)
+    std::cout << "  Compiler         : MSVC " << _MSC_VER << "\n";
 #elif defined(__clang__)
     std::cout << "  Compiler         : Clang " << __clang_version__ << "\n";
+#elif defined(__GNUC__)
+    std::cout << "  Compiler         : GCC " << __GNUC__ << "." << __GNUC_MINOR__ << "." << __GNUC_PATCHLEVEL__ << "\n";
 #endif
 
 #if defined(__x86_64__) || defined(_M_X64)

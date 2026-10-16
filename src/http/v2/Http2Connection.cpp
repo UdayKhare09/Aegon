@@ -54,7 +54,7 @@ ssize_t data_source_read_cb(nghttp2_session*, int32_t stream_id,
 
 } // anonymous namespace
 
-Http2Connection::Http2Connection(core::EventLoop& loop, int client_fd, const Router& router, 
+Http2Connection::Http2Connection(core::EventLoop& loop, core::os_socket_t client_fd, const Router& router, 
                                  const ServiceRegistry* services, OutputSender sender,
                                  const ServerConfig& config)
     : loop_(loop), client_fd_(client_fd), router_(router), services_(services), sender_(std::move(sender)),
@@ -659,13 +659,13 @@ core::Task<bool> Http2Connection::flush_outbound() {
             if (sender_) {
                 sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
             } else {
-                sent = co_await loop_.ring().send(client_fd_, outbound_buf_);
+                sent = co_await loop_.engine().send(client_fd_, outbound_buf_);
                 if (sent != static_cast<int>(outbound_buf_.size())) [[unlikely]] {
                     if (sent <= 0) {
                         closed_ = true;
                         co_return false;
                     }
-                    int rem = co_await loop_.ring().send_all(client_fd_, std::string_view(outbound_buf_).substr(sent));
+                    int rem = co_await loop_.engine().send_all(client_fd_, std::string_view(outbound_buf_).substr(sent));
                     if (rem != static_cast<int>(outbound_buf_.size() - sent)) {
                         closed_ = true;
                         co_return false;
@@ -686,13 +686,13 @@ core::Task<bool> Http2Connection::flush_outbound() {
         if (sender_) {
             sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
         } else {
-            sent = co_await loop_.ring().send(client_fd_, outbound_buf_);
+            sent = co_await loop_.engine().send(client_fd_, outbound_buf_);
             if (sent != static_cast<int>(outbound_buf_.size())) [[unlikely]] {
                 if (sent <= 0) {
                     closed_ = true;
                     co_return false;
                 }
-                int rem = co_await loop_.ring().send_all(client_fd_, std::string_view(outbound_buf_).substr(sent));
+                int rem = co_await loop_.engine().send_all(client_fd_, std::string_view(outbound_buf_).substr(sent));
                 if (rem != static_cast<int>(outbound_buf_.size() - sent)) {
                     closed_ = true;
                     co_return false;
@@ -795,7 +795,7 @@ core::Task<bool> Http2Connection::feed_data(const void* data, size_t len) {
         if (sender_) {
             (void)co_await sender_(std::span<const uint8_t>(goaway.data(), goaway.size()));
         } else {
-            (void)co_await loop_.ring().send_all(client_fd_, std::string_view(reinterpret_cast<const char*>(goaway.data()), goaway.size()));
+            (void)co_await loop_.engine().send_all(client_fd_, std::string_view(reinterpret_cast<const char*>(goaway.data()), goaway.size()));
         }
         closed_ = true;
         co_return false;
@@ -807,7 +807,7 @@ core::Task<bool> Http2Connection::feed_data(const void* data, size_t len) {
         if (sender_) {
             (void)co_await sender_(std::span<const uint8_t>(goaway.data(), goaway.size()));
         } else {
-            (void)co_await loop_.ring().send_all(client_fd_, std::string_view(reinterpret_cast<const char*>(goaway.data()), goaway.size()));
+            (void)co_await loop_.engine().send_all(client_fd_, std::string_view(reinterpret_cast<const char*>(goaway.data()), goaway.size()));
         }
         co_return false;
     }

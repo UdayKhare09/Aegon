@@ -8,9 +8,9 @@ namespace aegon::http::client {
 // PooledConnection Implementation
 // -----------------------------------------------------------------------------
 
-PooledConnection::PooledConnection(core::EventLoop& loop, int fd, std::string origin,
+PooledConnection::PooledConnection(core::EventLoop& loop, core::os_socket_t fd, std::string origin,
                                    std::unique_ptr<TlsClientStream> tls)
-    : loop_(&loop), fd_(fd), origin_(std::move(origin)), tls_stream_(std::move(tls)),
+    : loop_(&loop), engine_id_(loop.engine().id()), fd_(fd), origin_(std::move(origin)), tls_stream_(std::move(tls)),
       last_used(std::chrono::steady_clock::now()) {}
 
 PooledConnection::~PooledConnection() {
@@ -18,10 +18,10 @@ PooledConnection::~PooledConnection() {
 }
 
 PooledConnection::PooledConnection(PooledConnection&& other) noexcept
-    : loop_(other.loop_), fd_(other.fd_), origin_(std::move(other.origin_)),
+    : loop_(other.loop_), engine_id_(other.engine_id_), fd_(other.fd_), origin_(std::move(other.origin_)),
       tls_stream_(std::move(other.tls_stream_)), is_closed_(other.is_closed_),
       last_used(other.last_used) {
-    other.fd_ = -1;
+    other.fd_ = core::INVALID_OS_SOCKET;
     other.is_closed_ = true;
 }
 
@@ -29,44 +29,45 @@ PooledConnection& PooledConnection::operator=(PooledConnection&& other) noexcept
     if (this != &other) {
         close();
         loop_ = other.loop_;
+        engine_id_ = other.engine_id_;
         fd_ = other.fd_;
         origin_ = std::move(other.origin_);
         tls_stream_ = std::move(other.tls_stream_);
         is_closed_ = other.is_closed_;
         last_used = other.last_used;
-        other.fd_ = -1;
+        other.fd_ = core::INVALID_OS_SOCKET;
         other.is_closed_ = true;
     }
     return *this;
 }
 
 void PooledConnection::close() noexcept {
-    if (fd_ >= 0 && !is_closed_) {
+    if (core::is_valid_socket(fd_) && !is_closed_) {
         tls_stream_.reset();
-        ::close(fd_);
-        fd_ = -1;
+        core::close_socket(fd_);
+        fd_ = core::INVALID_OS_SOCKET;
         is_closed_ = true;
     }
 }
 
 core::Task<int> PooledConnection::write(const void* buf, size_t len) {
-    if (is_closed_ || fd_ < 0) co_return -1;
+    if (is_closed_ || !core::is_valid_socket(fd_)) co_return -1;
     if (tls_stream_) {
         co_return co_await tls_stream_->write_plaintext(buf, len);
     }
 
-    int n = co_await loop_->ring().send(
+    int n = co_await loop_->engine().send(
         fd_, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(buf), len));
     co_return n;
 }
 
 core::Task<int> PooledConnection::read(void* buf, size_t max_len) {
-    if (is_closed_ || fd_ < 0) co_return -1;
+    if (is_closed_ || !core::is_valid_socket(fd_)) co_return -1;
     if (tls_stream_) {
         co_return co_await tls_stream_->read_plaintext(buf, max_len);
     }
 
-    int n = co_await loop_->ring().recv(fd_, buf, max_len, 0);
+    int n = co_await loop_->engine().recv(fd_, buf, max_len, 0);
     co_return n;
 }
 
@@ -130,6 +131,15 @@ ConnectionPool::acquire(const Url& url, core::EventLoop& loop) {
 
             if (conn && conn->is_valid()) {
                 if (now - conn->last_used <= config_.idle_timeout) {
+#if defined(_WIN32)
+                    // On Windows IOCP, an OS socket handle is permanently bound to the IOCP port
+                    // it was associated with at creation. If acquired by a different event loop engine,
+                    // it cannot be migrated; close it and create a fresh one for the current engine.
+                    if (conn->engine_id_ != loop.engine().id()) {
+                        conn->close();
+                        continue;
+                    }
+#endif
                     conn->set_loop(loop);
                     co_return std::move(conn);
                 }
@@ -157,27 +167,35 @@ ConnectionPool::create_connection(const Url& url, core::EventLoop& loop) {
         co_return std::unexpected(ConnectionError::DnsLookupFailed);
     }
 
-    int fd = ::socket(res->ai_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
-    if (fd < 0) {
+#if defined(_WIN32)
+    core::os_socket_t fd = WSASocketW(res->ai_family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    if (!core::is_valid_socket(fd)) {
         ::freeaddrinfo(res);
         co_return std::unexpected(ConnectionError::SocketCreationFailed);
     }
+#else
+    core::os_socket_t fd = ::socket(res->ai_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
+    if (!core::is_valid_socket(fd)) {
+        ::freeaddrinfo(res);
+        co_return std::unexpected(ConnectionError::SocketCreationFailed);
+    }
+#endif
 
     int flag = 1;
-    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&flag), sizeof(flag));
 
-    int connect_rc = co_await loop.ring().connect(fd, res->ai_addr, res->ai_addrlen);
+    int connect_rc = co_await loop.engine().connect(fd, res->ai_addr, static_cast<socklen_t>(res->ai_addrlen));
     ::freeaddrinfo(res);
 
     if (connect_rc < 0 && connect_rc != -EINPROGRESS) {
-        ::close(fd);
+        core::close_socket(fd);
         co_return std::unexpected(ConnectionError::ConnectFailed);
     }
 
     std::unique_ptr<TlsClientStream> tls_stream = nullptr;
     if (url.is_https()) {
         if (!tls_ctx_.is_valid()) {
-            ::close(fd);
+            core::close_socket(fd);
             co_return std::unexpected(ConnectionError::TlsHandshakeFailed);
         }
 
@@ -186,7 +204,7 @@ ConnectionPool::create_connection(const Url& url, core::EventLoop& loop) {
 
         bool tls_ok = co_await tls_stream->handshake();
         if (!tls_ok) {
-            ::close(fd);
+            core::close_socket(fd);
             co_return std::unexpected(ConnectionError::TlsHandshakeFailed);
         }
     }

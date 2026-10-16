@@ -33,9 +33,9 @@ public:
         : total_us_(microseconds_from_midnight % 86'400'000'000ULL) {}
 
     [[nodiscard]] static Time now() noexcept {
-        struct timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        uint64_t us = (static_cast<uint64_t>(ts.tv_sec % 86400) * 1'000'000ULL) + (ts.tv_nsec / 1000);
+        auto now_point = std::chrono::system_clock::now();
+        auto epoch_us = std::chrono::duration_cast<std::chrono::microseconds>(now_point.time_since_epoch()).count();
+        uint64_t us = static_cast<uint64_t>(epoch_us % 86'400'000'000LL);
         return Time(us);
     }
 

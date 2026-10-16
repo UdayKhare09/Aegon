@@ -1,24 +1,28 @@
-# io_uring Kernel Subsystem
+# io_uring Kernel Subsystem (`IoUringEngine`)
 
-The `aegon::core::IoUring` class provides an object-oriented, coroutine-native C++26 interface directly over the Linux kernel's `io_uring` asynchronous I/O subsystem.
+The [`aegon::core::IoUringEngine`](file:///home/uday/Projects/Aegon/src/core/engine/IoUringEngine.h) backend implements the abstract [`IoEngine`](./io-engine.md) interface directly over the Linux kernel's `io_uring` asynchronous I/O subsystem.
 
-It leverages state-of-the-art Linux 6.x features: **Multishot Accept**, **Multishot Recv with Provided Buffer Rings (`PBUF_RING`)**, **Zero-Copy Send (`IORING_OP_SEND_ZC`)**, **Zero-Copy File Splice**, and **Single-Issuer Cooperative Taskrun**.
+It leverages state-of-the-art Linux 6.x features: **Multishot Accept**, **Multishot Recv with Provided Buffer Rings (`PBUF_RING`)**, **Zero-Copy Send (`IORING_OP_SEND_ZC`)**, **Zero-Copy File Splice**, and **Single-Issuer Cooperative Taskrun (`IORING_SETUP_DEFER_TASKRUN`)**.
+
+> [!NOTE]
+> For general engine usage, awaiters reference, and comparative benchmarks across `io_uring` and `epoll`, see the comprehensive [I/O Engine & Backends Guide](./io-engine.md).
 
 ---
 
-## Configuration (`IoUringConfig`)
+## Configuration (`EngineConfig`)
 
 ```cpp
-#include <aegon/core/IoUring.h>
+#include <aegon/core/engine/IoUringEngine.h>
 
 using namespace aegon::core;
 
-IoUringConfig config{
+EngineConfig config{
+    .type = EngineType::IoUring,
     .entries = 8192,                // SQ ring size (power of 2)
     .flags = 0                      // Additional IORING_SETUP_* flags
 };
 
-IoUring ring(config);
+IoUringEngine engine(config);
 ```
 
 ---
@@ -31,25 +35,26 @@ Every operation on `IoUring` returns an awaiter struct that can be directly `co_
 
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
-| `ring.accept(listen_fd)` | `MultishotAcceptAwaiter` | Accepts a single connection asynchronously. |
-| `ring.accept_multishot(listen_fd)` | `MultishotAcceptStream` | Continually armed multishot accept stream. |
-| `ring.recv_multishot(fd, bgid)` | `MultishotRecvAwaiter` | Kernel auto-assigns incoming data to buffer ring `bgid`. |
-| `ring.recv(fd, buf, len, flags)` | `RecvAwaiter` | Standard async socket receive into user buffer. |
-| `ring.connect(fd, addr, addr_len)` | `ConnectAwaiter` | Asynchronous non-blocking socket connect. |
-| `ring.send(fd, data)` | `SendAwaiter` | Async socket transmission (`std::string_view` or `span`). |
-| `ring.send_all(fd, data)` | `Task<int>` | Resilient transmission loop guaranteeing all bytes are sent. |
-| `ring.send_zc(fd, data)` | `SendZcAwaiter` | Zero-copy transmission (`IORING_OP_SEND_ZC`). |
-| `ring.send_zc_fixed(fd, ...)` | `SendZcAwaiter` | Zero-copy transmission using pre-registered fixed buffers. |
-| `ring.recvmsg(fd, msghdr*)` | `RecvmsgAwaiter` | Asynchronous datagram reception (UDP / HTTP/3). |
+| `engine.accept(listen_fd)` | `AcceptAwaiter` | Accepts a single connection asynchronously. |
+| `engine.accept_multishot(listen_fd)` | `MultishotAcceptStream` | Continually armed multishot accept stream. |
+| `engine.recv_provided(fd, bgid)` | `RecvProvidedAwaiter` | Kernel auto-assigns incoming data to buffer ring `bgid`. |
+| `engine.recv_multishot(fd, bgid)` | `MultishotRecvStream` | Kernel streaming multishot receive into buffer ring `bgid`. |
+| `engine.recv(fd, buf, len, flags)` | `RecvAwaiter` | Standard async socket receive into user buffer. |
+| `engine.connect(fd, addr, addr_len)` | `ConnectAwaiter` | Asynchronous non-blocking socket connect. |
+| `engine.send(fd, data)` | `SendAwaiter` | Async socket transmission (`std::string_view` or `span`). |
+| `engine.send_all(fd, data)` | `Task<int>` | Resilient transmission loop guaranteeing all bytes are sent. |
+| `engine.send_zc(fd, data)` | `SendZcAwaiter` | Zero-copy transmission (`IORING_OP_SEND_ZC`). |
+| `engine.recvmsg(fd, msghdr*)` | `RecvmsgAwaiter` | Asynchronous datagram reception (UDP / HTTP/3). |
 
 ### File & System Operations
 
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
-| `ring.splice(in, off_in, out, ...)`| `SpliceAwaiter` | Zero-copy kernel splice between file and socket. |
-| `ring.close(fd)` | `CloseAwaiter` | Asynchronous descriptor closure. |
-| `ring.cancel(user_data, flags)` | `CancelAwaiter` | Cancels a currently armed in-flight request. |
-| `ring.timeout(nanoseconds)` | `TimeoutAwaiter` | Coroutine sleep / timer using `IORING_OP_TIMEOUT`. |
+| `engine.splice(in, off_in, out, ...)`| `SpliceAwaiter` | Zero-copy kernel splice between file and socket. |
+| `engine.close(fd)` | `CloseAwaiter` | Asynchronous descriptor closure. |
+| `engine.shutdown(fd, how)` | `ShutdownAwaiter` | Asynchronous socket shutdown (`SHUT_RD`, `SHUT_WR`). |
+| `engine.cancel(user_data, flags)` | `CancelAwaiter` | Cancels a currently armed in-flight request. |
+| `engine.timeout(nanoseconds)` | `TimeoutAwaiter` | Coroutine sleep / timer using `IORING_OP_TIMEOUT`. |
 
 ---
 
@@ -58,7 +63,7 @@ Every operation on `IoUring` returns an awaiter struct that can be directly `co_
 Traditional server architectures submit an accept syscall for every single connection. Aegon uses Linux `IORING_ACCEPT_MULTISHOT`: a single request is submitted once and remains armed in the kernel, generating completion events for incoming connections without repeated SQE allocations:
 
 ```cpp
-MultishotAcceptStream stream = ring.accept_multishot(listen_socket);
+MultishotAcceptStream stream = engine.accept_multishot(listen_socket);
 
 while (loop.is_running()) {
     AcceptResult res = co_await stream.next();
@@ -71,16 +76,16 @@ while (loop.is_running()) {
 
 ---
 
-## Ring Processing Loop
+## Engine Processing Loop
 
 Inside `EventLoop`, completion queue entries (CQEs) are processed in batches:
 
 ```cpp
 // Submit in-flight SQEs and sleep until at least 1 completion arrives
-ring.submit_and_wait(/*min_complete=*/1);
+engine.submit_and_wait(/*min_complete=*/1);
 
 // Harvest CQEs and resume awaiting coroutines
-size_t completed = ring.process_completions();
+size_t completed = engine.process_completions();
 ```
 
 `process_completions()` inspects `cqe->user_data`, casts it back to `IoAwaiter*`, and invokes `on_completion(res, flags)`, immediately resuming the coroutine without dynamic dispatch overhead.

@@ -1,8 +1,5 @@
 #include "http/v3/Http3Server.h"
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#include "core/OsSocket.h"
 #include <cstring>
 #include <iostream>
 #include <vector>
@@ -22,18 +19,29 @@ Http3Server::~Http3Server() {
 }
 
 bool Http3Server::start() {
+    core::init_sockets();
+#if defined(_WIN32)
+    udp_fd_ = WSASocketW(AF_INET6, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    if (udp_fd_ != core::INVALID_OS_SOCKET) {
+        u_long mode = 1;
+        ioctlsocket(udp_fd_, FIONBIO, &mode);
+    }
+#else
     udp_fd_ = socket(AF_INET6, SOCK_DGRAM | SOCK_NONBLOCK, 0);
-    bool is_v6 = (udp_fd_ >= 0);
+#endif
+    bool is_v6 = (udp_fd_ != core::INVALID_OS_SOCKET);
     if (is_v6) {
         int opt_v6only = 0; // Dual-stack IPv6 & IPv4
-        setsockopt(udp_fd_, IPPROTO_IPV6, IPV6_V6ONLY, &opt_v6only, sizeof(opt_v6only));
+        setsockopt(udp_fd_, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&opt_v6only), sizeof(opt_v6only));
         int reuse = 1;
-        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
+        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#if defined(SO_REUSEPORT)
+        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#endif
 
         int buf_size = 8 * 1024 * 1024;
-        setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
-        setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
+        setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&buf_size), sizeof(buf_size));
+        setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buf_size), sizeof(buf_size));
 
         sockaddr_in6 addr6{};
         addr6.sin6_family = AF_INET6;
@@ -41,23 +49,33 @@ bool Http3Server::start() {
         addr6.sin6_port = htons(port_);
 
         if (bind(udp_fd_, reinterpret_cast<sockaddr*>(&addr6), sizeof(addr6)) < 0) {
-            ::close(udp_fd_);
-            udp_fd_ = -1;
+            core::close_socket(udp_fd_);
+            udp_fd_ = core::INVALID_OS_SOCKET;
             is_v6 = false;
         }
     }
 
     if (!is_v6) {
+#if defined(_WIN32)
+        udp_fd_ = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+        if (udp_fd_ != core::INVALID_OS_SOCKET) {
+            u_long mode = 1;
+            ioctlsocket(udp_fd_, FIONBIO, &mode);
+        }
+#else
         udp_fd_ = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
-        if (udp_fd_ < 0) return false;
+#endif
+        if (udp_fd_ == core::INVALID_OS_SOCKET) return false;
 
         int reuse = 1;
-        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
+        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#if defined(SO_REUSEPORT)
+        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#endif
 
         int buf_size = 8 * 1024 * 1024;
-        setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
-        setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
+        setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&buf_size), sizeof(buf_size));
+        setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buf_size), sizeof(buf_size));
 
         sockaddr_in addr4{};
         addr4.sin_family = AF_INET;
@@ -65,8 +83,8 @@ bool Http3Server::start() {
         addr4.sin_port = htons(port_);
 
         if (bind(udp_fd_, reinterpret_cast<sockaddr*>(&addr4), sizeof(addr4)) < 0) {
-            ::close(udp_fd_);
-            udp_fd_ = -1;
+            core::close_socket(udp_fd_);
+            udp_fd_ = core::INVALID_OS_SOCKET;
             return false;
         }
     }
@@ -76,8 +94,10 @@ bool Http3Server::start() {
 }
 
 void Http3Server::stop() noexcept {
-    if (!running_) return;
-    running_ = false;
+    bool expected = true;
+    if (!running_.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
+        return;
+    }
 
     // Gracefully signal GOAWAY to all active connections
     for (auto& [_, conn] : connections_) {
@@ -90,20 +110,20 @@ void Http3Server::stop() noexcept {
 
     // Wake up io_uring recvmsg before closing socket
     if (port_ > 0) {
-        int poke_fd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (poke_fd >= 0) {
+        core::os_socket_t poke_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (poke_fd != core::INVALID_OS_SOCKET) {
             sockaddr_in a{};
             a.sin_family = AF_INET;
             a.sin_port = htons(port_);
             inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
             sendto(poke_fd, "q", 1, 0, reinterpret_cast<sockaddr*>(&a), sizeof(a));
-            close(poke_fd);
+            core::close_socket(poke_fd);
         }
     }
 
-    if (udp_fd_ >= 0) {
-        ::close(udp_fd_);
-        udp_fd_ = -1;
+    if (udp_fd_ != core::INVALID_OS_SOCKET) {
+        core::close_socket(udp_fd_);
+        udp_fd_ = core::INVALID_OS_SOCKET;
     }
 }
 
@@ -122,8 +142,8 @@ void Http3Server::send_version_negotiation(const ngtcp2_version_cid& vc,
         sv, sizeof(sv) / sizeof(sv[0])
     );
 
-    if (nwrite > 0 && udp_fd_ >= 0) {
-        sendto(udp_fd_, out, static_cast<size_t>(nwrite), 0,
+    if (nwrite > 0 && udp_fd_ != core::INVALID_OS_SOCKET) {
+        sendto(udp_fd_, reinterpret_cast<const char*>(out), static_cast<int>(nwrite), 0,
                reinterpret_cast<const sockaddr*>(&remote_addr), remote_addr_len);
     }
 }
@@ -156,7 +176,7 @@ void Http3Server::prune_connections() {
 
 core::Task<void> Http3Server::run_timer_loop() {
     while (running_) {
-        co_await loop_.ring().timeout(10'000'000ULL); // 10ms tick for RFC 9002 loss detection & PTO
+        co_await loop_.engine().timeout(10'000'000ULL); // 10ms tick for RFC 9002 loss detection & PTO
         if (!running_) break;
         check_expiries();
         prune_connections();
@@ -241,6 +261,7 @@ core::Task<void> Http3Server::run_receive_loop() {
 
     constexpr size_t BURST_BATCH = 32;
     uint8_t burst_bufs[BURST_BATCH][2048];
+#if !defined(_WIN32)
     sockaddr_storage burst_addrs[BURST_BATCH];
     iovec burst_iovs[BURST_BATCH];
     mmsghdr burst_msgs[BURST_BATCH];
@@ -256,6 +277,7 @@ core::Task<void> Http3Server::run_receive_loop() {
         burst_msgs[i].msg_hdr.msg_controllen = 0;
         burst_msgs[i].msg_hdr.msg_flags = 0;
     }
+#endif
 
     std::array<Http3Connection*, BURST_BATCH + 1> touched;
     size_t touched_count = 0;
@@ -288,7 +310,7 @@ core::Task<void> Http3Server::run_receive_loop() {
         msg.msg_controllen = 0;
         msg.msg_flags = 0;
 
-        int bytes = co_await loop_.ring().recvmsg(udp_fd_, &msg);
+        int bytes = co_await loop_.engine().recvmsg(udp_fd_, &msg);
         if (bytes <= 0 || !running_) {
             if (!running_) break;
             continue;
@@ -299,6 +321,7 @@ core::Task<void> Http3Server::run_receive_loop() {
             remote_addr, msg.msg_namelen, false);
         record_touched(first_conn);
 
+#if !defined(_WIN32)
         // Batched multi-packet burst drainage with recvmmsg (cutting syscalls by up to 90%)
         while (running_) {
             for (size_t i = 0; i < BURST_BATCH; ++i) {
@@ -323,6 +346,29 @@ core::Task<void> Http3Server::run_receive_loop() {
 
             if (count < static_cast<int>(BURST_BATCH)) break;
         }
+#else
+        // Windows non-blocking burst drainage with recvfrom
+        while (running_) {
+            int count = 0;
+            while (count < static_cast<int>(BURST_BATCH)) {
+                sockaddr_storage b_addr{};
+                int b_addr_len = sizeof(b_addr);
+                int n = ::recvfrom(udp_fd_, reinterpret_cast<char*>(burst_bufs[count]),
+                                   static_cast<int>(sizeof(burst_bufs[count])), 0,
+                                   reinterpret_cast<sockaddr*>(&b_addr), &b_addr_len);
+                if (n <= 0) break;
+                auto* c = co_await dispatch_datagram_internal(
+                    std::span<const uint8_t>(burst_bufs[count], static_cast<size_t>(n)),
+                    b_addr, static_cast<socklen_t>(b_addr_len), false);
+                record_touched(c);
+                count++;
+            }
+            if (touched_count >= 16 || count < static_cast<int>(BURST_BATCH)) {
+                flush_touched();
+            }
+            if (count < static_cast<int>(BURST_BATCH)) break;
+        }
+#endif
 
         // Flush any remaining touched connections
         flush_touched();

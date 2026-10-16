@@ -1,6 +1,10 @@
 #include "PostgresDriver.h"
 #include <libpq-fe.h>
+#if defined(_WIN32)
+#include "core/OsSocket.h"
+#else
 #include <poll.h>
+#endif
 #include <stdexcept>
 #include <utility>
 #include <cstdlib>
@@ -97,7 +101,7 @@ struct PostgresConnection::PipelineAwaiter {
 
 core::Task<void> PostgresConnection::run_reader(core::EventLoop& loop) {
     while (conn_ && pipelined_) {
-        (void)co_await loop.ring().poll(fd_, POLLIN);
+        (void)co_await loop.engine().poll(fd_, POLLIN);
         if (!conn_ || PQconsumeInput(conn_) == 0) {
             break;
         }
@@ -154,16 +158,28 @@ PostgresConnection::PostgresConnection(const std::string& conninfo, bool pipelin
         prepared_map_[def.sql] = def.name;
     }
 
-    PQsetnonblocking(conn_, 1);
-    fd_ = PQsocket(conn_);
+    int raw_sock = PQsocket(conn_);
+    if (raw_sock >= 0) {
+        fd_ = static_cast<core::os_socket_t>(static_cast<uintptr_t>(static_cast<unsigned int>(raw_sock)));
+    } else {
+        fd_ = core::INVALID_OS_SOCKET;
+    }
 
+#if !defined(_WIN32)
     if (pipelined_ && core::EventLoop::current() != nullptr) {
+        PQsetnonblocking(conn_, 1);
         if (PQenterPipelineMode(conn_) != 1) {
             pipelined_ = false;
+            PQsetnonblocking(conn_, 0);
         }
     } else {
         pipelined_ = false;
+        PQsetnonblocking(conn_, 0);
     }
+#else
+    pipelined_ = false;
+    PQsetnonblocking(conn_, 0);
+#endif
 }
 
 PostgresConnection::~PostgresConnection() {
@@ -239,7 +255,7 @@ core::Task<size_t> PostgresConnection::execute(std::string_view sql, std::span<c
             while (true) {
                 int flush_res = PQflush(conn_);
                 if (flush_res <= 0) break;
-                (void)co_await loop->ring().poll(fd_, POLLOUT);
+                (void)co_await loop->engine().poll(fd_, POLLOUT);
             }
         }
 
@@ -337,7 +353,7 @@ core::Task<std::vector<DriverRowView>> PostgresConnection::query(std::string_vie
             while (true) {
                 int flush_res = PQflush(conn_);
                 if (flush_res <= 0) break;
-                (void)co_await loop->ring().poll(fd_, POLLOUT);
+                (void)co_await loop->engine().poll(fd_, POLLOUT);
             }
         }
 
