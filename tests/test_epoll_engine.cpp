@@ -289,6 +289,73 @@ void test_epoll_http_server() {
     std::cout << "  -> PASS: Live Aegon HTTP Server successfully ran on EpollEngine!\n";
 }
 
+void test_engine_selection_and_fail_fast() {
+    std::cout << "[Test 5] Engine Selection Precedence & Fail-Fast Verification\n";
+
+    // 1. Explicit Epoll selection
+    {
+        ::unsetenv("AEGON_ENGINE");
+        EngineConfig cfg;
+        cfg.type = EngineType::Epoll;
+        auto engine = IoEngine::create(cfg);
+        assert(engine->type() == EngineType::Epoll);
+    }
+
+    // 2. Explicit Epoll via AEGON_ENGINE
+    {
+        ::setenv("AEGON_ENGINE", "epoll", 1);
+        EngineConfig cfg;
+        cfg.type = EngineType::Auto;
+        auto engine = IoEngine::create(cfg);
+        assert(engine->type() == EngineType::Epoll);
+        ::unsetenv("AEGON_ENGINE");
+    }
+
+    // 3. Auto-fallback when io_uring fails on invalid flags
+    {
+        ::unsetenv("AEGON_ENGINE");
+        EngineConfig cfg;
+        cfg.type = EngineType::Auto;
+        cfg.flags = 0x80000000; // Intentionally invalid io_uring setup flag
+        auto engine = IoEngine::create(cfg);
+        // Should have gracefully fallen back to Epoll
+        assert(engine->type() == EngineType::Epoll);
+    }
+
+    // 4. Programmatic explicit IoUring: Must throw system_error and NOT fallback
+    {
+        ::unsetenv("AEGON_ENGINE");
+        EngineConfig cfg;
+        cfg.type = EngineType::IoUring;
+        cfg.flags = 0x80000000; // Intentionally invalid io_uring setup flag
+        bool caught = false;
+        try {
+            auto engine = IoEngine::create(cfg);
+        } catch (const std::system_error&) {
+            caught = true;
+        }
+        assert(caught);
+    }
+
+    // 5. Explicit AEGON_ENGINE=io_uring: Must throw system_error and NOT fallback
+    {
+        ::setenv("AEGON_ENGINE", "io_uring", 1);
+        EngineConfig cfg;
+        cfg.type = EngineType::Auto;
+        cfg.flags = 0x80000000; // Intentionally invalid io_uring setup flag
+        bool caught = false;
+        try {
+            auto engine = IoEngine::create(cfg);
+        } catch (const std::system_error&) {
+            caught = true;
+        }
+        assert(caught);
+        ::unsetenv("AEGON_ENGINE");
+    }
+
+    std::cout << "  -> PASS: Precedence hierarchy and fail-fast guarantees verified!\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "         AEGON EPOLL ENGINE VERIFICATION SUITE         \n";
@@ -298,6 +365,7 @@ int main() {
     test_epoll_tcp_loopback();
     test_epoll_multishot_streams();
     test_epoll_http_server();
+    test_engine_selection_and_fail_fast();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL EPOLL ENGINE TESTS PASSED CLEANLY! <<<      \n";

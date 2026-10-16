@@ -35,27 +35,16 @@ The engine abstraction uses **zero-allocation stack awaiters**, ensuring that po
 
 ---
 
-## Automatic Backend Selection & Probing
+## Backend Selection Precedence & Fail-Fast Guarantees
 
-By default, Aegon automatically probes kernel capabilities at startup:
-- If Linux kernel `io_uring` is present and functional, `IoUringEngine` is selected.
-- If `io_uring` initialization fails (e.g. older kernels, Docker seccomp filters, disabled `io_uring`), Aegon **automatically falls back to `EpollEngine`** with zero code changes.
+Aegon uses a strict 3-tier precedence hierarchy to determine the engine backend:
 
-### Environment Variable Override
+$$\textbf{Programmatic Explicit Config} \;\;>\;\; \textbf{Environment Variable (AEGON\_ENGINE)} \;\;>\;\; \textbf{Auto-Probing}$$
 
-You can force a specific I/O engine at runtime via the `AEGON_ENGINE` environment variable:
-
-```bash
-# Force the Linux epoll backend
-AEGON_ENGINE=epoll ./my_service
-
-# Force the native io_uring backend
-AEGON_ENGINE=io_uring ./my_service
-```
-
-### Programmatic Selection
-
-You can also explicitly select or configure the engine in C++:
+### 1. Programmatic Selection (`config.type`)
+Takes the highest priority. If explicitly set, environment variables are completely ignored:
+- `EngineType::Epoll`: Forces `EpollEngine`.
+- `EngineType::IoUring`: Explicitly selects `IoUringEngine`. If initialization fails (e.g. unsupported kernel or seccomp block), it **fails fast and throws `std::system_error`** without fallback, preventing unexpected degradation in production.
 
 ```cpp
 #include <aegon/core/engine/IoEngine.h>
@@ -64,12 +53,30 @@ You can also explicitly select or configure the engine in C++:
 using namespace aegon::core;
 
 EngineConfig config{
-    .type = EngineType::Epoll, // or EngineType::Auto, EngineType::IoUring
+    .type = EngineType::IoUring, // Explicitly require io_uring (fail-fast on failure)
     .entries = 4096
 };
 
 EventLoop loop(config, /*buffer_pool_entries=*/8192, /*buffer_size=*/4096);
 ```
+
+### 2. Environment Variable Override (`AEGON_ENGINE`)
+Applied when `config.type` is `EngineType::Auto` (the default):
+- `AEGON_ENGINE=epoll`: Forces `EpollEngine`.
+- `AEGON_ENGINE=io_uring`: Explicitly requests `IoUringEngine`. Similar to programmatic selection, this acts as an explicit requirement: if `io_uring` cannot initialize, Aegon **fails fast and throws without fallback**.
+
+```bash
+# Force epoll backend
+AEGON_ENGINE=epoll ./my_service
+
+# Require io_uring backend (fails fast if kernel rejects io_uring)
+AEGON_ENGINE=io_uring ./my_service
+```
+
+### 3. Automatic Kernel Probing & Graceful Fallback
+When `config.type == EngineType::Auto` and no environment variable is set:
+- Aegon attempts to initialize `IoUringEngine` with high-performance flags (`IORING_SETUP_DEFER_TASKRUN`, `IORING_SETUP_SINGLE_ISSUER`).
+- If initialization fails (e.g. Linux kernels < 6.1, WSL2 without `io_uring`, or Docker container restrictions), Aegon logs a warning and **gracefully falls back to `EpollEngine`** with zero code changes.
 
 ---
 

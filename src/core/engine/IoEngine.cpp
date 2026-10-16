@@ -259,30 +259,47 @@ Task<int> IoEngine::send_all(int fd, std::span<const uint8_t> data) {
 
 namespace aegon::core {
 
-static bool should_use_epoll(const EngineConfig& config) noexcept {
-    if (config.type == EngineType::Epoll) return true;
-    if (config.type == EngineType::IoUring) return false;
+enum class EffectiveEngineTarget {
+    ExplicitEpoll,
+    ExplicitIoUring,
+    AutoProbe
+};
+
+static EffectiveEngineTarget resolve_engine_target(const EngineConfig& config) noexcept {
+    if (config.type == EngineType::Epoll) return EffectiveEngineTarget::ExplicitEpoll;
+    if (config.type == EngineType::IoUring) return EffectiveEngineTarget::ExplicitIoUring;
+
     const char* env = std::getenv("AEGON_ENGINE");
-    if (env && (std::strcmp(env, "epoll") == 0 || std::strcmp(env, "EPOLL") == 0)) {
-        return true;
+    if (env) {
+        if (std::strcmp(env, "epoll") == 0 || std::strcmp(env, "EPOLL") == 0) {
+            return EffectiveEngineTarget::ExplicitEpoll;
+        }
+        if (std::strcmp(env, "io_uring") == 0 || std::strcmp(env, "IO_URING") == 0 ||
+            std::strcmp(env, "uring") == 0 || std::strcmp(env, "URING") == 0) {
+            return EffectiveEngineTarget::ExplicitIoUring;
+        }
     }
-    return false;
+    return EffectiveEngineTarget::AutoProbe;
 }
 
 std::unique_ptr<IoEngine> IoEngine::create(const EngineConfig& config) {
 #if defined(__linux__)
-    if (should_use_epoll(config)) {
+    auto target = resolve_engine_target(config);
+    if (target == EffectiveEngineTarget::ExplicitEpoll) {
         return std::make_unique<EpollEngine>(config, nullptr);
     }
-    if (config.type == EngineType::Auto) {
-        try {
-            return std::make_unique<IoUringEngine>(config, nullptr);
-        } catch (const std::exception& e) {
-            log::warn("[IoEngine] io_uring init failed ({}). Falling back to epoll engine.", e.what());
-            return std::make_unique<EpollEngine>(config, nullptr);
-        }
+    if (target == EffectiveEngineTarget::ExplicitIoUring) {
+        // Explicitly chosen either programmatically or via AEGON_ENGINE=io_uring:
+        // Must fail fast and throw without falling back if initialization fails.
+        return std::make_unique<IoUringEngine>(config, nullptr);
     }
-    return std::make_unique<IoUringEngine>(config, nullptr);
+    // AutoProbe: attempt IoUringEngine, fall back to EpollEngine on failure
+    try {
+        return std::make_unique<IoUringEngine>(config, nullptr);
+    } catch (const std::exception& e) {
+        log::warn("[IoEngine] io_uring init failed ({}). Falling back to epoll engine.", e.what());
+        return std::make_unique<EpollEngine>(config, nullptr);
+    }
 #else
     (void)config;
     throw std::runtime_error("Unsupported platform engine");
@@ -291,18 +308,22 @@ std::unique_ptr<IoEngine> IoEngine::create(const EngineConfig& config) {
 
 std::unique_ptr<IoEngine> IoEngine::create(const EngineConfig& config, BufferPool& buffer_pool) {
 #if defined(__linux__)
-    if (should_use_epoll(config)) {
+    auto target = resolve_engine_target(config);
+    if (target == EffectiveEngineTarget::ExplicitEpoll) {
         return std::make_unique<EpollEngine>(config, &buffer_pool);
     }
-    if (config.type == EngineType::Auto) {
-        try {
-            return std::make_unique<IoUringEngine>(config, &buffer_pool);
-        } catch (const std::exception& e) {
-            log::warn("[IoEngine] io_uring init failed ({}). Falling back to epoll engine.", e.what());
-            return std::make_unique<EpollEngine>(config, &buffer_pool);
-        }
+    if (target == EffectiveEngineTarget::ExplicitIoUring) {
+        // Explicitly chosen either programmatically or via AEGON_ENGINE=io_uring:
+        // Must fail fast and throw without falling back if initialization fails.
+        return std::make_unique<IoUringEngine>(config, &buffer_pool);
     }
-    return std::make_unique<IoUringEngine>(config, &buffer_pool);
+    // AutoProbe: attempt IoUringEngine, fall back to EpollEngine on failure
+    try {
+        return std::make_unique<IoUringEngine>(config, &buffer_pool);
+    } catch (const std::exception& e) {
+        log::warn("[IoEngine] io_uring init failed ({}). Falling back to epoll engine.", e.what());
+        return std::make_unique<EpollEngine>(config, &buffer_pool);
+    }
 #else
     (void)config;
     (void)buffer_pool;
