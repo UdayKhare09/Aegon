@@ -54,10 +54,10 @@ Aegon delivers peak throughput across Linux and Windows without compromising saf
 
 | Protocol Suite | Linux `io_uring` | Linux `epoll` | Windows `IOCP` (MSVC) | Verification Status |
 | :--- | :--- | :--- | :--- | :---: |
-| **HTTP/1.1 Plaintext** | **528,851 req/s** | **454,290 req/s** | **94,431 req/s** | 100% Passed |
-| **HTTP/1.1 TLS 1.3** | **398,003 req/s** | **350,448 req/s** | **86,655 req/s** | 100% Passed |
-| **HTTP/2 Multiplexing** | **1,350,621 req/s** | **1,316,487 req/s** | **355,548 req/s** | 100% Passed |
-| **HTTP/3 (QUIC)** | **836,720 req/s** | **873,842 req/s** | **283,238 req/s** | **0% packet loss** |
+| **HTTP/1.1 Plaintext** | **529,980 req/s** | **460,914 req/s** | **94,431 req/s** | 100% Passed |
+| **HTTP/1.1 TLS 1.3** | **398,164 req/s** | **358,038 req/s** | **86,655 req/s** | 100% Passed |
+| **HTTP/2 Multiplexing** | **1,392,360 req/s** | **1,324,911 req/s** | **355,548 req/s** | 100% Passed |
+| **HTTP/3 (QUIC)** | **875,254 req/s** | **876,920 req/s** | **283,238 req/s** | **0% packet loss** |
 | **Test Suite Pass Rate** | **46 / 46 (100%)** | **46 / 46 (100%)** | **41 / 41 (100%)** | **Zero Regressions** |
 
 ---
