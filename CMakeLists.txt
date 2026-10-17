@@ -5,10 +5,9 @@ cmake_minimum_required(VERSION 3.20)
 # ==============================================================================
 
 set(AEGON_VERSION_MAJOR 0)
-set(AEGON_VERSION_MINOR 1)
-set(AEGON_VERSION_PATCH 0)
-set(AEGON_VERSION_PRERELEASE "a2")
-set(AEGON_VERSION_STRING "${AEGON_VERSION_MAJOR}.${AEGON_VERSION_MINOR}.${AEGON_VERSION_PRERELEASE}")
+set(AEGON_VERSION_MINOR 2)
+set(AEGON_VERSION_PATCH 1)
+set(AEGON_VERSION_STRING "${AEGON_VERSION_MAJOR}.${AEGON_VERSION_MINOR}.${AEGON_VERSION_PATCH}")
 
 project(Aegon
     VERSION ${AEGON_VERSION_MAJOR}.${AEGON_VERSION_MINOR}.${AEGON_VERSION_PATCH}
@@ -247,17 +246,8 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "High-Performance C++23 Asynchronous Web &
 set(CPACK_PACKAGE_VERSION_MAJOR     ${AEGON_VERSION_MAJOR})
 set(CPACK_PACKAGE_VERSION_MINOR     ${AEGON_VERSION_MINOR})
 set(CPACK_PACKAGE_VERSION_PATCH     ${AEGON_VERSION_PATCH})
-set(CPACK_PACKAGE_VERSION           "0.1.0-alpha2")
+set(CPACK_PACKAGE_VERSION           "${AEGON_VERSION_STRING}")
 set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
-
-# DEB
-set(CPACK_DEBIAN_PACKAGE_SECTION    "libs")
-set(CPACK_DEBIAN_PACKAGE_DEPENDS    "libssl3, libsqlite3-0, libpq5, libnghttp2-14, libngtcp2-16, libnghttp3-9, libdeflate0, liburing2")
-
-# RPM
-set(CPACK_RPM_PACKAGE_LICENSE       "MIT")
-set(CPACK_RPM_PACKAGE_GROUP         "Development/Libraries")
-set(CPACK_RPM_PACKAGE_REQUIRES      "openssl-libs, sqlite-libs, libpq, libnghttp2, libngtcp2, libnghttp3, libdeflate, liburing")
 
 # Source tarball
 set(CPACK_SOURCE_GENERATOR          "TGZ")

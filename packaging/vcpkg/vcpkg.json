@@ -1,6 +1,6 @@
 {
   "name": "aegon",
-  "version-semver": "0.1.0-alpha2",
+  "version-semver": "0.2.1",
   "description": "High-Performance C++23 Asynchronous Web & Data Framework",
   "homepage": "https://github.com/UdayKhare09/Aegon",
   "license": "MIT",
@@ -12,6 +12,7 @@
     "nghttp2",
     "ngtcp2",
     "nghttp3",
-    "libdeflate"
+    "libdeflate",
+    "glaze"
   ]
 }

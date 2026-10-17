@@ -4,6 +4,7 @@ include(CMakeFindDependencyMacro)
 
 # Core threads & system libraries
 find_dependency(Threads)
+find_dependency(glaze CONFIG)
 
 # Database dependencies for Aegon::orm
 find_dependency(PostgreSQL)

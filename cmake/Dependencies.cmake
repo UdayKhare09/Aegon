@@ -6,14 +6,7 @@
 find_package(Threads REQUIRED)
 
 # Serialization: Glaze
-include(FetchContent)
-FetchContent_Declare(
-    glaze
-    GIT_REPOSITORY https://github.com/stephenberry/glaze.git
-    GIT_TAG        v4.4.1
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(glaze)
+find_package(glaze REQUIRED)
 
 # Cryptography & TLS: OpenSSL
 find_package(OpenSSL QUIET)

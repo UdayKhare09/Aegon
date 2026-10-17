@@ -1,7 +1,7 @@
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO UdayKhare09/Aegon
-    REF v0.1.0-alpha2
+    REF v0.2.1
     SHA512 0
     HEAD_REF main
 )

@@ -17,3 +17,8 @@ docs/.vitepress/cache
 **/zig-out
 **/reports
 scratch
+
+# Packaging build artifacts
+*.pkg.tar.*
+packaging/arch/pkg/
+packaging/arch/src/
