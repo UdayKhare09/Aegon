@@ -27,16 +27,10 @@ jobs:
             su builder -c 'cd /workspace/packaging/arch && makepkg -f'
           "
 
-      - name: Package vcpkg Overlay
-        run: |
-          tar -czf packaging/vcpkg-overlay.tar.gz -C packaging vcpkg
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            packaging/arch/*.pkg.tar.zst
-            packaging/vcpkg-overlay.tar.gz
+          files: packaging/arch/*.pkg.tar.zst
           generate_release_notes: true
           draft: false
           prerelease: false
