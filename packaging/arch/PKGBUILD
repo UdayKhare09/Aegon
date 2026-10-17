@@ -8,7 +8,6 @@ url="https://github.com/UdayKhare09/Aegon"
 license=('MIT')
 depends=(
     'liburing'
-    'glaze'
     'openssl'
     'sqlite'
     'postgresql-libs'
