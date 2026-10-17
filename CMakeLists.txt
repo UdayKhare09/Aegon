@@ -236,3 +236,31 @@ if(AEGON_BUILD_SAMPLES AND TARGET aegon_http AND TARGET aegon_orm AND TARGET aeg
     add_subdirectory(samples/adv)
     add_subdirectory(samples/sse)
 endif()
+
+# ==============================================================================
+# CPack Packaging
+# ==============================================================================
+set(CPACK_PACKAGE_NAME              "aegon")
+set(CPACK_PACKAGE_VENDOR            "Uday Khare")
+set(CPACK_PACKAGE_CONTACT           "udaykhare77@gmail.com")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "High-Performance C++23 Asynchronous Web & Data Framework")
+set(CPACK_PACKAGE_VERSION_MAJOR     ${AEGON_VERSION_MAJOR})
+set(CPACK_PACKAGE_VERSION_MINOR     ${AEGON_VERSION_MINOR})
+set(CPACK_PACKAGE_VERSION_PATCH     ${AEGON_VERSION_PATCH})
+set(CPACK_PACKAGE_VERSION           "0.1.0-alpha2")
+set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+
+# DEB
+set(CPACK_DEBIAN_PACKAGE_SECTION    "libs")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS    "libssl3, libsqlite3-0, libpq5, libnghttp2-14, libngtcp2-16, libnghttp3-9, libdeflate0, liburing2")
+
+# RPM
+set(CPACK_RPM_PACKAGE_LICENSE       "MIT")
+set(CPACK_RPM_PACKAGE_GROUP         "Development/Libraries")
+set(CPACK_RPM_PACKAGE_REQUIRES      "openssl-libs, sqlite-libs, libpq, libnghttp2, libngtcp2, libnghttp3, libdeflate, liburing")
+
+# Source tarball
+set(CPACK_SOURCE_GENERATOR          "TGZ")
+set(CPACK_SOURCE_IGNORE_FILES       "/\\.git/;/build/;/\\.cache/")
+
+include(CPack)

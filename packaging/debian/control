@@ -1,0 +1,22 @@
+Source: aegon
+Section: libs
+Priority: optional
+Maintainer: Uday Khare <udaykhare77@gmail.com>
+Build-Depends: debhelper-compat (= 13), cmake (>= 3.20), ninja-build,
+ libssl-dev, libsqlite3-dev, libpq-dev,
+ libnghttp2-dev, libngtcp2-dev, libnghttp3-dev,
+ libdeflate-dev, liburing-dev, git
+Standards-Version: 4.6.2
+Homepage: https://github.com/UdayKhare09/Aegon
+
+Package: libaegon-dev
+Architecture: amd64
+Depends: ${misc:Depends},
+ libssl-dev, libsqlite3-dev, libpq-dev,
+ libnghttp2-dev, libngtcp2-dev, libnghttp3-dev,
+ libdeflate-dev, liburing-dev
+Description: High-Performance C++23 Asynchronous Web & Data Framework (dev)
+ Aegon is a C++23 async web framework with HTTP/2, HTTP/3, Redis,
+ ORM, and memory store support. Built on io_uring / IOCP.
+ .
+ This package contains the static libraries and headers.
