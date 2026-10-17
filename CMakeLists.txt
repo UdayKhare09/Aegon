@@ -19,7 +19,6 @@ include(GNUInstallDirs)
 
 # User-configurable Build Options
 option(AEGON_BUILD_TESTS "Build Aegon test suite and benchmarks harness" ON)
-option(AEGON_BUILD_CLI "Build Aegon developer CLI tool" ON)
 option(AEGON_BUILD_SAMPLES "Build Aegon sample applications" ON)
 option(AEGON_BUILD_BENCHMARKS "Build Aegon unified benchmark server" ON)
 
@@ -215,12 +214,6 @@ endif()
 # ==============================================================================
 include(cmake/InstallAndExport.cmake)
 
-# ==============================================================================
-# Developer CLI Tool (aegon)
-# ==============================================================================
-if(AEGON_BUILD_CLI)
-    add_subdirectory(tools/cli)
-endif()
 
 # ==============================================================================
 # Test Suite & CTest Registrations

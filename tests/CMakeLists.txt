@@ -89,12 +89,6 @@ aegon_add_test(sql_tx_cache_parity aegon_orm)
 aegon_add_test(live_postgres aegon_orm aegon_http)
 aegon_add_test(live_postgres_orm_cache aegon_orm aegon_redis)
 
-# CLI Integration Tests
-if(TARGET aegon_cli)
-    add_test(NAME cli_version COMMAND aegon_cli version)
-    add_test(NAME cli_help COMMAND aegon_cli help)
-    add_test(NAME cli_doctor COMMAND aegon_cli doctor)
-endif()
 
 # Standalone Test Servers & Harnesses (Non-CTest Executables)
 add_executable(test_uuid test_uuid.cpp)
