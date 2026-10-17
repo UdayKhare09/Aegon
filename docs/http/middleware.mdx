@@ -1,0 +1,214 @@
+---
+title: "Middleware"
+description: "Compose reusable request and response processing with Aegon middleware, including built-in logging, compression, CORS, and security headers."
+keywords:
+  - "middleware"
+  - "access log"
+  - "compression"
+  - "cors"
+  - "security headers"
+---
+
+Aegon middleware follows an onion pattern: each layer can run code before and after the handler by calling `next(ctx)`. You can register middleware globally on the router, on a route group, or per route. Aegon ships with several production-ready built-ins.
+
+## Writing middleware
+
+A middleware is any callable that accepts `(Context&, Next)` and returns `core::Task<void>`. The `make_middleware` helper adapts sync and async variants automatically.
+
+```cpp
+#include "http/Middleware.h"
+
+using namespace aegon::http;
+
+// Async onion middleware
+router.use([](Context& ctx, Next next) -> core::Task<void> {
+    auto start = std::chrono::steady_clock::now();
+    co_await next(ctx);
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    ctx.res().header("X-Response-Time", std::to_string(elapsed.count()));
+});
+
+// Sync pre-handler middleware (auto calls next)
+router.use([](Context& ctx) {
+    ctx.res().header("X-App", "Aegon");
+});
+```
+
+Short-circuit by not calling `next(ctx)`:
+
+```cpp
+router.use([](Context& ctx, Next next) -> core::Task<void> {
+    if (!ctx.req().header("authorization")) {
+        ctx.res().status(StatusCode::Unauthorized).text("Missing token");
+        co_return;  // handler never runs
+    }
+    co_await next(ctx);
+});
+```
+
+## Access log
+
+`middleware::access_log` records every request with configurable format, severity levels, and slow-request highlighting.
+
+```cpp
+#include "http/middleware/AccessLog.h"
+
+using namespace aegon::http::middleware;
+
+router.use(access_log({
+    .format = AccessLogFormat::Combined,
+    .slow_threshold = std::chrono::milliseconds(50),
+    .slow_level = log::Level::Warn,
+    .request_headers = {"x-request-id"},
+    .skip_paths = {"/health", "/favicon.ico"}
+}));
+```
+
+Formats:
+
+| Format | Description |
+| --- | --- |
+| `Combined` | Method path status duration, client IP, bytes, protocol |
+| `Common` | Client IP, method, path, protocol, status, bytes, duration |
+| `Json` | Structured ndjson for high-throughput pipelines |
+| `Custom` | Developer-supplied formatter lambda |
+
+## Compression
+
+`middleware::Compress` uses SIMD-vectorized libdeflate with thread-local compressor pools for zero-allocation compression. It respects `Accept-Encoding`, skips small bodies, and safely merges `Vary` headers.
+
+```cpp
+#include "http/middleware/Compress.h"
+
+router.use(Compress({
+    .level = 1,              // 1 (fastest) to 12 (maximum)
+    .min_size = 256,         // skip bodies smaller than 256 bytes
+    .gzip = true,
+    .deflate = true,
+    .prefer_deflate = true   // prefer deflate when both are acceptable
+}));
+```
+
+Standalone compression and decompression helpers are also available:
+
+```cpp
+std::string compressed;
+middleware::gzip_compress(body, compressed, 1);
+
+std::string decompressed;
+middleware::gzip_decompress(compressed, decompressed);
+```
+
+## CORS
+
+`middleware::cors` handles preflight `OPTIONS` requests automatically, reflects origins when credentials are enabled, and supports wildcard subdomain patterns.
+
+```cpp
+#include "http/middleware/Cors.h"
+
+// Permissive public API
+router.use(cors(CorsConfig::permissive()));
+
+// Strict authenticated API
+router.use(cors(CorsConfig::strict({
+    "https://app.example.com",
+    "https://admin.example.com"
+}, true)));
+
+// Custom configuration
+router.use(cors(CorsConfig{
+    .allowed_origins = {"https://*.example.com"},
+    .origin_patterns = {"https://*.example.com"},
+    .allow_credentials = true,
+    .allow_private_network = true,
+    .max_age = std::chrono::hours(1)
+}));
+```
+
+When `allow_credentials` is true, Aegon reflects the request origin and emits `Access-Control-Allow-Credentials: true`. Preflight requests short-circuit before the route handler runs.
+
+## Security headers
+
+`middleware::security_headers` emits a full set of OWASP-recommended headers with zero per-request allocation. All headers are pre-serialized at initialization.
+
+```cpp
+#include "http/middleware/SecurityHeaders.h"
+
+// OWASP baseline preset
+router.use(security_headers(SecurityHeadersConfig::defaults()));
+
+// API-optimized preset
+router.use(security_headers(SecurityHeadersConfig::api()));
+
+// Custom configuration
+router.use(security_headers(SecurityHeadersConfig{
+    .frame_options = FrameOption::SameOrigin,
+    .referrer_policy = ReferrerPolicy::NoReferrer,
+    .hsts = HstsConfig{
+        .enabled = true,
+        .max_age = std::chrono::seconds(7200),
+        .include_subdomains = true,
+        .preload = true
+    },
+    .content_security_policy = "default-src 'self'",
+    .coop = CrossOriginOpenerPolicy::SameOrigin,
+    .coep = CrossOriginEmbedderPolicy::RequireCorp,
+    .corp = CrossOriginResourcePolicy::SameOrigin,
+    .prevent_browser_caching = true
+}));
+```
+
+Emitted headers include:
+
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options` (configurable)
+- `X-XSS-Protection: 0`
+- `Referrer-Policy`
+- `Strict-Transport-Security`
+- `Content-Security-Policy` (optional)
+- `Permissions-Policy` (optional)
+- `Cross-Origin-Opener-Policy`
+- `Cross-Origin-Embedder-Policy`
+- `Cross-Origin-Resource-Policy`
+- `Cache-Control` zero-cache directives (optional)
+
+## Request logger
+
+The `RequestLogger` is a per-request contextual logger injected by the access log middleware. It prefixes every log line with the correlation ID, HTTP method, and path.
+
+```cpp
+router.get("/orders/:id", [](Context& ctx) -> core::Task<void> {
+    auto log = ctx.get<RequestLogger>();
+    if (log) {
+        log->info("Fetching order {}", order_id);
+    }
+    co_return;
+});
+```
+
+## Middleware ordering
+
+Global middleware runs first, then group middleware, then per-route middleware. The final handler is the innermost layer. Order matters: CORS and security headers should typically be outermost; compression should be outermost so it can compress the final response body.
+
+```cpp
+router.use(middleware::security_headers({}));   // outermost
+router.use(middleware::cors(CorsConfig::permissive()));
+router.use(middleware::access_log({}));
+router.use(middleware::Compress({}));            // innermost of globals
+
+auto api = router.group("/api/v1");
+api.use(middleware::bearer_auth(verifier));      // group-level auth
+api.get("/users", handler);                     // route-level middleware can also be added
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="lock" href="/http/authentication">
+    Add Bearer, cookie, API key, and Basic authentication.
+  </Card>
+
+  <Card title="Dependency injection" icon="box" href="/http/dependency-injection">
+    Register and resolve services in route handlers.
+  </Card>
+</CardGroup>

@@ -1,0 +1,204 @@
+---
+title: "Server"
+description: "Configure and run the Aegon HTTP server with TLS, HTTP/3, thread-per-core scheduling, and protocol tuning."
+keywords:
+  - "server"
+  - "listen"
+  - "TLS"
+  - "HTTP/3"
+  - "io_uring"
+  - "thread-per-core"
+  - "ServerConfig"
+---
+
+The `aegon::http::Server` class is the entry point for every Aegon application. It binds TCP listeners, negotiates TLS and HTTP/3, dispatches requests through the router, and runs the event loop. You can run it single-threaded for development or thread-per-core for production.
+
+## Creating a server
+
+Construct a server with a `Router`, or set the router later with `set_router`.
+
+```cpp
+#include "http/Server.h"
+#include "http/Router.h"
+
+using namespace aegon::http;
+
+Router router;
+router.get("/health", [](Context& ctx) {
+    ctx.res().json(R"({"status":"ok"})");
+});
+
+Server server(std::move(router));
+```
+
+## Listening for connections
+
+Call `listen` to bind a plaintext port, or `listen_tls` for TLS. You can register multiple listeners on the same server.
+
+```cpp
+server.listen(8080, "0.0.0.0", false);   // plaintext
+server.listen_tls(8443, "0.0.0.0");      // TLS
+```
+
+Enable TLS explicitly with certificate and key files. When TLS is active, Aegon advertises ALPN for HTTP/2 (`h2`) and HTTP/1.1.
+
+```cpp
+server.enable_tls("/etc/ssl/cert.pem", "/etc/ssl/key.pem");
+```
+
+Enable HTTP/3 over QUIC. HTTP/3 is enabled automatically when TLS is on, but you can toggle it explicitly.
+
+```cpp
+server.enable_http3(true);
+```
+
+## Running the server
+
+`run()` starts a single event loop on the calling thread. `run(threads)` spawns a thread-per-core cluster, pinning each worker to its own CPU core for zero-lock shared-nothing concurrency.
+
+```cpp
+// Development: single-threaded
+server.run();
+
+// Production: one thread per CPU core
+server.run(std::thread::hardware_concurrency());
+```
+
+Stop the server gracefully from any thread:
+
+```cpp
+server.stop();
+```
+
+## Lifecycle hooks
+
+Register startup and shutdown coroutines to run schema migrations, warm caches, or drain queues.
+
+```cpp
+server.on_start([](Server& s) -> core::Task<void> {
+    auto db = s.service<SqlDatabaseClient>();
+    co_await db->migrate();
+});
+
+server.on_stop([](Server& s) -> core::Task<void> {
+    auto db = s.service<SqlDatabaseClient>();
+    co_await db->close();
+});
+```
+
+Spawn background workers that run on the server event loop alongside request handling. This is useful for Redis stream consumers or metrics collectors.
+
+```cpp
+server.spawn_worker([](Server&, core::EventLoop& loop) -> core::Task<void> {
+    while (true) {
+        co_await loop.sleep(std::chrono::seconds(5));
+        // collect metrics
+    }
+});
+```
+
+## Server configuration
+
+`ServerConfig` holds all tunable parameters. You can set values fluently on the server, or pass a full `ServerConfig` object with `config()`.
+
+```cpp
+server.config(ServerConfig{
+    .limits = {.max_body_size = 8 * 1024 * 1024},
+    .tcp = {.nodelay = true, .keepalive = true}
+});
+```
+
+### Protocol limits
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `max_uri_length` | 8192 (8 KB) | Maximum request target length. Returns 414 URI Too Long. |
+| `max_headers_size` | 65536 (64 KB) | Maximum total header section size. Returns 431 Request Header Fields Too Large. |
+| `max_body_size` | 16777216 (16 MB) | Maximum request body size. Returns 413 Payload Too Large. |
+
+### TCP configuration
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `nodelay` | `true` | Disable Nagle's algorithm. |
+| `keepalive` | `true` | Enable TCP keepalive probes. |
+| `keepidle` | 30 | Seconds before sending the first keepalive probe. |
+| `keepintvl` | 10 | Seconds between keepalive probes. |
+| `keepcnt` | 3 | Missed probes before the connection is dropped. |
+
+### WebSocket configuration
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `max_message_size` | 16777216 (16 MB) | Maximum WebSocket message size. Close code 1009. |
+| `max_frame_size` | 16777216 (16 MB) | Maximum single frame size. |
+| `require_masked_frames` | `true` | Enforce RFC 6455 client-to-server masking. |
+| `auto_ping_interval_sec` | 0 | Server-initiated ping interval; 0 disables it. |
+| `ping_timeout_sec` | 10 | Seconds to wait for a pong before closing. |
+| `initial_buffer_capacity` | 4096 | Pre-allocated ingest buffer size. |
+
+### HTTP/2 and HTTP/3 tuning
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `h2_max_concurrent_streams` | 256 | Maximum concurrent streams per HTTP/2 connection. |
+| `h2_initial_window_size` | 1048576 (1 MB) | Initial flow-control window size. |
+| `rst_burst_limit` | 1000 | Rapid reset flood threshold. |
+
+### io_uring and buffer pool
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `ring_entries` | 4096 | io_uring submission queue entries. |
+| `buffer_pool_entries` | 8192 | Provided buffer pool entries for zero-copy receives. |
+| `buffer_size` | 4096 | Size of each provided buffer. |
+
+Set any field fluently:
+
+```cpp
+server.max_body_size(8 * 1024 * 1024)
+      .tcp_nodelay(true)
+      .h2_max_concurrent_streams(512)
+      .ws_max_message_size(4 * 1024 * 1024);
+```
+
+## Full example
+
+```cpp
+#include "http/Server.h"
+#include "http/Router.h"
+
+using namespace aegon::http;
+
+int main() {
+    Router router;
+    router.get("/health", [](Context& ctx) {
+        ctx.res().json(R"({"status":"ok"})");
+    });
+
+    Server server(std::move(router));
+    server.listen(8080)
+           .enable_tls("cert.pem", "key.pem")
+           .enable_http3(true)
+           .max_body_size(8 * 1024 * 1024)
+           .h2_max_concurrent_streams(512)
+           .on_start([](Server&) -> core::Task<void> {
+               // warm caches, run migrations
+               co_return;
+           });
+
+    server.run(std::thread::hardware_concurrency());
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Routing" icon="route" href="/http/routing">
+    Define routes, path parameters, and route groups.
+  </Card>
+
+  <Card title="Middleware" icon="shield" href="/http/middleware">
+    Add logging, compression, CORS, and security headers.
+  </Card>
+</CardGroup>

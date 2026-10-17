@@ -1,0 +1,164 @@
+---
+title: "Routing"
+description: "Register HTTP routes with path parameters, wildcards, route groups, and SIMD-optimized Radix Tree matching."
+keywords:
+  - "routing"
+  - "router"
+  - "route group"
+  - "path parameters"
+  - "radix tree"
+---
+
+Aegon routing is built on a two-tier lookup system: an O(1) hash table for static routes and a SIMD-accelerated Radix Tree for parameterized paths. Both sync and coroutine handlers are supported.
+
+## Basic route registration
+
+`Router` (and `RouteGroup`) expose fluent methods for every HTTP verb. Handlers can return `void` or `aegon::core::Task<void>`.
+
+```cpp
+#include "http/Router.h"
+
+using namespace aegon::http;
+
+Router router;
+
+// Synchronous handler
+router.get("/health", [](Context& ctx) {
+    ctx.res().json(R"({"status":"ok"})");
+});
+
+// Asynchronous coroutine handler
+router.post("/users", [](Context& ctx) -> core::Task<void> {
+    auto dto = ctx.bind_json<CreateUserDTO>();
+    if (!dto) co_return;
+    // ... persist user
+    ctx.res().status(StatusCode::Created).json("{}");
+    co_return;
+});
+
+router.put("/users/:id", [](Context& ctx) -> core::Task<void> { /* ... */ co_return; });
+router.del("/users/:id", [](Context& ctx) -> core::Task<void> { /* ... */ co_return; });
+router.patch("/users/:id", [](Context& ctx) -> core::Task<void> { /* ... */ co_return; });
+
+// Register the same handler for all common verbs
+router.all("/webhook", [](Context& ctx) -> core::Task<void> { /* ... */ co_return; });
+```
+
+## Path parameters
+
+Prefix a path segment with `:` to capture it as a named parameter. Parameters are bound directly into `Request` and accessible via `ctx.req().param("name")`.
+
+```cpp
+router.get("/users/:id", [](Context& ctx) {
+    auto id = ctx.req().param("id");
+    if (id) {
+        ctx.res().json("{\"id\":\"" + std::string(*id) + "\"}");
+    } else {
+        ctx.res().status(StatusCode::BadRequest).text("Missing id");
+    }
+});
+```
+
+Up to 16 route parameters are supported per request. Parameters are also available through typed DTO binding with `ctx.bind_path<T>()`.
+
+## Wildcards
+
+Use `*` as a path segment to match any value in that position. Wildcards are resolved by the Radix Tree tier.
+
+```cpp
+router.get("/files/*path", [](Context& ctx) {
+    auto path = ctx.req().param("path");
+    ctx.res().text("Serving: " + std::string(path.value_or("")));
+});
+```
+
+## Route groups
+
+`RouteGroup` lets you prefix a set of routes and attach shared middleware that applies only to that group.
+
+```cpp
+auto api = router.group("/api/v1");
+
+api.use(middleware::security_headers({}));
+
+api.get("/products", [](Context& ctx) { /* ... */ });
+api.post("/products", [](Context& ctx) { /* ... */ });
+api.get("/products/:id", [](Context& ctx) { /* ... */ });
+
+// Nested groups inherit the parent prefix and middleware
+auto admin = api.group("/admin");
+admin.get("/stats", [](Context& ctx) { /* ... */ });
+// Resulting path: /api/v1/admin/stats
+```
+
+## Static files
+
+Serve files from a directory with automatic precompressed sidecar negotiation and in-memory caching.
+
+```cpp
+router.static_files("/assets", "./public", {
+    .precompressed = true,
+    .cache_in_memory = true,
+    .index_file = "index.html",
+    .spa = false,
+    .etag = true,
+    .last_modified = true
+});
+```
+
+## WebSocket routes
+
+WebSocket routes are registered with `ws()`. Aegon automatically adds an HTTP GET fallback that returns 426 Upgrade Required for non-upgrade requests.
+
+```cpp
+router.ws("/ws", [](websocket::WebSocket& ws) -> core::Task<void> {
+    co_await ws.send("Hello");
+    // ...
+});
+```
+
+## Router internals
+
+### Two-tier matching
+
+1. **Static hash table**: exact paths with no `:` or `*` are stored in an `unordered_map` for O(1) lookup with zero heap allocations.
+2. **Radix Tree**: parameterized and wildcard paths fall back to a compressed prefix tree with O(k) matching, where k is the path length.
+
+### SIMD acceleration
+
+On x86_64, the router uses AVX-512, AVX2, or SSE4.2 to scan path prefixes and find delimiter characters. On other platforms it falls back to 64-bit word comparisons and scalar loops.
+
+## Customizing fallback behavior
+
+Set custom handlers for 404, 405, and unhandled exceptions at the router level.
+
+```cpp
+router.set_not_found_handler([](Context& ctx) {
+    ctx.res().status(StatusCode::NotFound).json(R"({"error":"Not found"})");
+});
+
+router.set_method_not_allowed_handler([](Context& ctx) {
+    ctx.res().status(StatusCode::MethodNotAllowed).json(R"({"error":"Method not allowed"})");
+});
+
+router.set_error_handler([](Context& ctx, std::exception_ptr ex) -> core::Task<void> {
+    try {
+        if (ex) std::rethrow_exception(ex);
+    } catch (const std::exception& e) {
+        ctx.problem(StatusCode::InternalServerError, "Server Error", e.what());
+    }
+    co_return;
+});
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Request and response" icon="arrow-left-right" href="/http/request-response">
+    Read request data and build responses.
+  </Card>
+
+  <Card title="Middleware" icon="shield" href="/http/middleware">
+    Add reusable request and response processing.
+  </Card>
+</CardGroup>

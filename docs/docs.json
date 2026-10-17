@@ -1,0 +1,96 @@
+{
+  "theme": "mint",
+  "name": "Aegon",
+  "colors": {
+    "primary": "#16A34A",
+    "light": "#07C983",
+    "dark": "#15803D"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "favicon": "/favicon.svg",
+  "navbar": {
+    "links": [
+      {
+        "href": "https://github.com/udaykhare09/aegon/releases",
+        "label": "Releases"
+      }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/udaykhare09/aegon"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/udaykhare09/aegon"
+    }
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "chatgpt",
+      "claude",
+      "perplexity",
+      "mcp",
+      "cursor",
+      "vscode"
+    ],
+    "display": "header"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get started",
+        "pages": [
+          "index",
+          "quickstart",
+          "installation"
+        ]
+      },
+      {
+        "group": "HTTP server",
+        "pages": [
+          "http/server",
+          "http/routing",
+          "http/request-response",
+          "http/middleware",
+          "http/authentication",
+          "http/dependency-injection",
+          "http/validation-errors"
+        ]
+      },
+      {
+        "group": "Real-time and clients",
+        "pages": [
+          "realtime/sse",
+          "realtime/websockets",
+          "realtime/http-client"
+        ]
+      },
+      {
+        "group": "Data",
+        "pages": [
+          "data/orm",
+          "data/orm-relations-transactions",
+          "data/orm-cache",
+          "data/redis",
+          "data/memstore",
+          "data/types"
+        ]
+      },
+      {
+        "group": "Platform",
+        "pages": [
+          "platform/configuration",
+          "platform/logging",
+          "platform/io-engines",
+          "platform/benchmarks"
+        ]
+      }
+    ]
+  }
+}

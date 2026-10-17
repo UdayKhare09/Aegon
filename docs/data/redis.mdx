@@ -1,0 +1,242 @@
+---
+title: "Redis client"
+description: "Async Redis client with support for standalone, Sentinel, and Cluster topologies, pipelines, transactions, pub/sub, streams, Lua scripting, and distributed locking."
+keywords:
+  - "redis"
+  - "aegon"
+  - "cpp"
+  - "coroutines"
+  - "pubsub"
+  - "streams"
+  - "cluster"
+  - "sentinel"
+  - "lua"
+  - "lock"
+---
+
+The Aegon Redis client provides a fully async, coroutine-driven interface to Redis over RESP3. It supports standalone servers, Sentinel failover, and Redis Cluster with transparent MOVED/ASK redirection. All operations return `core::Task<T>` and suspend on io_uring or the active IO engine.
+
+## Standalone connection
+
+Create a `RedisClient` from a `RedisNodeConfig` and an `IoEngine`. The client manages a connection pool internally.
+
+```cpp
+#include "data/redis/RedisClient.h"
+
+using namespace aegon::data::redis;
+
+RedisNodeConfig cfg{
+    .host = "127.0.0.1",
+    .port = 6379,
+    .password = "redis_secret",
+    .database = 0
+};
+
+RedisClient client(loop.engine(), cfg, /*pool_size=*/8);
+```
+
+## Core data types
+
+The client covers strings, hashes, lists, sets, and sorted sets. All methods are `co_await`able.
+
+```cpp
+core::Task<void> demo(RedisClient& c) {
+    // Strings
+    co_await c.set("user:1", "alice", std::chrono::seconds(300));
+    auto val = co_await c.get("user:1");
+
+    // Hashes
+    co_await c.hset("h:user:1", "name", "Alice");
+    auto hname = co_await c.hget("h:user:1", "name");
+
+    // Lists
+    co_await c.lpush("queue:jobs", "job_1");
+    auto job = co_await c.rpop("queue:jobs");
+
+    // Sets
+    co_await c.sadd("set:tags", "cpp");
+    auto members = co_await c.smembers("set:tags");
+
+    // Sorted sets
+    co_await c.zadd("leaderboard", "alice", 100.0);
+    auto top = co_await c.zrevrange("leaderboard", 0, 2);
+}
+```
+
+## Pipelines
+
+Use `pipeline()` to batch multiple commands into a single roundtrip. Results are returned in the same order.
+
+```cpp
+auto pipe = client.pipeline();
+pipe.set("p:1", "v1")
+    .set("p:2", "v2")
+    .get("p:1")
+    .incr("p:cnt");
+
+auto results = co_await pipe.execute();
+// results[2].as_string() == "v1"
+// results[3].as_integer() == 1
+```
+
+Cluster pipelines automatically route commands to the correct node by key hash and merge results in original order.
+
+## Transactions
+
+`multi()` begins a transaction on a dedicated pooled connection. Chain commands, then call `exec()` or `discard()`.
+
+```cpp
+auto tx_opt = co_await client.multi();
+if (!tx_opt) { /* handle failure */ }
+
+auto& tx = *tx_opt;
+tx.set("tx:key", "tx_val")
+  .incr("tx:cnt");
+
+auto results = co_await tx.exec();
+// results[1].as_integer() == 1
+```
+
+If any queued command fails, the transaction is automatically discarded.
+
+## Pub/sub
+
+`RedisSubscriber` opens a dedicated connection for subscribing to channels or patterns.
+
+```cpp
+RedisSubscriber sub(loop.engine(), cfg);
+co_await sub.connect();
+co_await sub.subscribe({"events:aegon", "events:alerts"});
+
+// Publish from the main client
+int64_t receivers = co_await client.publish("events:aegon", "payload");
+
+// Receive messages
+auto msg = co_await sub.next_message();
+if (msg) {
+    std::cout << msg->channel << ": " << msg->payload << "\n";
+}
+```
+
+Pattern subscriptions use `psubscribe()` and return the matched pattern in `msg->pattern`.
+
+## Streams
+
+The client supports Redis Streams for event sourcing and consumer groups.
+
+```cpp
+// Append events
+std::string id = co_await client.xadd(
+    "stream:telemetry", "*",
+    {{"temp", "24.5"}, {"humidity", "55"}}
+);
+
+// Read by range
+auto msgs = co_await client.xrange("stream:telemetry", "-", "+");
+
+// Consumer groups
+co_await client.xgroup_create("stream:telemetry", "workers", "$", false);
+auto read = co_await client.xreadgroup(
+    "workers", "worker-1",
+    {"stream:telemetry"}, {">"}, 10
+);
+int64_t acked = co_await client.xack("stream:telemetry", "workers", {id});
+```
+
+## Lua scripting
+
+Send scripts with `eval()`, cache them with `script_load()`, or use `eval_script()` for automatic SHA caching with NOSCRIPT fallback.
+
+```cpp
+// Direct eval
+auto r = co_await client.eval("return 42");
+
+// Load and execute by SHA
+std::string sha = co_await client.script_load(
+    "return redis.call('SET', KEYS[1], ARGV[1])"
+);
+auto r2 = co_await client.evalsha(sha, {"lua:key"}, {"hello"});
+
+// Automatic caching and fallback
+std::string script = "return redis.call('INCR', KEYS[1])";
+auto r3 = co_await client.eval_script(script, {"counter"});
+```
+
+## Distributed locking
+
+`RedisLock` uses a token-based Lua script for safe acquisition, extension, and release.
+
+```cpp
+auto lock_opt = co_await client.lock(
+    "lock:orders:1001",
+    std::chrono::milliseconds(2000)
+);
+
+if (lock_opt) {
+    auto& lock = *lock_opt;
+    // Critical section
+    bool extended = co_await lock.extend(std::chrono::milliseconds(5000));
+    bool released = co_await lock.release();
+}
+```
+
+If the key is already locked, `lock()` returns `std::nullopt`. The release script verifies the token before deleting the key.
+
+## Sentinel failover
+
+Pass a `SentinelConfig` to discover the current master automatically.
+
+```cpp
+SentinelConfig scfg{
+    .master_name = "mymaster",
+    .sentinels = {{"127.0.0.1", 26379}},
+    .password = "sentinel_secret"
+};
+RedisClient client(loop.engine(), scfg, 4);
+```
+
+## Cluster routing
+
+The cluster client seeds from one or more nodes, discovers the full topology via `CLUSTER SLOTS`, and routes commands by CRC16 hash slot. Transparent MOVED and ASK redirection are handled automatically.
+
+```cpp
+ClusterConfig ccfg{
+    .seed_nodes = {{"127.0.0.1", 7000}},
+    .pool_size_per_node = 4
+};
+RedisClient client(loop.engine(), ccfg);
+
+// Keys are routed automatically
+auto a = co_await client.get("key_a");
+```
+
+Use hash tags to force related keys into the same slot:
+
+```cpp
+co_await client.set("{tenant_99}:profile", "data");
+co_await client.set("{tenant_99}:settings", "data");
+```
+
+## Per-core client
+
+`PerCoreRedisClient` lazily creates one `RedisClient` per event loop thread, eliminating cross-thread pool contention.
+
+```cpp
+PerCoreRedisClient per_core(cfg, 8);
+
+// In a handler coroutine running on the loop:
+co_await per_core->set("key", "val");
+auto v = co_await per_core->get("key");
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="ORM cache" icon="database" href="/data/orm-cache">
+    Wire the Redis client into the ORM as a tiered cache backend.
+  </Card>
+
+  <Card title="In-memory store" icon="memory" href="/data/memstore">
+    Use MemStore as a zero-network cache alternative for single-node deployments.
+  </Card>
+</CardGroup>

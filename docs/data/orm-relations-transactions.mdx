@@ -1,0 +1,313 @@
+---
+title: "Relations and transactions"
+sidebarTitle: "Relations & transactions"
+description: "Map HasOne, HasMany, and many-to-many relations with eager and lazy loading, and run atomic transactions with optimistic concurrency control."
+keywords:
+  - "aegon orm"
+  - "relations"
+  - "transactions"
+  - "optimistic locking"
+  - "hasone"
+  - "hasmany"
+  - "eager loading"
+---
+
+Aegon's ORM supports first-class relations through `HasOne<T>` and `HasMany<T>` fields on your entities. You can eager-load them in a single query, lazy-load them on demand, and mutate them through active relational helpers. Transactions wrap multiple operations atomically, and optimistic concurrency control prevents lost updates with a version column.
+
+## Declaring relations
+
+Relations are declared as member fields inside the entity struct and wired in the `schema()` definition.
+
+```cpp
+#include <aegon/data/orm/sql/Sql.h>
+using namespace aegon::data::orm::sql;
+
+struct Profile {
+    int64_t id{0};
+    int64_t user_id{0};
+    std::string bio;
+
+    static auto schema() {
+        return table<Profile>("profiles")
+            .id(&Profile::id)
+            .column(&Profile::user_id, "user_id")
+            .column(&Profile::bio, "bio");
+    }
+};
+
+struct Order {
+    int64_t id{0};
+    int64_t user_id{0};
+    std::string item_name;
+    double price{0.0};
+
+    static auto schema() {
+        return table<Order>("orders")
+            .id(&Order::id)
+            .column(&Order::user_id, "user_id")
+            .column(&Order::item_name, "item_name")
+            .column(&Order::price, "price");
+    }
+};
+
+struct Role {
+    int64_t id{0};
+    std::string name;
+
+    static auto schema() {
+        return table<Role>("roles")
+            .id(&Role::id)
+            .column(&Role::name, "name");
+    }
+};
+
+struct UserRole {
+    int64_t user_id{0};
+    int64_t role_id{0};
+
+    static auto schema() {
+        return table<UserRole>("user_roles")
+            .column(&UserRole::user_id, "user_id")
+            .column(&UserRole::role_id, "role_id");
+    }
+};
+
+struct User {
+    int64_t id{0};
+    std::string username;
+
+    HasOne<Profile> profile;
+    HasMany<Order> orders;
+    HasMany<Role> roles;
+
+    static auto schema() {
+        return table<User>("users")
+            .id(&User::id)
+            .column(&User::username, "username")
+            .has_one(&User::profile, &Profile::user_id)
+            .has_many(&User::orders, &Order::user_id)
+            .has_many(&User::roles).through<UserRole>(&UserRole::user_id, &UserRole::role_id);
+    }
+};
+```
+
+| Relation | Declaration | Foreign key location |
+| --- | --- | --- |
+| One-to-one | `has_one(&Entity::field, &Child::fk)` | On the child table |
+| One-to-many | `has_many(&Entity::field, &Child::fk)` | On the child table |
+| Many-to-many | `has_many(&Entity::field).through<Junction>(&Junction::parent_fk, &Junction::child_fk)` | On the junction table |
+
+## Eager loading
+
+Use `.include()` on a `SelectBuilder` to load related data in a single query. The ORM batches the relation query and stitches results back into the parent entities.
+
+```cpp
+auto users = co_await db.fetch_all(
+    db.from<User>()
+      .include(&User::profile)
+      .include(&User::orders)
+      .include(&User::roles)
+      .order_by(&User::id, SortOrder::Asc)
+);
+
+// Alice's profile is loaded
+if (users[0].profile.has_value()) {
+    std::cout << users[0].profile->bio;
+}
+
+// Alice's orders are loaded
+for (const auto& o : users[0].orders) {
+    std::cout << o.item_name;
+}
+```
+
+Eager loading uses a single batched `IN (...)` query per relation type, so loading 100 users with their profiles still executes only two database round-trips.
+
+### Scoped eager loading
+
+You can filter, order, and limit eager-loaded relations by passing a lambda to `include()`.
+
+```cpp
+auto users = co_await db.fetch_all(
+    db.from<User>()
+      .include(&User::orders, [](auto& b) {
+          b.where(&Order::price, Op::Gte, 100.0)
+           .order_by(&Order::price, SortOrder::Desc)
+           .limit(5);
+      })
+);
+```
+
+### Relation existence filters
+
+Use `where_has` and `where_doesnt_have` to filter parents based on whether related rows exist.
+
+```cpp
+// Users who have at least one order priced >= 100
+auto users = co_await db.fetch_all(
+    db.from<User>()
+      .where_has(&User::orders, [](auto& b) {
+          b.where(&Order::price, Op::Gte, 100.0);
+      })
+);
+
+// Users with no orders
+auto users = co_await db.fetch_all(
+    db.from<User>()
+      .where_doesnt_have(&User::orders)
+);
+```
+
+## Lazy loading
+
+Relations not included in the original query remain unloaded. Call `co_await .load()` to populate them on demand. Repeated loads are no-ops.
+
+```cpp
+auto opt = co_await db.find_by_id<User>(user_id);
+if (!opt) co_return;
+auto& user = *opt;
+
+// Not loaded yet
+assert(!user.profile.is_loaded());
+
+co_await user.profile.load(db);
+if (user.profile.has_value()) {
+    std::cout << user.profile->bio;
+}
+
+co_await user.orders.load(db);
+std::cout << "Orders: " << user.orders.size();
+```
+
+`HasOne` and `HasMany` also expose `has_value()`, `is_loaded()`, `size()`, and iterator access once populated.
+
+## Active relational mutators
+
+Relations support direct mutation through the entity object. The ORM translates these into the correct SQL.
+
+### HasOne
+
+```cpp
+co_await user.profile.set(db, Profile{.bio = "New bio"}); // replaces existing
+co_await user.profile.clear(db);                           // deletes the child row
+```
+
+### HasMany (one-to-many)
+
+```cpp
+// Add a new child row with the FK set automatically
+co_await user.orders.add(db, Order{.item_name = "Keyboard", .price = 150.0});
+
+// Remove by child primary key
+bool removed = co_await user.orders.remove(db, order_id);
+```
+
+### HasMany (many-to-many)
+
+```cpp
+// Attach an existing target row via the junction table
+co_await user.roles.attach(db, Role{.id = role_id, .name = "Admin"});
+
+// Detach by target primary key
+bool detached = co_await user.roles.detach(db, role_id);
+```
+
+## Deep graph insertion
+
+Insert an entire entity graph in a single atomic transaction. The parent is inserted first, its generated key is propagated to children, and then children are inserted.
+
+```cpp
+User david{.username = "david", .email = "david@example.com"};
+david.profile.set_value(Profile{.bio = "Engineer"});
+david.orders.push_back(Order{.item_name = "Monitor", .price = 450.0});
+david.roles.push_back(Role{.id = admin_role_id, .name = "Admin"});
+
+co_await db.insert_tree(david);
+// david.id, david.profile->id, david.orders[0].id are all populated
+```
+
+## Transactions
+
+Wrap multiple operations in an atomic database transaction. If any step throws, the transaction rolls back automatically.
+
+```cpp
+co_await db.transaction([&](Transaction& tx) -> core::Task<void> {
+    co_await tx.insert(user);
+    co_await tx.insert(order);
+
+    user.balance = user.balance - total_cost;
+    co_await tx.update_entity(user);
+});
+```
+
+The `transaction` method:
+
+1. Acquires a primary-pool connection.
+2. Calls `BEGIN`.
+3. Runs your lambda.
+4. Calls `COMMIT` on success, or `ROLLBACK` if an exception escapes.
+5. Flushes deferred cache operations after commit.
+
+You can also use `execute_with_tx` for single-operation wrappers that acquire a connection and flush cache without beginning a database transaction.
+
+## Optimistic concurrency control
+
+Add a `version` column to any entity to enable compare-and-set updates. The ORM automatically includes the current version in the `WHERE` clause and increments it in `SET`. If the row was modified concurrently, `OptimisticLockException` is thrown.
+
+```cpp
+struct Product {
+    int64_t id{0};
+    std::string name;
+    int64_t price{0};
+    int64_t version{1};
+
+    static auto schema() {
+        return table<Product>("products")
+            .id(&Product::id)
+            .column(&Product::name, "name")
+            .column(&Product::price, "price")
+            .version(&Product::version, "version");
+    }
+};
+```
+
+```cpp
+Product p = ...;
+p.price = 200;
+
+size_t affected = co_await db.update_entity(p);
+// If affected == 0, OptimisticLockException is thrown
+// On success, p.version is incremented to 2
+```
+
+The version check works transparently through both the mutable and `const` overloads of `update_entity`. The in-memory version is incremented after a successful update, even when called through the `const` path.
+
+## Junction table helpers
+
+For many-to-many relationships, you can also manage junction rows directly without loading the full relation.
+
+```cpp
+// Link a user to a role
+co_await db.link<UserRole>(user_id, role_id);
+
+// Unlink a user from a role
+bool removed = co_await db.unlink<UserRole>(user_id, role_id);
+```
+
+By default, `link` and `unlink` use the first two non-auto-increment columns in the junction schema, skipping timestamp columns. You can override the column names explicitly:
+
+```cpp
+co_await db.link<UserRole>(user_id, role_id, "user_id", "role_id");
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="ORM cache" icon="bolt" href="/data/orm-cache">
+    Add per-entity and query-result caching with automatic invalidation.
+  </Card>
+
+  <Card title="SQL ORM overview" icon="table" href="/data/orm">
+    Review table definitions, query builders, and connection pools.
+  </Card>
+</CardGroup>

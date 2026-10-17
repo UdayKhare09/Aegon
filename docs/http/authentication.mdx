@@ -1,0 +1,256 @@
+---
+title: "Authentication"
+description: "Authenticate requests with Bearer tokens, cookies, API keys, and Basic auth using JWT signing, verification, JWKS, and RBAC guards."
+keywords:
+  - "authentication"
+  - "JWT"
+  - "Bearer"
+  - "cookie auth"
+  - "API key"
+  - "Basic auth"
+  - "RBAC"
+---
+
+Aegon provides authentication middleware factories in `http/middleware/Auth.h` and a full JWT stack in `http/jwt/`. You can validate Bearer tokens, session cookies, API keys, and Basic credentials, then attach the resolved principal to `Context` for downstream handlers and RBAC guards.
+
+## Bearer token authentication
+
+`bearer_auth` extracts the token from the `Authorization: Bearer <token>` header, validates it, and stores the result in `ctx.set<T>(principal)`.
+
+```cpp
+#include "http/middleware/Auth.h"
+
+using namespace aegon::http::middleware;
+
+struct UserPrincipal {
+    uint64_t id;
+    std::string username;
+};
+
+router.use(bearer_auth<UserPrincipal>({
+    .validator = [](std::string_view token, Context&) -> core::Task<std::optional<UserPrincipal>> {
+        if (token == "valid_token_123") {
+            co_return UserPrincipal{1, "alice"};
+        }
+        co_return std::nullopt;
+    }
+}));
+
+router.get("/profile", [](Context& ctx) {
+    auto user = ctx.get<UserPrincipal>();
+    if (!user) {
+        ctx.res().status(StatusCode::Unauthorized).text("Unauthorized");
+        return;
+    }
+    ctx.res().text("Hello " + user->username);
+});
+```
+
+When validation fails, Aegon returns `401 Unauthorized` with an RFC 7807 Problem Details body and a `WWW-Authenticate: Bearer` header. You can override the response with `on_unauthorized` or set `abort_on_failure = false` to allow optional authentication.
+
+## JWT verification
+
+Aegon supports HMAC, RSA, RSA-PSS, and ECDSA algorithms. The `JwtVerifier` validates signatures, standard claims (`exp`, `nbf`, `iss`, `aud`), and deserializes custom claims into a C++ struct.
+
+### HMAC verification
+
+```cpp
+#include "http/jwt/JwtVerifier.h"
+
+using namespace aegon::http::jwt;
+
+struct UserClaims {
+    uint64_t user_id;
+    std::string email;
+};
+
+JwtVerifier<UserClaims> verifier(Algorithm::HS256, "your-secret-key");
+auto result = verifier.verify(token);
+if (result) {
+    // result->claims.user_id, result->claims.email
+    // result->exp, result->iat, result->jti
+}
+```
+
+### RSA / ECDSA verification
+
+```cpp
+JwtVerifier<UserClaims> verifier(Algorithm::RS256, public_key_pem);
+auto result = verifier.verify(token);
+```
+
+Supported algorithms: `HS256`, `HS384`, `HS512`, `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384`, `ES512`.
+
+### Convenience middleware overload
+
+Pass a `JwtVerifier` directly to `bearer_auth` or `cookie_auth` to verify JWTs automatically:
+
+```cpp
+JwtVerifier<UserClaims> verifier(Algorithm::HS256, "secret");
+router.use(bearer_auth(verifier));
+```
+
+## JWKS support
+
+Verify tokens against a JSON Web Key Set from an identity provider. The verifier resolves the correct public key by `kid`.
+
+```cpp
+#include "http/jwt/Jwks.h"
+
+Jwks jwks = Jwks::from_json(jwks_json);
+
+JwtVerifierOptions options{
+    .jwks = std::make_shared<Jwks>(jwks)
+};
+JwtVerifier<UserClaims> verifier(Algorithm::RS256, options);
+```
+
+You can also provide a custom `key_resolver` callback for dynamic key retrieval:
+
+```cpp
+JwtVerifierOptions options{
+    .key_resolver = [](std::string_view kid) -> std::optional<std::string> {
+        return fetch_key_from_db(kid);
+    }
+};
+JwtVerifier<UserClaims> verifier(Algorithm::RS256, options);
+```
+
+## Token denylist
+
+Prevent replay or logout revocation by checking the `jti` claim against a denylist. Aegon provides an `InMemoryJwtDenylist` reference implementation.
+
+```cpp
+#include "http/jwt/JwtDenylist.h"
+
+auto denylist = std::make_shared<InMemoryJwtDenylist>();
+
+JwtVerifierOptions options{
+    .denylist = denylist
+};
+JwtVerifier<UserClaims> verifier(Algorithm::HS256, "secret", options);
+
+// Revoke a token at logout
+denylist->revoke(token_jti, token_expiration_time);
+```
+
+## Cookie authentication
+
+`cookie_auth` reads a named cookie and validates it the same way as bearer tokens.
+
+```cpp
+router.use(cookie_auth<UserPrincipal>("session_id", {
+    .validator = [](std::string_view cookie, Context&) -> core::Task<std::optional<UserPrincipal>> {
+        // validate session cookie
+        co_return std::nullopt;
+    }
+}));
+```
+
+Or use the JWT convenience overload:
+
+```cpp
+router.use(cookie_auth("session", verifier));
+```
+
+## API key authentication
+
+`api_key_auth` extracts a key from a custom header.
+
+```cpp
+router.use(api_key_auth<ApiKeyPrincipal>("X-API-Key", {
+    .validator = [](std::string_view key, Context&) -> core::Task<std::optional<ApiKeyPrincipal>> {
+        if (key == "valid_key") co_return ApiKeyPrincipal{"pro"};
+        co_return std::nullopt;
+    }
+}));
+```
+
+## Basic authentication
+
+`basic_auth` decodes `Authorization: Basic <base64>` and validates the `username:password` pair.
+
+```cpp
+router.use(basic_auth<UserPrincipal>({
+    .validator = [](std::string_view user, std::string_view pass, Context&) -> core::Task<std::optional<UserPrincipal>> {
+        if (user == "admin" && pass == "secret") co_return UserPrincipal{1, "admin"};
+        co_return std::nullopt;
+    },
+    .realm = "Admin Area"
+}));
+```
+
+## RBAC guards
+
+After authentication, restrict access by role with `require_role` and `require_any_role`. The principal type must satisfy the `RoleHolder` concept by exposing `std::span<const std::string> get_roles() const`.
+
+```cpp
+#include "http/middleware/RbacGuard.h"
+
+struct RbacUser {
+    uint64_t id;
+    std::vector<std::string> roles;
+    std::span<const std::string> get_roles() const { return roles; }
+};
+
+// Require a single role
+router.get("/admin/panel",
+    std::vector<MiddlewareFn>{require_role<RbacUser>("ADMIN")},
+    [](Context& ctx) { ctx.res().text("admin panel"); });
+
+// Require ALL listed roles (AND logic)
+router.get("/critical",
+    std::vector<MiddlewareFn>{require_role<RbacUser>(std::vector<std::string>{"ADMIN", "MODERATOR"})},
+    [](Context& ctx) { ctx.res().text("critical action"); });
+
+// Require ANY listed role (OR logic)
+router.get("/moderated",
+    std::vector<MiddlewareFn>{require_any_role<RbacUser>(std::vector<std::string>{"ADMIN", "MODERATOR"})},
+    [](Context& ctx) { ctx.res().text("moderated area"); });
+```
+
+When the principal is missing or the role check fails, Aegon returns `403 Forbidden` with RFC 7807 Problem Details.
+
+## JWT signing
+
+Issue signed tokens with `JwtSigner`. Standard claims (`iat`, `nbf`, `exp`, `jti`) are injected automatically if not present.
+
+```cpp
+#include "http/jwt/JwtSigner.h"
+
+JwtSigner<UserClaims> signer(Algorithm::HS256, "your-secret-key");
+
+UserClaims claims{.user_id = 42, .email = "alice@example.com"};
+std::string token = signer.sign(claims, std::chrono::hours(2));
+```
+
+For asymmetric signing, pass a PEM private key:
+
+```cpp
+JwtSigner<UserClaims> signer(Algorithm::RS256, private_key_pem, "key-id-1");
+std::string token = signer.sign(claims);
+```
+
+## JWT parsing without verification
+
+For debugging, tracing, or edge-proxy routing, decode the header and payload without cryptographic verification.
+
+```cpp
+#include "http/jwt/JwtParser.h"
+
+auto alg = JwtParser::get_algorithm(token);
+auto kid = JwtParser::get_kid(token);
+auto claims = JwtParser::decode_payload<UserClaims>(token);
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Dependency injection" icon="box" href="/http/dependency-injection">
+    Register and resolve services in route handlers.
+  </Card>
+
+  <Card title="Validation and errors" icon="alert-triangle" href="/http/validation-errors">
+    Validate DTOs and return structured error responses.
+  </Card>
+</CardGroup>

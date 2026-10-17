@@ -1,0 +1,131 @@
+---
+title: "Server-sent events"
+sidebarTitle: "SSE"
+description: "Stream real-time events to clients over HTTP/1.1, HTTP/2, and HTTP/3 using Aegon's coroutine-driven SSE API."
+keywords:
+  - "sse"
+  - "server-sent events"
+  - "streaming"
+  - "http2"
+  - "http3"
+  - "aegon"
+---
+
+Aegon provides a zero-copy, coroutine-native Server-Sent Events (SSE) API that works identically across HTTP/1.1 (chunked transfer), HTTP/2 (DATA frames), and HTTP/3 (QUIC streams). You initiate a stream from any route handler, then `co_await` individual events to push them to the client as they are produced.
+
+## Starting an SSE stream
+
+Call `co_await ctx.sse()` inside an async handler. This sets the response headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, and transfer encoding) and returns an `SseStream` object you can write to.
+
+```cpp
+#include "http/Server.h"
+#include "http/SseStream.h"
+
+using namespace aegon::http;
+
+router.get("/events", [](Context& ctx) -> aegon::core::Task<void> {
+    auto stream = co_await ctx.sse();
+    co_await stream.event("greeting", "hello from aegon sse");
+    co_await stream.comment("heartbeat-keepalive");
+    co_await stream.retry(3000);
+    co_await stream.data("standalone-payload");
+    stream.close();
+});
+```
+
+If you do not call `close()`, the stream is finished automatically when the handler returns.
+
+## Sending events
+
+The `SseStream` class provides methods for every SSE field type. Each method immediately flushes the frame to the wire.
+
+| Method | Wire output | Purpose |
+| --- | --- | --- |
+| `event(name, data)` | `event: <name>\ndata: <data>\n\n` | Named event |
+| `data(value)` | `data: <value>\n\n` | Data-only event |
+| `send_json(name, value)` | `event: <name>\ndata: <json>\n\n` | JSON-serialized event |
+| `comment(text)` | `: <text>\n\n` | Keepalive or metadata line |
+| `retry(ms)` | `retry: <ms>\n\n` | Reconnection advice |
+| `close()` | (marks stream closed) | Ends the stream |
+
+### JSON events
+
+Use `send_json` to emit Glaze-serialized payloads. The example below streams typed DTOs:
+
+```cpp
+struct MarketTick {
+    std::string symbol;
+    double price{0.0};
+    double change{0.0};
+    uint64_t seq{0};
+};
+
+router.get("/events/ticks", [](Context& ctx) -> aegon::core::Task<void> {
+    auto stream = co_await ctx.sse();
+
+    for (int i = 1; i <= 10; ++i) {
+        MarketTick tick{
+            .symbol = (i % 2 == 0 ? "AAPL" : "NVDA"),
+            .price = 150.0 + (i * 2.5),
+            .change = (i % 2 == 0 ? +1.45 : -0.85),
+            .seq = static_cast<uint64_t>(i)
+        };
+        co_await stream.send_json("tick", tick);
+    }
+
+    stream.close();
+});
+```
+
+### Multi-event streams
+
+You can mix event types in a single handler:
+
+```cpp
+router.get("/events/raw", [](Context& ctx) -> aegon::core::Task<void> {
+    auto stream = co_await ctx.sse();
+    co_await stream.event("notice", "welcome to aegon raw sse");
+    co_await stream.data("line 1: real-time streaming data");
+    co_await stream.data("line 2: multiplexed without buffering");
+    co_await stream.comment("heartbeat-keepalive");
+    stream.close();
+});
+```
+
+## Protocol behavior
+
+Aegon adapts the SSE wire format to the underlying protocol:
+
+- **HTTP/1.1** uses chunked transfer encoding (`Transfer-Encoding: chunked`).
+- **HTTP/2** sends each SSE frame as an HTTP/2 DATA frame on the same stream.
+- **HTTP/3** sends each SSE frame as a QUIC stream DATA frame.
+
+The API is identical in all three cases. The server sets `Content-Type: text/event-stream` and `Cache-Control: no-cache` automatically.
+
+## Server configuration
+
+SSE endpoints work on any Aegon listener. A typical setup exposes plaintext HTTP/1.1 and HTTP/2 cleartext on one port, and TLS plus HTTP/3 on another:
+
+```cpp
+Server server(std::move(router));
+server.listen(8080, "0.0.0.0", false)   // H1 + H2C
+      .listen_tls(8443, "0.0.0.0")       // H1 + H2 + H3
+      .enable_tls()
+      .enable_http3();
+```
+
+## Closing and lifecycle
+
+Call `stream.close()` to mark the stream closed. Subsequent writes become no-ops. If you omit `close()`, the connection layer finishes the stream when the coroutine returns. For long-running producers (for example, a background worker pushing updates), keep the handler alive and call `close()` when the producer signals completion.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="WebSockets" icon="webhook" href="/realtime/websockets">
+    Upgrade to bidirectional real-time messaging with RFC 6455 WebSockets.
+  </Card>
+
+  <Card title="HTTP client" icon="arrow-right" href="/realtime/http-client">
+    Call external APIs from your handlers with connection pooling and H2/H3 support.
+  </Card>
+</CardGroup>

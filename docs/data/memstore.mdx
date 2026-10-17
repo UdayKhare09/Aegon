@@ -1,0 +1,115 @@
+---
+title: "In-memory store"
+description: "Async in-process key-value store with TTL expiry, LRU eviction, and a dedicated background thread."
+keywords:
+  - "memstore"
+  - "cache"
+  - "aegon"
+  - "cpp"
+  - "in-memory"
+  - "lru"
+  - "ttl"
+---
+
+`MemStore` is an async, in-process key-value engine backed by a single dedicated thread. It provides `GET`, `SET`, `MGET`, `DEL`, `DEL_MANY`, and `INCR` operations with optional TTL and LRU eviction. It is useful as a local cache backend or as a lightweight session store when Redis is not required.
+
+## Creating a store
+
+Construct a `MemStore` with an optional `MemStoreConfig`. The background thread starts automatically.
+
+```cpp
+#include "data/memory/MemStore.h"
+
+using namespace aegon::data::memory;
+
+MemStoreConfig cfg{
+    .max_entries = 1'000'000,
+    .sweep_interval = std::chrono::milliseconds(500)
+};
+
+MemStore store(cfg);
+```
+
+## Submitting requests
+
+Coroutines post a `MemRequest` to the store thread and suspend on an eventfd (or IOCP on Windows) until the result is ready. The `MemStoreCacheBackend` wraps this into a `CacheBackend` interface.
+
+```cpp
+MemRequest req;
+req.op    = MemOp::Set;
+req.key   = "session:42";
+req.value = "active";
+req.ttl   = std::chrono::seconds(300);
+
+store.submit(&req);
+// Coroutine suspends here and resumes when the store thread signals completion
+```
+
+When using the `CacheBackend` wrapper, this is handled transparently:
+
+```cpp
+auto cache = std::make_shared<MemStoreCacheBackend>(store);
+bool ok = co_await cache->set("session:42", "active", std::chrono::seconds(300));
+```
+
+## Supported operations
+
+| Operation | Description |
+| --- | --- |
+| `Get` | Return the value for a single key, or null on miss |
+| `MGet` | Return values for multiple keys in order |
+| `Set` | Store a value with an optional TTL |
+| `Del` | Remove a single key |
+| `DelMany` | Remove multiple keys, returning the count deleted |
+| `Incr` | Atomically increment a key, starting from 1 if absent |
+
+## TTL expiry
+
+Set a TTL in seconds when creating the request. A background sweep thread removes expired entries between queue drains.
+
+```cpp
+req.op  = MemOp::Set;
+req.key = "temp_token";
+req.value = "abc123";
+req.ttl = std::chrono::seconds(60);
+```
+
+## LRU eviction
+
+When `max_entries` is reached, the least recently used entry is evicted before the new one is inserted. Reads via `Get` and `MGet` promote entries to the front of the LRU list.
+
+```cpp
+MemStoreConfig cfg{.max_entries = 1000};
+MemStore store(cfg);
+```
+
+## Stats
+
+The store tracks hits and misses with relaxed atomic counters.
+
+```cpp
+size_t entries = store.size();
+uint64_t hits  = store.hits();
+uint64_t misses = store.misses();
+store.reset_stats();
+```
+
+## Lifecycle
+
+Call `stop()` to signal the background thread to shut down after draining pending requests. The destructor calls `stop()` automatically.
+
+```cpp
+store.stop();
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="ORM cache" icon="database" href="/data/orm-cache">
+    Wire MemStore into the ORM as a local cache backend.
+  </Card>
+
+  <Card title="Redis client" icon="server" href="/data/redis">
+    Replace MemStore with Redis for distributed multi-node caching.
+  </Card>
+</CardGroup>

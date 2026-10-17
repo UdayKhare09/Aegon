@@ -1,0 +1,170 @@
+---
+title: "Introduction"
+description: "Aegon is a high-performance C++23/C++26 asynchronous web and data framework built on coroutines, io_uring, and compile-time ORM."
+keywords:
+  - "aegon"
+  - "c++"
+  - "web framework"
+  - "io_uring"
+  - "coroutines"
+  - "orm"
+  - "http"
+  - "quic"
+---
+
+Aegon is a high-performance C++23/C++26 asynchronous web and data framework. It is built for backend developers who need maximum throughput with modern C++: coroutines with `co_await`, zero-allocation hot paths, and a thread-per-core architecture powered by Linux `io_uring` (with epoll and IOCP fallbacks). Version 0.2.1 is authored by Uday Khare and distributed under the MIT license.
+
+## Key features
+
+Aegon provides a complete stack for building APIs, real-time services, and data-driven backends:
+
+- **HTTP/1.1, HTTP/2, and HTTP/3 over QUIC** with TLS 1.3 and ALPN negotiation
+- **io_uring thread-per-core** event loops on Linux, with epoll fallback and IOCP on Windows
+- **Server-Sent Events (SSE)** and **WebSockets** for real-time streaming
+- **HTTP client** with connection pooling, HTTP/2, and HTTP/3 support
+- **Compile-time ORM** for PostgreSQL and SQLite with relations, transactions, and query caching
+- **Redis client** supporting standalone, Sentinel, Cluster, Streams, Lua, and distributed locking
+- **In-memory store** (LRU + TTL) for high-speed caching without external dependencies
+- **JWT signing and verification** with JWKS support and token denylisting
+- **DTO validation** with automatic RFC 7807 Problem Details responses
+- **Dependency injection** via a zero-lock `ServiceRegistry` with freeze semantics
+- **SIMD-accelerated routing** with stack-allocated path parameters
+
+## Module overview
+
+Aegon is organized into focused CMake targets you link only what you need.
+
+<CardGroup cols={3}>
+  <Card title="HTTP server" icon="server" href="/http/server">
+    Router, middleware, TLS, static files, SSE, WebSockets, and HTTP/3 over QUIC.
+  </Card>
+
+  <Card title="Routing" icon="route" href="/http/routing">
+    Static and dynamic routes, path parameters, route groups, and SIMD matching.
+  </Card>
+
+  <Card title="Request & response" icon="arrow-right-arrow-left" href="/http/request-response">
+    JSON binding, query parsing, cookies, multipart, and fluent response builders.
+  </Card>
+
+  <Card title="Middleware" icon="filter" href="/http/middleware">
+    Global, group, and per-route middleware with short-circuit support.
+  </Card>
+
+  <Card title="Authentication" icon="lock" href="/http/authentication">
+    JWT signing, verification, JWKS rotation, and RBAC guards.
+  </Card>
+
+  <Card title="Dependency injection" icon="syringe" href="/http/dependency-injection">
+    ServiceRegistry with zero-lock hot-path lookups after freeze.
+  </Card>
+
+  <Card title="Validation & errors" icon="circle-check" href="/http/validation-errors">
+    DTO validation and automatic RFC 7807 Problem Details.
+  </Card>
+
+  <Card title="SSE" icon="signal" href="/realtime/sse">
+    Server-Sent Events over HTTP/1.1, HTTP/2, and HTTP/3.
+  </Card>
+
+  <Card title="WebSockets" icon="comments" href="/realtime/websockets">
+    RFC 6455 WebSocket upgrade with text, binary, ping, and close frames.
+  </Card>
+
+  <Card title="HTTP client" icon="globe" href="/realtime/http-client">
+    Async HTTP client with pooling, TLS, HTTP/2, and HTTP/3.
+  </Card>
+
+  <Card title="ORM" icon="database" href="/data/orm">
+    Compile-time schema generation, query builder, and PostgreSQL/SQLite drivers.
+  </Card>
+
+  <Card title="ORM relations & transactions" icon="diagram-project" href="/data/orm-relations-transactions">
+    HasOne, HasMany, eager loading, and atomic transactions.
+  </Card>
+
+  <Card title="ORM cache" icon="memory" href="/data/orm-cache">
+    Query-result caching with epoch invalidation and TTL.
+  </Card>
+
+  <Card title="Redis" icon="layer-group" href="/data/redis">
+    Standalone, Sentinel, and Cluster with Streams, Lua, and locks.
+  </Card>
+
+  <Card title="MemStore" icon="hard-drive" href="/data/memstore">
+    Per-core in-memory LRU cache with TTL sweep.
+  </Card>
+
+  <Card title="Data types" icon="code" href="/data/types">
+    UUID, DateTime, Decimal, Blob, Hash256, and other foundational types.
+  </Card>
+
+  <Card title="Configuration" icon="sliders" href="/platform/configuration">
+    YAML/JSON config loading with environment variable expansion.
+  </Card>
+
+  <Card title="Logging" icon="file-lines" href="/platform/logging">
+    Structured async logging with compile-time format strings.
+  </Card>
+
+  <Card title="I/O engines" icon="bolt" href="/platform/io-engines">
+    io_uring, epoll, and IOCP backends with symmetric-transfer coroutines.
+  </Card>
+
+  <Card title="Benchmarks" icon="chart-line" href="/platform/benchmarks">
+    Reproducible results against Actix, Drogon, Fiber, and Swerver.
+  </Card>
+</CardGroup>
+
+## Performance highlights
+
+Aegon is benchmarked against industry-leading frameworks under strict hardware isolation. On identical Linux hardware (2 physical cores for the server, 4 for the load generator), Aegon leads every measured workload.
+
+### HTTP/1.1 plaintext
+
+| Framework | Throughput | vs Aegon |
+| :-- | :-- | :-- |
+| **Aegon (C++26, io_uring)** | **547,145 req/s** | Baseline |
+| Swerver (Zig) | 468,613 req/s | -14.4% |
+| Actix-web (Rust) | 400,128 req/s | -26.9% |
+| Drogon (C++17) | 388,383 req/s | -29.0% |
+| Fiber (Go) | 352,123 req/s | -35.6% |
+
+### HTTP/1.1 TLS 1.3
+
+| Framework | Throughput | vs Aegon |
+| :-- | :-- | :-- |
+| **Aegon (C++26, io_uring + OpenSSL)** | **423,902 req/s** | Baseline |
+| Swerver (Zig) | 382,901 req/s | -9.7% |
+| Actix-web (Rust) | 349,875 req/s | -17.5% |
+| Fiber (Go) | 327,720 req/s | -22.7% |
+| Drogon (C++17) | 319,511 req/s | -24.6% |
+
+### HTTP/2 over TLS 1.3 (1,000 concurrent streams)
+
+| Framework | Throughput | vs Aegon |
+| :-- | :-- | :-- |
+| **Aegon (C++26, io_uring + nghttp2)** | **1,750,029 req/s** | Baseline |
+| Actix-web (Rust) | 693,621 req/s | -60.4% |
+| Swerver (Zig) | 475,584 req/s | -72.8% |
+
+See the full methodology, raw numbers, and reproduction scripts on the [benchmarks](/platform/benchmarks) page.
+
+## Why Aegon is fast
+
+1. **True asynchronous io_uring ring batching**: Aegon bypasses epoll syscall overhead with multishot accept and recv submissions, yielding measurably higher throughput than epoll-based frameworks.
+2. **Zero-allocation hot path**: Stack-allocated route parameters (`std::array<std::pair<std::string_view, std::string_view>, 8>`) and first-byte static child pruning in the Radix tree eliminate dynamic allocations during routing.
+3. **Compile-time JSON with Glaze**: Struct serialization happens directly into existing buffer memory without runtime intermediate node trees.
+4. **Symmetric-transfer coroutines**: `core::Task<T>` uses symmetric coroutine transfer to prevent stack overflow during continuous network packet processing.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build and run a hello-world server in under five minutes.
+  </Card>
+
+  <Card title="Installation" icon="download" href="/installation">
+    Install from source, Arch Linux PKGBUILD, or vcpkg.
+  </Card>
+</CardGroup>

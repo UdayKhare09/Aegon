@@ -1,0 +1,169 @@
+---
+title: "WebSockets"
+sidebarTitle: "WebSockets"
+description: "Use RFC 6455 WebSocket routes, frame handling, and per-connection session APIs in Aegon."
+keywords:
+  - "websocket"
+  - "ws"
+  - "rfc6455"
+  - "real-time"
+  - "bidirectional"
+  - "aegon"
+---
+
+Aegon supports RFC 6455 WebSockets over HTTP/1.1 (TCP/TLS), HTTP/2 (RFC 8441 Extended CONNECT), and HTTP/3 (RFC 9220 Extended CONNECT). You register WebSocket routes on the router, receive a `WebSocket` session object per connection, and send or receive frames through a coroutine API.
+
+## Registering WebSocket routes
+
+Use `router.ws()` to register a WebSocket endpoint. Aegon automatically adds an HTTP GET fallback that returns `426 Upgrade Required` for non-upgrade requests.
+
+```cpp
+#include "http/Server.h"
+#include "http/websocket/WebSocket.h"
+
+using namespace aegon::http;
+using namespace aegon::http::websocket;
+
+Router router;
+
+// Echo handler: receives a Message and can reply
+router.ws("/ws", [](WebSocket& ws) -> aegon::core::Task<void> {
+    ws.on_text([&ws](WebSocket&, std::string_view text) -> aegon::core::Task<void> {
+        co_await ws.send_text(text);
+    });
+    co_return;
+});
+
+// Simple echo route with default behavior
+router.ws_echo("/echo");
+```
+
+## Session and connection API
+
+Each accepted WebSocket connection receives a `WebSocket` object with the following interface:
+
+| Method | Description |
+| --- | --- |
+| `send_text(text)` | Sends a text frame |
+| `send_binary(data)` | Sends a binary frame from a `std::span<const uint8_t>` |
+| `send_ping(payload)` | Sends a ping frame |
+| `send_pong(payload)` | Sends a pong frame |
+| `close(code, reason)` | Initiates a graceful closing handshake |
+| `is_open()` | Returns true while the transport is connected |
+| `fd()` | Underlying socket descriptor |
+| `path()` | Request path for this connection |
+| `transport_protocol()` | `Http1`, `Http2`, or `Http3` |
+
+### Event callbacks
+
+Register coroutine callbacks for each frame type:
+
+```cpp
+router.ws("/chat", [](WebSocket& ws) -> aegon::core::Task<void> {
+    ws.on_message([](WebSocket&, Message msg) -> aegon::core::Task<void> {
+        if (msg.is_text()) {
+            std::cout << "received: " << msg.text() << "\n";
+        }
+        co_return;
+    });
+
+    ws.on_close([](WebSocket&, CloseCode code, std::string_view reason) -> aegon::core::Task<void> {
+        std::cout << "closed: " << static_cast<int>(code) << " " << reason << "\n";
+        co_return;
+    });
+
+    ws.on_ping([](WebSocket&, std::string_view payload) -> aegon::core::Task<void> {
+        std::cout << "ping received\n";
+        co_return;
+    });
+
+    co_return;
+});
+```
+
+## Close codes
+
+Aegon uses the standard RFC 6455 close codes:
+
+| Code | Name | Typical use |
+| --- | --- | --- |
+| 1000 | `Normal` | Clean, intentional close |
+| 1001 | `GoingAway` | Server or client shutting down |
+| 1002 | `ProtocolError` | Protocol violation detected |
+| 1003 | `UnsupportedData` | Received unsupported data type |
+| 1007 | `InvalidFramePayload` | Payload data violates format |
+| 1008 | `PolicyViolation` | Generic policy violation |
+| 1009 | `MessageTooBig` | Frame exceeds configured limit |
+| 1010 | `MandatoryExtension` | Missing required extension |
+| 1011 | `InternalError` | Unexpected server condition |
+
+If a frame exceeds `max_frame_size`, Aegon automatically closes the connection with `CloseCode::MessageTooBig` (1009).
+
+## WebSocket configuration
+
+Tune WebSocket limits and behavior through `WebSocketConfig` or the server's fluent setters:
+
+```cpp
+Server server(std::move(router));
+server.ws_max_message_size(1024 * 1024)
+      .ws_max_frame_size(512 * 1024)
+      .ws_require_masked_frames(true)
+      .ws_auto_ping_interval(45);
+```
+
+| Field | Default | Description |
+| --- | --- | --- |
+| `max_message_size` | 16 MB | Maximum total message size |
+| `max_frame_size` | 16 MB | Maximum single frame size |
+| `require_masked_frames` | true | Enforce client-to-server masking (RFC 6455) |
+| `auto_ping_interval_sec` | 0 | Server-initiated ping interval; 0 disables |
+| `ping_timeout_sec` | 10 | Seconds to wait for a pong before closing |
+| `initial_buffer_capacity` | 4096 | Ingest buffer preallocation |
+
+## Frame parsing and SIMD unmasking
+
+Aegon parses RFC 6455 frames with a tiered unmasking pipeline that adapts to the payload size:
+
+1. AVX2 256-bit vectorization (32 bytes per iteration)
+2. SSE2 / ARM NEON 128-bit vectorization (16 bytes per iteration)
+3. SWAR 64-bit word XOR (8 bytes per iteration)
+4. 32-bit word XOR (4 bytes)
+5. Scalar bitwise tail (1 to 3 bytes)
+
+This applies to every client-to-server frame because RFC 6455 requires masking on all client frames.
+
+## Example: live echo server
+
+```cpp
+#include "http/Server.h"
+#include "http/websocket/WebSocket.h"
+
+using namespace aegon::http;
+using namespace aegon::http::websocket;
+
+int main() {
+    Router router;
+    router.ws("/ws", [](WebSocket& ws) -> aegon::core::Task<void> {
+        ws.on_text([&ws](WebSocket&, std::string_view text) -> aegon::core::Task<void> {
+            co_await ws.send_text(text);
+        });
+        co_return;
+    });
+
+    Server server(std::move(router));
+    server.listen(8080, "0.0.0.0");
+    server.run();
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Server-sent events" icon="signal" href="/realtime/sse">
+    One-way real-time streaming for browsers and clients that do not need bidirectional messaging.
+  </Card>
+
+  <Card title="HTTP client" icon="arrow-right" href="/realtime/http-client">
+    Call external services from your WebSocket handlers with pooled async HTTP requests.
+  </Card>
+</CardGroup>

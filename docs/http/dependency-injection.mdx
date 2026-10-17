@@ -1,0 +1,153 @@
+---
+title: "Dependency injection"
+description: "Register and resolve typed services with Aegon ServiceRegistry for clean handler composition."
+keywords:
+  - "dependency injection"
+  - "ServiceRegistry"
+  - "services"
+  - "provide"
+  - "freeze"
+---
+
+Aegon includes a lightweight, type-safe dependency injection container called `ServiceRegistry`. You register services during server startup, freeze the registry for zero-lock lookups, and then resolve them inside route handlers through `Context`.
+
+## Registering services on the server
+
+Use `Server::provide` to register a `shared_ptr<T>`, instantiate a service in place, or register a named instance when you need multiple implementations of the same type.
+
+```cpp
+#include "http/Server.h"
+
+using namespace aegon::http;
+
+Server server(std::move(router));
+
+// Register an existing shared pointer
+auto db = std::make_shared<SqlDatabaseClient>(pool);
+server.provide(db);
+
+// Instantiate and register in place
+server.provide<RedisClient>("127.0.0.1", 6379);
+
+// Register a named instance
+server.provide_named<SqlDatabaseClient>("replica", replica_pool);
+
+// Freeze the registry before accepting traffic
+server.freeze_services();
+```
+
+Once frozen, the registry switches to a lock-free hot path. All subsequent lookups use O(1) direct array indexing for unkeyed services and immutable hash tables for named services.
+
+## Resolving services in handlers
+
+Inside any route handler, access the registry through `Context`.
+
+```cpp
+router.get("/users/:id", [](Context& ctx) -> core::Task<void> {
+    // Require a service: throws if missing
+    auto& db = ctx.service<SqlDatabaseClient>();
+
+    // Optional lookup: returns nullptr if not registered
+    auto* cache = ctx.try_service<RedisClient>();
+
+    // Named service lookup
+    auto& replica = ctx.service<SqlDatabaseClient>("replica");
+
+    // Check presence without resolving
+    if (ctx.has_service<MetricsCollector>()) {
+        // ...
+    }
+
+    auto user = co_await db.find_user(ctx.req().param("id").value_or(""));
+    ctx.res().json(user.to_json());
+});
+```
+
+## ServiceRegistry API
+
+You can also use `ServiceRegistry` directly outside of `Server` for testing or subsystems.
+
+```cpp
+#include "http/ServiceRegistry.h"
+
+ServiceRegistry registry;
+
+registry.register_service<MyService>(std::make_shared<MyService>());
+registry.register_service<MyService>("named", std::make_shared<MyService>());
+
+// Freeze before concurrent access
+registry.freeze();
+
+// Lookup
+auto* svc = registry.get<MyService>();
+auto* named = registry.get<MyService>("named");
+auto& required = registry.require<MyService>();
+
+// Shared pointer variant
+auto sp = registry.get_shared<MyService>();
+
+// Check
+bool has = registry.has<MyService>("named");
+```
+
+Attempting to register a service after `freeze()` throws `std::runtime_error`.
+
+## Design notes
+
+- **Type identity**: Services are indexed by compile-time type ID, not string names. Unkeyed lookups are array-indexed after freeze.
+- **Named services**: When you register multiple instances of the same type, use `provide_named` or `register_service(name, ptr)`. Named lookups still use the type ID plus the name string.
+- **Thread safety**: Before freeze, all operations are protected by a `shared_mutex`. After freeze, reads are completely lock-free.
+- **Lifetime**: Services are held by `shared_ptr`. The registry and all handlers share ownership, so services outlive any individual request.
+
+## Full example
+
+```cpp
+#include "http/Server.h"
+#include "http/Router.h"
+
+struct Database {
+    std::string query(std::string_view q) { return "result"; }
+};
+
+struct Cache {
+    std::string get(std::string_view k) { return "cached"; }
+};
+
+int main() {
+    Router router;
+
+    router.get("/data/:key", [](Context& ctx) -> core::Task<void> {
+        auto& db = ctx.service<Database>();
+        auto* cache = ctx.try_service<Cache>();
+
+        auto key = ctx.req().param("key").value_or("");
+        std::string value;
+        if (cache) {
+            value = cache->get(key);
+        } else {
+            value = db.query(key);
+        }
+
+        ctx.res().json("{\"value\":\"" + value + "\"}");
+        co_return;
+    });
+
+    Server server(std::move(router));
+    server.provide(std::make_shared<Database>());
+    server.provide(std::make_shared<Cache>());
+    server.freeze_services();
+    server.listen(8080).run();
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="lock" href="/http/authentication">
+    Add Bearer, cookie, API key, and Basic authentication.
+  </Card>
+
+  <Card title="Validation and errors" icon="alert-triangle" href="/http/validation-errors">
+    Validate DTOs and return structured error responses.
+  </Card>
+</CardGroup>

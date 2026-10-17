@@ -1,0 +1,188 @@
+---
+title: "Foundational data types"
+description: "High-performance, header-only data types for UUID, Decimal, Date, Time, DateTime, Json, Blob, IpAddress, MacAddress, and Hash256 with SIMD parsing and Glaze JSON integration."
+keywords:
+  - "uuid"
+  - "decimal"
+  - "datetime"
+  - "json"
+  - "blob"
+  - "ip"
+  - "mac"
+  - "hash"
+  - "aegon"
+  - "cpp"
+---
+
+Aegon provides a set of foundational data types designed for high-performance backend work. Each type is header-only, supports zero-allocation formatting and parsing, and integrates with Glaze for JSON serialization.
+
+## UUID
+
+`UUID` is a 16-byte aligned structure supporting v4 (random) and v7 (time-ordered) per RFC 9562. It includes SIMD-accelerated serialization and parsing, hardware-accelerated hashing, and a high-throughput generator.
+
+```cpp
+#include "data/types/UUID.h"
+
+using namespace aegon::data;
+
+// Generate
+UUID id4 = UUIDGenerator::v4();
+UUID id7 = UUIDGenerator::v7();
+
+// Properties
+assert(id7.version() == 7);
+assert(id7.timestamp_ms() > 0);
+
+// String roundtrip
+std::string s = id7.to_string();
+auto parsed = UUID::from_string(s);
+assert(parsed == id7);
+
+// Batch generation
+std::vector<UUID> batch(1024);
+UUIDGenerator::v4_batch(batch);
+```
+
+`UUIDGenerator::v7()` guarantees strict monotonic ordering within a thread, making it ideal for database primary keys.
+
+## Decimal
+
+`Decimal<Precision, Scale>` stores a fixed-point value as a scaled 128-bit integer. It eliminates floating-point roundoff errors and is suitable for financial calculations.
+
+```cpp
+using namespace aegon::data;
+
+Decimal<18, 2> a("0.10");
+Decimal<18, 2> b("0.20");
+assert((a + b).to_string() == "0.30");
+
+Decimal128 price("19.9900");
+Decimal128 tax = price * Decimal128("0.0825");
+assert(tax.to_string() == "1.6491");
+```
+
+The alias `Decimal128` is `Decimal<18, 4>`, a common scale for currency.
+
+## Date, Time, and DateTime
+
+`Date` represents a Gregorian calendar date. `Time` stores microseconds since midnight. `DateTime` stores microseconds since the Unix epoch with ISO 8601 formatting and timezone offset parsing.
+
+```cpp
+Date d(2026, 9, 7);
+assert(d.to_string() == "2026-09-07");
+
+Time t(14, 30, 45, 123456);
+assert(t.to_string() == "14:30:45.123456");
+
+DateTime now = DateTime::now();
+std::string iso = now.to_iso8601(); // 2026-09-07T15:05:48.123456Z
+
+// Parse with timezone offset
+auto parsed = DateTime::from_string("2026-09-07T15:30:00.000000+05:30");
+```
+
+`DateTime` supports duration arithmetic:
+
+```cpp
+DateTime future = now + std::chrono::hours(24);
+auto diff = future - now;
+```
+
+## Json
+
+`Json` is a validated JSON column wrapper. It stores raw JSON text and can serialize or deserialize typed DTOs via Glaze.
+
+```cpp
+struct ConfigDTO {
+    std::string tier;
+    std::string cluster;
+};
+
+ConfigDTO cfg{.tier = "enterprise", .cluster = "eu-west-1"};
+Json j = Json::from(cfg);
+
+auto parsed = j.get<ConfigDTO>();
+assert(parsed->tier == "enterprise");
+```
+
+When serialized in a parent DTO, `Json` emits raw unquoted JSON instead of an escaped string.
+
+## Blob
+
+`Blob` wraps a `std::vector<uint8_t>` and converts to and from Base64 and hex. It serializes as Base64 in JSON.
+
+```cpp
+Blob b(reinterpret_cast<const uint8_t*>("payload"), 7);
+std::string b64 = b.to_base64();
+
+auto restored = Blob::from_base64(b64);
+assert(restored->bytes() == b.bytes());
+```
+
+## IpAddress
+
+`IpAddress` stores IPv4 or IPv6 addresses in a fixed 16-byte array. It supports loopback and private detection, CIDR subnet matching, and parsing with optional netmask stripping.
+
+```cpp
+auto ip = IpAddress::from_string("192.168.1.50");
+assert(ip->is_private());
+assert(ip->in_subnet("192.168.1.0/24"));
+
+auto v6 = IpAddress::from_string("2001:db8::1");
+assert(v6->in_subnet("2001:db8::/32"));
+```
+
+## MacAddress
+
+`MacAddress` stores a 48-bit IEEE 802 address and formats it as `xx:xx:xx:xx:xx:xx`.
+
+```cpp
+auto mac = MacAddress::from_string("00:1a:2b:3c:4d:5e");
+assert(mac->to_string() == "00:1a:2b:3c:4d:5e");
+```
+
+## Hash256
+
+`Hash256` stores a 32-byte cryptographic hash or token. It implements constant-time equality comparison to prevent timing side-channel attacks.
+
+```cpp
+auto h = Hash256::from_hex(
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+);
+assert(h->to_hex() == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+```
+
+## Type aliases
+
+All types are available under the `aegon::data` namespace via `Types.h`:
+
+```cpp
+#include "data/types/Types.h"
+
+using aegon::data::UUID;
+using aegon::data::UUIDGenerator;
+using aegon::data::DateTime;
+using aegon::data::Date;
+using aegon::data::Time;
+using aegon::data::Decimal;
+using aegon::data::Decimal128;
+using aegon::data::Json;
+using aegon::data::IpAddress;
+using aegon::data::MacAddress;
+using aegon::data::Blob;
+using aegon::data::Hash256;
+```
+
+Each type provides `std::hash` and `glz::meta` specializations for use in unordered containers and JSON DTOs.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="ORM cache" icon="database" href="/data/orm-cache">
+    Use these types as entity fields with automatic JSON and cache serialization.
+  </Card>
+
+  <Card title="Redis client" icon="server" href="/data/redis">
+    Store and retrieve serialized values using the Redis client.
+  </Card>
+</CardGroup>

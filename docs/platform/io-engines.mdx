@@ -1,0 +1,177 @@
+---
+title: "I/O engines"
+description: "Aegon’s thread-per-core runtime with pluggable io_uring, epoll, and IOCP backends, zero-allocation coroutine tasks, and SIMD-accelerated parsing."
+keywords:
+  - "io_uring"
+  - "epoll"
+  - "iocp"
+  - "coroutine"
+  - "task"
+  - "buffer pool"
+  - "simd"
+  - "aegon"
+---
+
+Aegon’s core runtime in `aegon::core` provides a thread-per-core asynchronous execution model built on C++23 coroutines. Each worker thread runs an `EventLoop` backed by a pluggable `IoEngine` (io_uring, epoll, or IOCP), a `BufferPool` for zero-copy networking, and `SimdString` for hardware-accelerated parsing.
+
+## Task coroutines
+
+`Task<T>` is a lazy coroutine type with symmetric transfer. It is aligned to 64 bytes, move-only, and disallows `co_await` on lvalues to prevent use-after-move bugs.
+
+```cpp
+#include "core/Task.h"
+
+aegon::core::Task<int> fetch_data() {
+    co_return 42;
+}
+
+aegon::core::Task<void> handler() {
+    int value = co_await fetch_data();
+    // value == 42
+}
+```
+
+Result access is non-destructive for repeated reads:
+
+```cpp
+auto task = fetch_data();
+task.resume();
+int a = task.result(); // safe
+int b = task.result(); // safe again
+```
+
+Use `take_result()` to move the value out once.
+
+## EventLoop
+
+`EventLoop` binds a worker thread to a CPU core and runs until all spawned root tasks complete or `stop()` is called.
+
+```cpp
+aegon::core::EventLoop loop(
+    aegon::core::EngineConfig{.type = aegon::core::EngineType::Auto, .entries = 4096},
+    /*pbuf_entries=*/2048,
+    /*buffer_size=*/4096
+);
+
+loop.spawn(handler());
+loop.run(); // blocks
+```
+
+Call `EventLoop::pin_to_core(core_id)` before `run()` to pin the thread. `EventLoop::current()` returns the active loop during `run()`.
+
+## IoEngine backends
+
+`IoEngine` is the abstract base for all asynchronous I/O operations. Aegon selects the best available backend automatically, or you can force a specific one via `EngineConfig`.
+
+| Backend | Platform | Features |
+| --- | --- | --- |
+| `IoUringEngine` | Linux 6.1+ | Multishot accept/recv, direct FD tables, kernel buffer rings (PBUF_RING), zero-syscall batching |
+| `EpollEngine` | Linux / WSL2 | O(1) FD table, eventfd wakeup, high-resolution timers, fallback when io_uring is restricted |
+| `IocpEngine` | Windows | `GetQueuedCompletionStatusEx` batching, `AcceptEx`, `ConnectEx`, `TransmitFile`, overlapped I/O |
+
+Create an engine explicitly:
+
+```cpp
+auto engine = aegon::core::IoEngine::create(
+    aegon::core::EngineConfig{.type = aegon::core::EngineType::IoUring, .entries = 4096}
+);
+```
+
+### Awaiter-based I/O
+
+All network operations are expressed as awaiters that live on the coroutine stack. No heap allocation is required per operation.
+
+```cpp
+auto accept_res = co_await engine.accept_once(listen_fd);
+auto recv_res = co_await engine.recv_provided(accept_res.fd, pool.bgid());
+auto slice = pool.get_buffer(recv_res.bid, recv_res.bytes);
+// process slice
+pool.return_buffer(recv_res.bid);
+int sent = co_await engine.send(accept_res.fd, response.data(), response.size());
+```
+
+Supported operations include `accept_once`, `accept_multishot`, `recv`, `recv_provided`, `recv_multishot_stream`, `send`, `send_zc`, `splice`, `connect`, `poll`, `timeout`, `close`, `shutdown`, `cancel`, and `recvmsg`.
+
+### Multishot streams
+
+`MultishotAcceptStream` and `MultishotRecvStream` arm the kernel once and yield multiple completions via `co_await stream.next()`. This eliminates repeated submission overhead for high-connection servers.
+
+```cpp
+auto stream = engine.accept_multishot(listen_fd);
+while (auto res = co_await stream.next()) {
+    if (res.fd < 0) break;
+    // handle connection
+}
+```
+
+## BufferPool
+
+`BufferPool` provides pre-allocated, cache-aligned buffers in two modes:
+
+1. **Kernel PBUF_RING mode** (io_uring): the kernel selects buffers automatically on incoming packets.
+2. **User-space freelist mode** (epoll / IOCP): lockless O(1) allocation from a pre-faulted slab.
+
+Memory is allocated via `mmap` with `MAP_POPULATE` and `MAP_HUGETLB` (2 MB huge pages, with 4 KB fallback) to minimize TLB pressure.
+
+```cpp
+aegon::core::BufferPool pool(1, 2048, 4096); // bgid=1, 2048 buffers, 4 KB each
+engine->register_buffer_pool(pool);
+
+int bid = pool.alloc_buffer(); // user-space mode
+auto slice = pool.get_buffer(bid, 100);
+pool.return_buffer(bid);
+```
+
+## SIMD string primitives
+
+`SimdString` in `aegon::core::simd` provides hardware-accelerated string scanning with automatic tiered fallbacks:
+
+- **Tier 1**: AVX-512BW / AVX-512VL (64 bytes/cycle)
+- **Tier 2**: AVX2 + BMI2 (32 bytes/cycle)
+- **Tier 3**: SSE4.2 (16 bytes/cycle)
+- **Tier 4**: Portable scalar fallback
+
+Available operations:
+
+```cpp
+using aegon::core::simd::SimdString;
+
+size_t pos = SimdString::find_char(header, ':');
+size_t crlf = SimdString::find_crlf(header);
+size_t end = SimdString::find_double_crlf(header); // HTTP header block end
+bool same = SimdString::iequals("Content-Length", "content-length");
+bool needs_decode = SimdString::has_url_encoding_chars(path);
+bool valid = SimdString::validate_uri_chars(path);
+bool token = SimdString::validate_tchars(header_name);
+bool h2safe = SimdString::validate_h2_h3_header_value(value);
+```
+
+All functions accept `std::string_view` and operate without allocations.
+
+## Thread-per-core model
+
+Aegon scales by running one `EventLoop` per physical core. Each loop owns its own `IoEngine`, `BufferPool`, and task queue. There are no cross-thread locks on the hot path. `SO_REUSEPORT` distributes incoming connections at the kernel level.
+
+```cpp
+std::vector<std::jthread> workers;
+for (int i = 0; i < cores; ++i) {
+    workers.emplace_back([i]() {
+        aegon::core::EventLoop::pin_to_core(i);
+        aegon::core::EventLoop loop;
+        loop.spawn(accept_loop(loop));
+        loop.run();
+    });
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Benchmarks" icon="chart-bar" href="/platform/benchmarks">
+    See measured throughput and latency across io_uring, epoll, and protocol stacks.
+  </Card>
+
+  <Card title="HTTP server" icon="server" href="/http/server">
+    Build a server on top of the I/O engine and task runtime.
+  </Card>
+</CardGroup>

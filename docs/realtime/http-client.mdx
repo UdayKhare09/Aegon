@@ -1,0 +1,211 @@
+---
+title: "HTTP client"
+sidebarTitle: "HTTP client"
+description: "Make async HTTP/1.1, HTTP/2, and HTTP/3 requests with connection pooling, request builders, and per-core clients in Aegon."
+keywords:
+  - "http client"
+  - "connection pool"
+  - "http2"
+  - "http3"
+  - "request builder"
+  - "aegon"
+---
+
+Aegon's `HttpClient` provides a fluent, coroutine-native API for outbound HTTP requests. It supports HTTP/1.1, HTTP/2, and HTTP/3, automatic redirect chasing, typed JSON serialization with Glaze, and a `ConnectionPool` that reuses persistent TCP and TLS connections.
+
+## Creating a client
+
+```cpp
+#include "http/client/HttpClient.h"
+
+using namespace aegon::http::client;
+
+// Default client (HTTP/1.1, 30 s timeout)
+HttpClient client;
+
+// Client with custom configuration
+HttpClient client(ClientConfig{
+    .default_protocol = HttpVersion::Http2,
+    .timeout = std::chrono::milliseconds(10000),
+    .max_connections_per_host = 64,
+    .follow_redirects = true,
+    .max_redirects = 5
+});
+```
+
+## Building requests
+
+`HttpClient` provides verb factories that return a `RequestBuilder`. Chain methods to set headers, query parameters, body, and protocol version, then call `send()` for async execution or `send_sync()` for blocking execution.
+
+```cpp
+// GET with query parameters
+Response res = client.get("https://api.example.com/users")
+    .query("page", "1")
+    .query("limit", "10")
+    .header("Accept", "application/json")
+    .send_sync();
+
+// POST with JSON body
+struct UserDto {
+    uint64_t id{0};
+    std::string name{};
+};
+
+UserDto user{101, "charlie"};
+Response res = client.post("https://api.example.com/users")
+    .json(user)
+    .bearer_auth("secret_jwt_token_456")
+    .send_sync();
+```
+
+### Request builder methods
+
+| Method | Description |
+| --- | --- |
+| `query(key, value)` | Add a URL-encoded query parameter |
+| `query(params)` | Add multiple parameters from a vector of pairs |
+| `header(name, value)` | Add a custom header |
+| `bearer_auth(token)` | Set `Authorization: Bearer <token>` |
+| `basic_auth(user, pass)` | Set `Authorization: Basic <base64>` |
+| `api_key(header, key)` | Add an API key header |
+| `content_type(mime)` | Set `Content-Type` |
+| `accept(mime)` | Set `Accept` |
+| `user_agent(ua)` | Set `User-Agent` |
+| `cookie(name, value)` | Add a cookie |
+| `body(data)` | Set raw body from string, string_view, or byte span |
+| `json(val)` | Serialize a Glaze-compatible object to JSON and set `Content-Type` |
+| `form(fields)` | Set `application/x-www-form-urlencoded` body |
+| `version(v)` / `http2()` / `http3()` | Force protocol version |
+| `timeout(ms)` | Override request timeout |
+| `follow_redirects(bool)` | Enable or disable redirect chasing |
+| `max_redirects(n)` | Limit redirect hops |
+| `retry(count, backoff)` | Retry on transient failures |
+| `send()` | Async coroutine; `co_await` inside an `EventLoop` |
+| `send_sync()` | Synchronous blocking call |
+
+## Async usage inside an event loop
+
+Use `send()` within a coroutine spawned on an `EventLoop`:
+
+```cpp
+#include "core/EventLoop.h"
+
+aegon::core::EventLoop loop(256, 128, 4096);
+auto task = [&]() -> aegon::core::Task<void> {
+    Response res = co_await client.get("https://api.example.com/health").send();
+    if (res.is_success()) {
+        auto body = res.body();
+    }
+    loop.stop();
+};
+loop.spawn(task());
+loop.run();
+```
+
+## URL parsing
+
+Aegon includes a zero-copy URL parser for absolute HTTP and HTTPS URLs:
+
+```cpp
+#include "http/client/Url.h"
+
+auto url = aegon::http::client::Url::parse(
+    "https://api.example.com:8443/v1/users?page=1#top"
+);
+
+if (url) {
+    std::string_view host = url->host();      // "api.example.com"
+    uint16_t port = url->port();              // 8443
+    std::string_view path = url->path();      // "/v1/users"
+    std::string_view query = url->query();    // "page=1"
+    std::string target = url->target();       // "/v1/users?page=1"
+    std::string origin = url->origin();       // "https://api.example.com:8443"
+}
+```
+
+## Connection pooling
+
+`HttpClient` owns a `ConnectionPool` that keeps persistent connections open and reuses them across requests to the same origin. The pool respects per-host and global idle limits, and automatically closes stale connections.
+
+```cpp
+ClientConfig cfg{
+    .max_connections_per_host = 32,
+    .max_idle_connections = 128,
+    .idle_timeout = std::chrono::seconds(60)
+};
+HttpClient client(cfg);
+```
+
+You can clear all idle connections explicitly:
+
+```cpp
+client.pool().clear();
+```
+
+## Per-core HTTP client
+
+In a thread-per-core architecture, sharing a single `HttpClient` across threads causes lock contention and socket sharing issues. Use `PerCoreHttpClient` to create an isolated `HttpClient` (with its own connection pool) per thread, lazily on first access:
+
+```cpp
+#include "http/client/PerCoreHttpClient.h"
+
+aegon::http::client::PerCoreHttpClient client(ClientConfig{
+    .user_agent = "Aegon-Worker/1.0"
+});
+
+// Inside a worker thread
+Response res = client.get("https://api.example.com/data").send_sync();
+```
+
+Each thread receives a distinct `HttpClient` pointer. The factory is invoked once per thread, eliminating cross-thread interference.
+
+## HTTP/2 and HTTP/3 client sessions
+
+Aegon provides dedicated session implementations for native HTTP/2 and HTTP/3:
+
+- `Http2ClientSession` manages an nghttp2 session over TLS (ALPN `h2`) or cleartext prior-knowledge TCP (`h2c`).
+- `Http3ClientSession` manages an ngtcp2 / nghttp3 QUIC session over UDP.
+
+You typically do not use these directly. Set the request version to `HttpVersion::Http2` or `HttpVersion::Http3`, and `HttpClient` selects the correct session internally.
+
+```cpp
+// Force HTTP/2
+Response res = client.get("https://api.example.com/data")
+    .http2()
+    .send_sync();
+
+// Force HTTP/3
+Response res = client.get("https://api.example.com/data")
+    .http3()
+    .send_sync();
+```
+
+## Redirect chasing and TLS options
+
+By default, the client follows up to 10 redirects. You can disable this or lower the limit:
+
+```cpp
+Response res = client.get("https://api.example.com/legacy")
+    .follow_redirects(false)
+    .send_sync();
+```
+
+For development or self-signed certificates, use `insecure_skip_verify`:
+
+```cpp
+HttpClient client(ClientConfig{
+    .tls = TlsClientOptions{.insecure_skip_verify = true}
+});
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Server-sent events" icon="signal" href="/realtime/sse">
+    Stream server events to clients over persistent HTTP connections.
+  </Card>
+
+  <Card title="WebSockets" icon="webhook" href="/realtime/websockets">
+    Upgrade to bidirectional real-time messaging with RFC 6455 WebSockets.
+  </Card>
+</CardGroup>

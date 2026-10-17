@@ -1,0 +1,244 @@
+---
+title: "Benchmarks"
+description: "Reproducible performance results for Aegon across HTTP/1.1, HTTP/2, HTTP/3, TLS, and full application workloads."
+keywords:
+  - "benchmarks"
+  - "performance"
+  - "throughput"
+  - "latency"
+  - "http2"
+  - "http3"
+  - "io_uring"
+  - "aegon"
+---
+
+All benchmarks are conducted under strict hardware isolation: server processes are pinned to physical cores 0 and 1, and the load generator is pinned to cores 2 through 5. Results are the arithmetic mean of three independent 10-second runs with a 3-second warm-up and 2-second cooldown between runs.
+
+## HTTP/1.1 plain text
+
+This suite compares Aegon (C++26, io_uring) against Swerver (Zig), Actix-web (Rust), Drogon (C++17), and Fiber (Go) on a 2-core server with 100 keep-alive connections.
+
+### Plaintext workload
+
+| Rank | Framework | Requests/sec | Total reqs (30s) | Avg latency | p50 latency | p99 latency |
+| :-: | :-- | :-: | :-: | :-: | :-: | :-: |
+| 1 | Aegon | 547,144.84 | 5,525,446 | 214.09 us | 169.33 us | 468.67 us |
+| 2 | Swerver | 468,612.69 | 4,732,879 | 209.88 us | 198.33 us | 416.33 us |
+| 3 | Actix-web | 400,128.26 | 4,015,783 | 271.05 us | 239.00 us | 559.00 us |
+| 4 | Drogon | 388,383.14 | 3,909,938 | 255.72 us | 248.67 us | 531.00 us |
+| 5 | Fiber | 352,123.01 | 3,544,801 | 286.28 us | 284.67 us | 621.00 us |
+
+### JSON serialization workload
+
+| Rank | Framework | Requests/sec | Total reqs (30s) | Avg latency | p50 latency | p99 latency |
+| :-: | :-- | :-: | :-: | :-: | :-: | :-: |
+| 1 | Aegon | 543,849.26 | 5,475,128 | 206.22 us | 172.00 us | 1,606.67 us |
+| 2 | Swerver | 465,714.91 | 4,688,201 | 213.45 us | 204.00 us | 444.33 us |
+| 3 | Actix-web | 393,235.00 | 3,959,259 | 265.14 us | 248.00 us | 1,133.33 us |
+| 4 | Fiber | 320,411.14 | 3,225,558 | 312.83 us | 314.00 us | 664.00 us |
+| 5 | Drogon | 222,119.66 | 2,243,330 | 448.21 us | 450.00 us | 916.67 us |
+
+### Dynamic route workload
+
+| Rank | Framework | Requests/sec | Total reqs (30s) | Avg latency | p50 latency | p99 latency |
+| :-: | :-- | :-: | :-: | :-: | :-: | :-: |
+| 1 | Aegon | 544,465.49 | 5,480,942 | 200.22 us | 173.33 us | 1,340.67 us |
+| 2 | Swerver | 460,992.37 | 4,641,527 | 214.42 us | 202.00 us | 421.33 us |
+| 3 | Actix-web | 381,962.28 | 3,844,981 | 265.66 us | 255.67 us | 452.33 us |
+| 4 | Fiber | 334,278.93 | 3,365,009 | 298.32 us | 298.67 us | 612.67 us |
+| 5 | Drogon | 296,297.79 | 2,992,552 | 335.46 us | 326.67 us | 674.33 us |
+
+Reproduce a single run:
+
+```bash
+./benchmarks/http1_plain/run_single.sh aegon plaintext 10s 100
+```
+
+Run the triplicate average suite:
+
+```bash
+python3 benchmarks/http1_plain/run_triplicate.py aegon plaintext 10s 100
+```
+
+## HTTP/1.1 TLS
+
+This suite tests HTTP/1.1 over TLS 1.3 with ECDSA certificates and 100 keep-alive connections.
+
+### Plaintext over TLS
+
+| Rank | Framework | Requests/sec | Avg latency | p50 latency | p99 latency |
+| :-: | :-- | :-: | :-: | :-: | :-: |
+| 1 | Aegon | 423,902.09 | 237.74 us | 222.00 us | 605.00 us |
+| 2 | Swerver | 382,901.10 | 262.49 us | 243.33 us | 655.33 us |
+| 3 | Actix-web | 349,875.17 | 385.24 us | 268.00 us | 2,750.00 us |
+| 4 | Fiber | 327,720.40 | 312.37 us | 299.67 us | 766.33 us |
+| 5 | Drogon | 319,510.95 | 381.96 us | 302.67 us | 677.00 us |
+
+### JSON over TLS
+
+| Rank | Framework | Requests/sec | Avg latency | p50 latency | p99 latency |
+| :-: | :-- | :-: | :-: | :-: | :-: |
+| 1 | Aegon | 418,027.14 | 246.23 us | 224.33 us | 867.00 us |
+| 2 | Swerver | 386,190.38 | 254.47 us | 240.33 us | 515.33 us |
+| 3 | Actix-web | 336,283.59 | 378.78 us | 281.00 us | 2,690.00 us |
+| 4 | Fiber | 296,697.13 | 338.23 us | 335.33 us | 726.33 us |
+| 5 | Drogon | 194,054.45 | 594.25 us | 512.67 us | 1,140.00 us |
+
+### Dynamic route over TLS
+
+| Rank | Framework | Requests/sec | Avg latency | p50 latency | p99 latency |
+| :-: | :-- | :-: | :-: | :-: | :-: |
+| 1 | Aegon | 413,632.71 | 244.45 us | 226.00 us | 779.67 us |
+| 2 | Swerver | 375,552.83 | 264.54 us | 248.00 us | 577.67 us |
+| 3 | Actix-web | 330,479.97 | 386.19 us | 286.67 us | 2,583.33 us |
+| 4 | Fiber | 307,973.21 | 328.76 us | 321.33 us | 748.67 us |
+| 5 | Drogon | 252,762.95 | 460.31 us | 385.00 us | 819.00 us |
+
+TLS overhead relative to plain HTTP/1.1:
+
+| Framework | Plain req/s | TLS req/s | Overhead |
+| :-- | :-: | :-: | :-: |
+| Aegon | 547,402 | 423,902 | -22.6% |
+| Swerver | 468,690 | 382,901 | -18.3% |
+| Actix-web | 400,248 | 349,875 | -12.6% |
+| Fiber | 352,243 | 327,720 | -6.9% |
+| Drogon | 388,432 | 319,511 | -17.7% |
+
+Reproduce a single run:
+
+```bash
+./benchmarks/http1_tls/run_single.sh aegon plaintext 10s 100
+```
+
+## HTTP/2 over TLS
+
+This suite uses `h2load` with 100 connections and 10 concurrent streams per connection (1,000 active multiplexed streams). Flow-control windows and max frame sizes are matched across frameworks where possible.
+
+### Plaintext over HTTP/2
+
+| Rank | Framework | Requests/sec | Mean latency | p50 latency | p99 latency |
+| :-: | :-- | :-: | :-: | :-: | :-: |
+| 1 | Aegon | 1,750,028.67 | 526.33 us | 521.00 us | 773.67 us |
+| 2 | Actix-web | 693,620.67 | 1,443.33 us | 1,406.67 us | 1,823.33 us |
+| 3 | Swerver | 475,583.73 | 2,090.00 us | 2,163.33 us | 3,610.00 us |
+| 4 | Drogon | Unsupported | - | - | - |
+| 5 | Fiber | Unsupported | - | - | - |
+
+### JSON over HTTP/2
+
+| Rank | Framework | Requests/sec | Mean latency | p50 latency | p99 latency |
+| :-: | :-- | :-: | :-: | :-: | :-: |
+| 1 | Aegon | 1,695,960.00 | 549.67 us | 542.00 us | 810.00 us |
+| 2 | Actix-web | 651,131.33 | 1,546.67 us | 1,503.33 us | 2,100.00 us |
+| 3 | Swerver | 476,690.33 | 2,076.67 us | 2,093.33 us | 3,906.67 us |
+| 4 | Drogon | Unsupported | - | - | - |
+| 5 | Fiber | Unsupported | - | - | - |
+
+### Dynamic route over HTTP/2
+
+| Rank | Framework | Requests/sec | Mean latency | p50 latency | p99 latency |
+| :-: | :-- | :-: | :-: | :-: | :-: |
+| 1 | Aegon | 1,667,803.33 | 563.33 us | 575.00 us | 775.00 us |
+| 2 | Actix-web | 627,524.00 | 1,600.00 us | 1,563.33 us | 1,893.33 us |
+| 3 | Swerver | 466,247.10 | 2,133.33 us | 2,193.33 us | 3,210.00 us |
+| 4 | Drogon | Unsupported | - | - | - |
+| 5 | Fiber | Unsupported | - | - | - |
+
+Reproduce a single run:
+
+```bash
+./benchmarks/http2/run_single.sh aegon plaintext 10s 100 10
+```
+
+## HTTP/3 over QUIC
+
+This suite evaluates HTTP/3 over QUIC (RFC 9000 / RFC 9114) with 100 connections and 10 concurrent streams each. Only Aegon and Swerver implement HTTP/3 in this comparison.
+
+| Workload | Aegon req/s | Swerver req/s | Aegon mean lat | Aegon p50 | Aegon p99 |
+| :-- | :-: | :-: | :-: | :-: | :-: |
+| Plaintext | 336,440.73 | 109,570.60 | 2.98 ms | 2.66 ms | 5.15 ms |
+| JSON | 331,608.03 | 109,342.50 | 3.02 ms | 2.70 ms | 5.41 ms |
+| Dynamic route | 326,682.63 | 108,137.93 | 3.10 ms | 2.78 ms | 6.06 ms |
+
+Aegon is approximately 3.0x faster than Swerver across all HTTP/3 workloads, with 3.0x lower mean latency and 4.3x to 5.3x lower p99 tail latency.
+
+Reproduce a single run:
+
+```bash
+./benchmarks/http3/run_single.sh aegon plaintext 10s 100 10
+```
+
+## Application stack benchmarks
+
+The `benchmarks/appstack` directory contains end-to-end workloads that exercise JSON serialization, database queries, and asynchronous delays.
+
+### Baseline HTTP/1.1 (GET and POST)
+
+Results at 512 connections and 4096 connections, averaged across three runs:
+
+| Workload | Connections | Aegon req/s | Actix req/s | Swerver req/s |
+| :-- | :-: | :-: | :-: | :-: |
+| GET /baseline11 | 512 | 508,435.15 | 387,632.79 | 451,428.68 |
+| GET /baseline11 | 4096 | 406,585.06 | 309,782.60 | 359,364.64 |
+| POST /baseline11 | 512 | 511,694.06 | 368,609.26 | 436,246.57 |
+| POST /baseline11 | 4096 | 403,482.36 | 297,860.60 | 340,888.47 |
+
+### Async delay endpoint
+
+The `/delay/10` endpoint simulates a 10 ms async sleep. At 512 connections, Aegon achieves 50,362 req/s versus Actix at 42,722 req/s. At 4096 connections, Aegon and Actix are nearly tied (233,769 vs 238,617 req/s). Swerver does not implement this upstream pattern.
+
+### JSON serialization
+
+Plain JSON responses at 512 and 4096 connections:
+
+| Connections | Aegon req/s | Actix req/s | Swerver req/s |
+| :-: | :-: | :-: | :-: |
+| 512 | 265,279.98 | 138,524.37 | 198,155.55 |
+| 4096 | 191,686.86 | 122,953.32 | 176,596.12 |
+
+Gzip-compressed JSON at 512 and 4096 connections:
+
+| Connections | Aegon req/s | Actix req/s | Swerver req/s |
+| :-: | :-: | :-: | :-: |
+| 512 | 113,777.79 | 56,406.56 | 26,626.15 |
+| 4096 | 95,877.60 | 56,151.84 | 25,626.67 |
+
+### Database query workload
+
+The database benchmark issues a parameterized SQL query against PostgreSQL. Aegon sustains 25,595 req/s at 512 connections and 24,330 req/s at 1024 connections with zero errors. Actix achieves 17,234 req/s at 512 connections and 16,757 req/s at 1024 connections. Swerver returns a high error rate (over 87% 503 responses) under this load.
+
+## How to reproduce
+
+All benchmark suites are self-contained under `benchmarks/`. Each suite includes shell scripts and Python runners.
+
+```bash
+# HTTP/1.1 plain
+python3 benchmarks/http1_plain/run_triplicate.py aegon plaintext 10s 100
+
+# HTTP/1.1 TLS
+python3 benchmarks/http1_tls/run_triplicate.py aegon json 10s 100
+
+# HTTP/2
+python3 benchmarks/http2/run_triplicate.py aegon plaintext 10s 100 10
+
+# HTTP/3
+python3 benchmarks/http3/run_triplicate.py aegon plaintext 10s 100 10
+
+# Full application stack
+python3 benchmarks/appstack/run_baseline.py
+python3 benchmarks/appstack/run_json.py
+python3 benchmarks/appstack/run_db.py
+python3 benchmarks/appstack/run_async.py
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="I/O engines" icon="bolt" href="/platform/io-engines">
+    Understand the io_uring, epoll, and IOCP backends that produce these results.
+  </Card>
+
+  <Card title="HTTP server" icon="server" href="/http/server">
+    Build a high-throughput server on top of the benchmarked runtime.
+  </Card>
+</CardGroup>

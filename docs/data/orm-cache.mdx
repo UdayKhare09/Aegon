@@ -1,0 +1,134 @@
+---
+title: "ORM cache"
+description: "Tiered caching for the Aegon ORM with partitioned invalidation, deferred transaction sync, and pluggable backends."
+keywords:
+  - "orm"
+  - "cache"
+  - "aegon"
+  - "cpp"
+  - "redis"
+  - "memstore"
+  - "invalidation"
+---
+
+The Aegon ORM integrates a pluggable `CacheBackend` that caches entities by ID, unique lookups, and query results. Cache writes are deferred until a transaction commits, and rollbacks discard pending cache operations to prevent dirty reads.
+
+## Cache backend interface
+
+`CacheBackend` is the abstraction used by `SqlDatabaseClient`. It provides async get, set, multi-get, delete, increment, and batch delete operations.
+
+```cpp
+namespace aegon::data::cache {
+
+class CacheBackend {
+public:
+    virtual ~CacheBackend() = default;
+
+    virtual core::Task<std::optional<std::string>> get(std::string_view key) = 0;
+    virtual core::Task<std::vector<std::optional<std::string>>> mget(const std::vector<std::string>& keys) = 0;
+    virtual core::Task<bool> set(std::string_view key, std::string_view val, std::optional<std::chrono::seconds> ttl = std::nullopt) = 0;
+    virtual core::Task<bool> del(std::string_view key) = 0;
+    virtual core::Task<int64_t> del_many(const std::vector<std::string>& keys) = 0;
+    virtual core::Task<int64_t> incr(std::string_view key) = 0;
+};
+
+} // namespace aegon::data::cache
+```
+
+Attach a backend to the ORM client:
+
+```cpp
+auto cache = std::make_shared<RedisCacheBackend>(redis_client, "orm:");
+db.set_cache(cache);
+```
+
+## Schema cache configuration
+
+Enable caching on a table definition with `.cache()`. You can cache by primary ID, by unique columns, and partition invalidation by a parent key.
+
+```cpp
+struct Account {
+    int id{0};
+    std::string email;
+    std::string name;
+    int org_id{0};
+
+    static const auto& schema() {
+        static const auto s = TableDef<Account>("accounts")
+            .id(&Account::id, "id")
+            .column(&Account::email, "email").unique()
+            .column(&Account::name, "name")
+            .column(&Account::org_id, "org_id")
+            .cache({
+                .ttl = std::chrono::seconds(600),
+                .by_id = true,
+                .invalidation = InvalidationMode::Partitioned,
+                .mutation_sync = MutationSync::UpdateOnWrite
+            })
+            .by_unique(&Account::email)
+            .partition_by(&Account::org_id);
+        return s;
+    }
+};
+```
+
+## Cache behavior
+
+When `by_id` is true, `find_by_id` checks the cache first and falls back to the database on miss. After a successful insert or update, the entity is serialized into the cache. When `partition_by` is set, the ORM tracks a partition epoch key per parent ID. Query caches store a list of IDs plus the partition epoch; a stale epoch invalidates the query result without touching individual entity keys.
+
+## Deferred transaction sync
+
+Cache updates inside a transaction are buffered. They are flushed only when the transaction commits, and discarded on rollback.
+
+```cpp
+co_await db.transaction([&](Transaction& tx) -> core::Task<void> {
+    auto opt = co_await tx.find_by_id<Account>(1);
+    opt->name = "Alice Updated";
+    co_await tx.update_entity(*opt);
+    // Cache is NOT updated yet
+});
+// Now the cache reflects the committed change
+```
+
+If the transaction throws before commit, no cache keys are modified, preventing dirty reads for concurrent requests.
+
+## Cache backends
+
+### Redis cache backend
+
+`RedisCacheBackend` wraps a `RedisClient` or a `RedisClient*` provider. It prefixes all keys and delegates to Redis `GET`, `MGET`, `SET`, `DEL`, and `INCR`.
+
+```cpp
+auto cache = std::make_shared<RedisCacheBackend>(
+    per_core_redis.provider(), "orm:"
+);
+db.set_cache(cache);
+```
+
+### MemStore cache backend
+
+`MemStoreCacheBackend` uses the in-process `MemStore` engine. It is a drop-in replacement when running a single-node deployment or for testing.
+
+```cpp
+auto store = std::make_shared<MemStore>();
+store->start();
+
+auto cache = std::make_shared<MemStoreCacheBackend>(store);
+db.set_cache(cache);
+```
+
+## Partitioned invalidation
+
+With `InvalidationMode::Partitioned`, inserting into one partition does not invalidate caches for other partitions. In the `Account` example above, inserting an account for `org_id == 20` increments `accounts:part:20:epoch` but leaves `accounts:part:10:epoch` unchanged. Queries scoped to `org_id == 10` continue to hit the cache.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Redis client" icon="server" href="/data/redis">
+    Configure the Redis backend for distributed caching.
+  </Card>
+
+  <Card title="In-memory store" icon="memory" href="/data/memstore">
+    Use MemStore as a local cache backend for single-node deployments.
+  </Card>
+</CardGroup>

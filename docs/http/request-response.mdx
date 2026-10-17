@@ -1,0 +1,258 @@
+---
+title: "Request and response"
+description: "Access request data, build responses, and work with cookies, headers, and multipart forms in Aegon."
+keywords:
+  - "request"
+  - "response"
+  - "context"
+  - "headers"
+  - "cookies"
+  - "multipart"
+  - "form"
+---
+
+Every route handler receives a `Context` that wraps the inbound `Request` and outbound `Response`. This page covers how to read request data, write responses, and handle common payload types.
+
+## Context
+
+`Context` is the single object passed to every handler. It provides access to the request, the response builder, the service registry, and a per-request data bag for middleware.
+
+```cpp
+#include "http/Context.h"
+
+using namespace aegon::http;
+
+router.get("/demo", [](Context& ctx) -> core::Task<void> {
+    auto& req = ctx.req();
+    auto& res = ctx.res();
+
+    // Middleware can attach typed values
+    ctx.set<std::string>("trace-id", "abc-123");
+    auto trace = ctx.get<std::string>("trace-id");
+
+    // Access services registered on the server
+    auto db = ctx.service<SqlDatabaseClient>();
+
+    res.json(R"({"ok":true})");
+    co_return;
+});
+```
+
+## Reading the request
+
+### Route parameters
+
+Path segments prefixed with `:` in the route pattern are captured as named parameters.
+
+```cpp
+router.get("/users/:id", [](Context& ctx) {
+    auto id = ctx.req().param("id");
+    if (id) {
+        ctx.res().text("User id: " + std::string(*id));
+    }
+});
+```
+
+### Query parameters
+
+Query strings are parsed on demand without heap allocations.
+
+```cpp
+router.get("/search", [](Context& ctx) {
+    auto q = ctx.req().query("q");
+    auto page = ctx.req().query("page");
+    ctx.res().json(R"({"q":"")" + std::string(q.value_or("")) + R"("})");
+});
+```
+
+### Headers
+
+`HeaderMap` stores up to 32 headers inline and supports case-insensitive lookup.
+
+```cpp
+auto content_type = ctx.req().header("content-type");
+auto accept = ctx.req().headers().get("accept");
+```
+
+### JSON body
+
+Parse JSON directly into a C++ struct with Glaze. Unknown keys are ignored by default.
+
+```cpp
+struct CreateUserDTO {
+    std::string username;
+    std::string email;
+};
+
+router.post("/users", [](Context& ctx) {
+    auto parsed = ctx.req().json<CreateUserDTO>();
+    if (!parsed) {
+        ctx.res().status(StatusCode::BadRequest).text("Invalid JSON");
+        return;
+    }
+    // parsed->username, parsed->email
+});
+```
+
+### URL-encoded forms
+
+Access individual form fields or bind the entire body to a typed DTO.
+
+```cpp
+// Direct field access
+auto username = ctx.req().form("username");
+
+// Typed binding with validation
+auto dto = ctx.bind_form<RegisterForm>();
+if (!dto) {
+    // validation already wrote a 422 response
+    return;
+}
+```
+
+### Multipart forms
+
+`MultipartParser` parses `multipart/form-data` with zero-copy file references.
+
+```cpp
+auto multipart = ctx.multipart();
+if (!multipart) {
+    ctx.res().status(StatusCode::BadRequest).text("Expected multipart body");
+    return;
+}
+
+// Text fields
+auto title = multipart->get("title");
+
+// Uploaded files
+auto file = multipart->file("avatar");
+if (file) {
+    file->save_to("/tmp/avatar.png");
+    ctx.res().json(R"({"size":)" + std::to_string(file->size()) + "}");
+}
+```
+
+### Cookies
+
+Read cookies from the inbound `Cookie` header.
+
+```cpp
+auto session = ctx.req().cookie("session_id");
+if (!session) {
+    ctx.res().status(StatusCode::Unauthorized).text("Missing session");
+    return;
+}
+```
+
+## Building the response
+
+### Status and body
+
+```cpp
+ctx.res().status(StatusCode::Created)
+         .json(R"({"id":42})");
+```
+
+### Content type helpers
+
+```cpp
+ctx.res().text("plain text");                     // text/plain
+ctx.res().json(R"({"key":"value"})");            // application/json
+ctx.res().html("<h1>Hello</h1>");                // text/html; charset=utf-8
+```
+
+### Headers
+
+```cpp
+ctx.res().header("X-Request-ID", "abc-123")
+         .set_header_owned("X-Custom", "owned-value");
+```
+
+### Cookies
+
+Set cookies with `CookieOptions` and designated initializers. Multiple `Set-Cookie` headers are supported.
+
+```cpp
+ctx.res().set_cookie({
+    .name = "session_id",
+    .value = "token_abc_123",
+    .path = "/",
+    .max_age = std::chrono::hours(2),
+    .same_site = SameSite::Strict,
+    .http_only = true,
+    .secure = true
+});
+
+// Clear a cookie
+ctx.res().clear_cookie("session_id", "/");
+```
+
+### File responses
+
+Send a file with zero-copy kernel streaming. MIME type is inferred from the extension.
+
+```cpp
+ctx.res().file("./public/index.html");           // inferred text/html
+ctx.res().file("./assets/logo.png", "image/png"); // explicit MIME type
+```
+
+### Chunked and SSE
+
+Enable chunked transfer encoding for streaming bodies, or upgrade to Server-Sent Events.
+
+```cpp
+// Chunked response
+ctx.res().chunked().text("First chunk");
+
+// Server-Sent Events
+auto stream = co_await ctx.sse();
+co_await stream.event("update", "payload");
+```
+
+## Typed DTO binding
+
+`Context` provides convenience methods that parse, validate, and respond automatically on failure.
+
+```cpp
+router.post("/users", [](Context& ctx) -> core::Task<void> {
+    auto dto = ctx.bind_json<CreateUserDTO>();
+    if (!dto) co_return;   // 400 or 422 already written to response
+
+    // dto->username, dto->email are validated
+    ctx.res().status(StatusCode::Created).json("{}");
+    co_return;
+});
+```
+
+Available binders:
+
+| Method | Source | Validation |
+| --- | --- | --- |
+| `bind_json<T>()` | Request JSON body | `HasValidate<T>` |
+| `bind_query<T>()` | Query string | `HasValidate<T>` |
+| `bind_path<T>()` | Route parameters | `HasValidate<T>` |
+| `bind_form<T>()` | URL-encoded body | `HasValidate<T>` |
+
+## Status codes
+
+`StatusCode` is a strongly typed enum covering common HTTP status codes.
+
+```cpp
+ctx.res().status(StatusCode::Ok);
+ctx.res().status(StatusCode::NotFound);
+ctx.res().status(418);  // also accepts raw uint16_t
+```
+
+Common codes include `Ok`, `Created`, `BadRequest`, `Unauthorized`, `Forbidden`, `NotFound`, `MethodNotAllowed`, `PayloadTooLarge`, `UnprocessableEntity`, `InternalServerError`, and `ServiceUnavailable`.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Middleware" icon="shield" href="/http/middleware">
+    Add reusable request and response processing.
+  </Card>
+
+  <Card title="Validation and errors" icon="alert-triangle" href="/http/validation-errors">
+    Validate DTOs and return structured error responses.
+  </Card>
+</CardGroup>

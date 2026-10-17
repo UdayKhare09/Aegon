@@ -1,0 +1,161 @@
+---
+title: "Quickstart"
+description: "Build and run a hello-world Aegon server with CMake, routing, JSON, and path parameters."
+keywords:
+  - "aegon"
+  - "quickstart"
+  - "cmake"
+  - "hello world"
+  - "c++"
+  - "server"
+---
+
+This guide takes you from zero to a running Aegon HTTP server. You will create a CMake project, link against `Aegon::http`, define routes that return text and JSON, extract a path parameter, and test the server with `curl`.
+
+## Prerequisites
+
+Before you begin, verify that you have:
+
+- A C++ compiler with C++23 support (GCC 13+, Clang 17+, or MSVC with `/std:c++latest`)
+- CMake 3.20 or newer
+- Aegon installed or built from source (see [Installation](/installation))
+
+## Create the project
+
+<Steps>
+  <Step title="Create a project directory">
+    ```bash
+    mkdir aegon-hello && cd aegon-hello
+    ```
+  </Step>
+  <Step title="Write CMakeLists.txt">
+    The benchmark servers in the Aegon repo use `find_package(Aegon REQUIRED)` after installing Aegon to a prefix. Copy the pattern they use:
+
+    ```cmake
+    cmake_minimum_required(VERSION 3.20)
+    project(hello_aegon LANGUAGES CXX)
+    
+    set(CMAKE_CXX_STANDARD 23)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS OFF)
+    
+    find_package(Aegon REQUIRED)
+    
+    add_executable(hello_aegon main.cpp)
+    target_link_libraries(hello_aegon PRIVATE
+        Aegon::http
+        Aegon::core
+    )
+    ```
+
+    <Tip>
+      If Aegon is installed to a non-standard prefix, add it to `CMAKE_PREFIX_PATH` before calling `find_package`:
+
+      ```cmake
+      list(APPEND CMAKE_PREFIX_PATH "/path/to/aegon/install")
+      ```
+    </Tip>
+  </Step>
+  <Step title="Write main.cpp">
+    ```cpp
+    #include <aegon/http/Server.h>
+    #include <aegon/core/Task.h>
+    #include <glaze/glaze.hpp>
+    #include <iostream>
+    
+    using namespace aegon::http;
+    
+    struct Greeting {
+        std::string message = "Hello, World!";
+    };
+    
+    int main() {
+        Server server;
+    
+        // 1. Plaintext route
+        server.router().get("/plaintext", [](Context& ctx) {
+            ctx.res().text("Hello, World!");
+        });
+    
+        // 2. JSON route using Glaze compile-time serialization
+        server.router().get("/json", [](Context& ctx) {
+            Greeting g{.message = "Hello, World!"};
+            ctx.res().json(g);
+        });
+    
+        // 3. Dynamic route with a path parameter
+        server.router().get("/users/:id", [](Context& ctx) {
+            auto id = ctx.req().param("id");
+            if (!id) {
+                ctx.res().status(400).text("Missing id parameter");
+                return;
+            }
+            ctx.res().json(std::string(*id));
+        });
+    
+        server.listen(8080);
+        std::cout << "Aegon listening on http://0.0.0.0:8080" << std::endl;
+        server.run();
+        return 0;
+    }
+    ```
+  </Step>
+  <Step title="Build">
+    ```bash
+    cmake -B build -G Ninja
+    cmake --build build
+    ```
+  </Step>
+  <Step title="Run and test">
+    Start the server in one terminal:
+
+    ```bash
+    ./build/hello_aegon
+    ```
+
+    In another terminal, send requests with `curl`:
+
+    ```bash
+    curl http://localhost:8080/plaintext
+    # -> Hello, World!
+    
+    curl http://localhost:8080/json
+    # -> {"message":"Hello, World!"}
+    
+    curl http://localhost:8080/users/42
+    # -> "42"
+    ```
+  </Step>
+</Steps>
+
+## How find_package works
+
+Aegon installs a CMake package config that other projects can consume with `find_package(Aegon)`. The installed package is generated from `cmake/AegonConfig.cmake.in` and `cmake/InstallAndExport.cmake` in the Aegon repo.
+
+When you run `cmake --install` on Aegon, the install step does the following:
+
+1. Installs all active library targets (`aegon_log`, `aegon_core`, `aegon_config`, `aegon_redis`, `aegon_memory`, `aegon_orm`, `aegon_http`) with export name `AegonTargets` and namespace `Aegon::`.
+2. Copies all public headers from `src/` into `<prefix>/include/aegon/`.
+3. Generates `AegonConfig.cmake` from the template, which calls `find_dependency` for Threads, glaze, PostgreSQL, SQLite3, OpenSSL, and libdeflate.
+4. Writes `AegonConfigVersion.cmake` with `SameMajorVersion` compatibility.
+
+After installation, consuming projects only need:
+
+```cmake
+find_package(Aegon REQUIRED)
+target_link_libraries(my_app PRIVATE Aegon::http Aegon::core)
+```
+
+The headers are then available under `<aegon/...>` because the install includes `src/` as `include/aegon/`.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="HTTP server" icon="server" href="/http/server">
+    Learn about TLS, HTTP/3, listeners, and server configuration.
+  </Card>
+
+  <Card title="Routing" icon="route" href="/http/routing">
+    Explore route groups, middleware chains, and static file serving.
+  </Card>
+</CardGroup>

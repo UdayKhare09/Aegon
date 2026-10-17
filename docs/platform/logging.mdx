@@ -1,0 +1,163 @@
+---
+title: "Logging"
+description: "Structured, level-filtered, and asynchronous logging with multiple sinks for Aegon applications."
+keywords:
+  - "logging"
+  - "logger"
+  - "sink"
+  - "async"
+  - "trace"
+  - "debug"
+  - "aegon"
+---
+
+Aegon provides a C++23 logging subsystem in the `aegon::log` namespace. It supports compile-time format string validation, automatic source location capture, multiple sinks, and optional asynchronous dispatch with a dedicated background thread.
+
+## Quick start
+
+The logger initializes lazily on first use with a default `ConsoleSink` and `Level::Info`. You can also initialize it explicitly.
+
+```cpp
+#include "log/Logger.h"
+
+aegon::log::init({
+    .level = aegon::log::Level::Debug,
+    .async = false,
+    .flush_interval_ms = 10,
+    .max_queue_size = 65536
+});
+
+aegon::log::info("Server starting on port {}", 8080);
+```
+
+## Log levels
+
+The `Level` enum defines seven severity levels. Messages below the current minimum level are discarded at the call site.
+
+| Level | Numeric value | String |
+| --- | --- | --- |
+| Trace | 0 | `TRACE` |
+| Debug | 1 | `DEBUG` |
+| Info | 2 | `INFO` |
+| Warn | 3 | `WARN` |
+| Error | 4 | `ERROR` |
+| Fatal | 5 | `FATAL` |
+| Off | 6 | `OFF` |
+
+Change the active level at runtime:
+
+```cpp
+aegon::log::set_level(aegon::log::Level::Warn);
+```
+
+## Sinks
+
+A sink is a destination for log records. Aegon provides three built-in sinks.
+
+### ConsoleSink
+
+Outputs colored, human-readable logs to stdout or stderr. Colors are enabled automatically when stdout is a TTY.
+
+```cpp
+aegon::log::ConsoleSinkConfig cfg{
+    .color_mode = aegon::log::ColorMode::Auto,
+    .show_location = true,
+    .show_thread_id = false,
+    .stderr_for_errors = false
+};
+aegon::log::add_sink(std::make_shared<aegon::log::ConsoleSink>(cfg));
+```
+
+### FileSink
+
+Appends logs to a file with configurable path and append mode.
+
+```cpp
+auto sink = std::make_shared<aegon::log::FileSink>(
+    aegon::log::FileSinkConfig{
+        .path = "server.log",
+        .append = true,
+        .show_location = true,
+        .show_thread_id = false
+    }
+);
+aegon::log::add_sink(sink);
+```
+
+### MemorySink
+
+Stores records in memory for testing and assertions. It is thread-safe and provides helper methods for inspection.
+
+```cpp
+auto mem = std::make_shared<aegon::log::MemorySink>();
+aegon::log::set_sinks({mem});
+
+aegon::log::warn("low memory");
+assert(mem->contains("low memory"));
+assert(mem->records().front().level == aegon::log::Level::Warn);
+```
+
+## Format strings and plain strings
+
+Aegon supports `std::format`-style formatting with compile-time validation. The caller's `source_location` is captured automatically.
+
+```cpp
+aegon::log::info("Request {} took {} ms", req_id, elapsed);
+```
+
+For JSON, regex, or other strings that contain braces, use the plain-string overloads to avoid format parsing.
+
+```cpp
+aegon::log::info(R"({"user":"uday","id":10})");
+```
+
+## Asynchronous logging
+
+When `async` is enabled, records are pushed to a lock-free queue and flushed by a background worker at the configured interval. Error-level records trigger an immediate flush.
+
+```cpp
+aegon::log::init({
+    .level = aegon::log::Level::Info,
+    .async = true,
+    .flush_interval_ms = 5,
+    .max_queue_size = 65536
+});
+```
+
+The queue drops the oldest 25% of entries if it exceeds `max_queue_size`, preventing stalls under heavy load. Call `flush()` to force a synchronous drain, and `shutdown()` to stop the background thread and flush remaining records.
+
+## Macros
+
+Convenience macros are provided for projects that prefer macro-based logging.
+
+```cpp
+AEGON_LOG_INFO("Server ready");
+AEGON_LOG_WARN("Retrying connection {} of {}", attempt, max_retries);
+AEGON_LOG_ERROR("Database connection failed: {}", ec.message());
+```
+
+## Log record structure
+
+Each `Record` contains:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `timestamp` | `std::chrono::system_clock::time_point` | Time of emission |
+| `level` | `Level` | Severity |
+| `message` | `std::string` | Formatted message |
+| `location` | `std::source_location` | Call site file, line, and function |
+| `thread_id` | `uint64_t` | OS thread identifier |
+
+`file_basename()` returns only the filename portion of `location.file_name()`.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="sliders" href="/platform/configuration">
+    Load log levels and sink settings from YAML or environment variables.
+  </Card>
+
+  <Card title="I/O engines" icon="bolt" href="/platform/io-engines">
+    Understand the thread-per-core runtime that runs your log worker.
+  </Card>
+</CardGroup>

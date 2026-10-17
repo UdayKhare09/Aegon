@@ -1,0 +1,195 @@
+---
+title: "Validation and errors"
+description: "Validate DTOs with compile-time rules, return RFC 7807 Problem Details, and handle unhandled exceptions in Aegon."
+keywords:
+  - "validation"
+  - "DTO"
+  - "ProblemDetails"
+  - "RFC 7807"
+  - "422"
+  - "error handling"
+---
+
+Aegon combines compile-time DTO validation with automatic RFC 7807 error responses. When validation fails or an unhandled exception escapes a handler, the framework returns a structured JSON body that clients can parse reliably.
+
+## DTO validation
+
+Define a `validate` method on your DTO struct. The `ValidationRules` fluent API lets you declare constraints per field.
+
+```cpp
+#include "data/validation/Validator.h"
+
+using namespace aegon::validation;
+
+struct CreateUserDTO {
+    std::string username;
+    std::string email;
+    int age{0};
+
+    void validate(ValidationRules& v) const {
+        v.field("username", username).required().min_len(3).max_len(30);
+        v.field("email", email).required().email();
+        v.field("age", age).min(18).max(120);
+    }
+};
+```
+
+### Validation rules
+
+| Rule | Applies to | Behavior |
+| --- | --- | --- |
+| `required()` | `std::string`, `std::vector`, `std::optional` | Fails if empty or null. |
+| `min_len(n)` | `std::string`, `std::string_view` | Fails if shorter than n. |
+| `max_len(n)` | `std::string`, `std::string_view` | Fails if longer than n. |
+| `email()` | `std::string`, `std::string_view` | Fails if missing `@` or valid domain. |
+| `min(v)` | Arithmetic types | Fails if value is less than v. |
+| `max(v)` | Arithmetic types | Fails if value is greater than v. |
+| `positive()` | Arithmetic types | Fails if value is zero or negative. |
+| `custom(pred, msg)` | Any type | Fails if predicate returns false. |
+| `not_nil(msg)` | Types with `is_nil()` | Fails if `is_nil()` is true. |
+
+### Nested and collection validation
+
+Validate nested DTOs and arrays with prefix-qualified field names.
+
+```cpp
+struct AddressDTO {
+    std::string street;
+    std::string city;
+    void validate(ValidationRules& v) const {
+        v.field("street", street).required();
+        v.field("city", city).required();
+    }
+};
+
+struct CreateUserDTO {
+    std::string username;
+    AddressDTO address;
+    std::vector<AddressDTO> backup_addresses;
+
+    void validate(ValidationRules& v) const {
+        v.field("username", username).required().min_len(3);
+        v.nested("address", address);
+        v.nested_each("backup_addresses", backup_addresses);
+    }
+};
+```
+
+Violations in nested objects are reported as `address.street`, `backup_addresses[0].city`, and so on.
+
+## Automatic binding and validation
+
+`Context` provides binders that parse the request, validate the DTO, and automatically write a `400 Bad Request` or `422 Unprocessable Entity` response on failure.
+
+```cpp
+router.post("/users", [](Context& ctx) -> core::Task<void> {
+    auto dto = ctx.bind_json<CreateUserDTO>();
+    if (!dto) co_return;   // response already written
+
+    // dto->username, dto->email, dto->age are guaranteed valid
+    ctx.res().status(StatusCode::Created).json("{}");
+    co_return;
+});
+```
+
+Available binders:
+
+| Method | Source | Failure response |
+| --- | --- | --- |
+| `bind_json<T>()` | JSON body | 400 Bad Request (parse) or 422 (validation) |
+| `bind_query<T>()` | Query string | 400 or 422 |
+| `bind_path<T>()` | Route parameters | 400 or 422 |
+| `bind_form<T>()` | URL-encoded body | 400 or 422 |
+
+## Problem details
+
+When validation fails, Aegon returns an RFC 7807 `application/problem+json` response.
+
+```json
+{
+  "status": 422,
+  "error": "Unprocessable Entity",
+  "message": "Validation failed",
+  "violations": {
+    "username": "Length must be at least 3",
+    "email": "Must be a valid email address",
+    "age": "Value must be at least 18"
+  }
+}
+```
+
+You can also emit Problem Details manually from any handler:
+
+```cpp
+ctx.problem(StatusCode::Forbidden, "Access denied", "You do not have permission to modify this resource");
+```
+
+This sets the status code, `Content-Type: application/problem+json`, and serializes the standard `type`, `title`, `status`, `detail`, and `instance` fields.
+
+## Error handling
+
+### Default behavior
+
+Unhandled exceptions in route handlers are caught by the router and converted to `500 Internal Server Error` with RFC 7807 Problem Details. The exception `what()` string is included in the detail field.
+
+### Custom error handler
+
+Set a router-level error handler to map exceptions to specific status codes.
+
+```cpp
+router.set_error_handler([](Context& ctx, std::exception_ptr ex) -> core::Task<void> {
+    try {
+        if (ex) std::rethrow_exception(ex);
+    } catch (const DomainConflictException& e) {
+        ctx.problem(StatusCode::Conflict, "Conflict", e.what());
+    } catch (const std::exception& e) {
+        ctx.problem(StatusCode::InternalServerError, "Server Error", e.what());
+    }
+    co_return;
+});
+```
+
+### 404 and 405 handlers
+
+Override the default Not Found and Method Not Allowed responses:
+
+```cpp
+router.set_not_found_handler([](Context& ctx) {
+    ctx.problem(StatusCode::NotFound, "Not Found", "The requested resource does not exist");
+});
+
+router.set_method_not_allowed_handler([](Context& ctx) {
+    ctx.problem(StatusCode::MethodNotAllowed, "Method Not Allowed", "This endpoint does not support the requested method");
+});
+```
+
+## Startup error handling
+
+Invalid server configuration throws `std::runtime_error` before the event loop starts.
+
+```cpp
+Server server;
+try {
+    server.listen(0);  // invalid port
+} catch (const std::runtime_error& e) {
+    // "port must be greater than 0"
+}
+
+try {
+    server.enable_tls("/missing/cert.pem", "/missing/key.pem");
+} catch (const std::runtime_error& e) {
+    // "Server TLS configuration error"
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Request and response" icon="arrow-left-right" href="/http/request-response">
+    Read request data and build responses.
+  </Card>
+
+  <Card title="Middleware" icon="shield" href="/http/middleware">
+    Add logging, compression, CORS, and security headers.
+  </Card>
+</CardGroup>

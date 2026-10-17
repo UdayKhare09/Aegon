@@ -1,0 +1,259 @@
+---
+title: "SQL ORM"
+sidebarTitle: "ORM"
+description: "Define tables with compile-time C++ reflection, query with type-safe builders, and hydrate rows automatically using Aegon's SQL ORM."
+keywords:
+  - "aegon orm"
+  - "sql orm"
+  - "c++ orm"
+  - "tabledef"
+  - "query builder"
+  - "postgres"
+  - "sqlite"
+---
+
+Aegon's SQL ORM maps plain C++ structs to database tables using compile-time member-pointer reflection. You define schemas with a fluent `TableDef` API, then query with type-safe `SelectBuilder`, `UpdateBuilder`, and `DeleteBuilder` objects that generate parameterized SQL for PostgreSQL and SQLite. No macros, no code generation, and no external DSL.
+
+## Defining a table
+
+A table definition is a static member function called `schema()` that returns a `TableDef<Entity>`. Use member pointers to bind fields to columns. The ORM automatically derives SQL types from C++ types through `TypeMapper` specializations.
+
+```cpp
+#include <aegon/data/orm/sql/Sql.h>
+using namespace aegon::data::orm::sql;
+
+struct User {
+    int64_t id{0};
+    std::string email;
+    std::string username;
+    std::optional<std::string> bio;
+    aegon::data::types::Decimal128 balance{0};
+    aegon::data::types::DateTime created_at;
+
+    static auto schema() {
+        return table<User>("users")
+            .id(&User::id)
+            .column(&User::email, "email").unique().length(255)
+            .column(&User::username, "username").indexed().length(50)
+            .column(&User::bio, "bio")
+            .column(&User::balance, "balance").default_value("0.0000")
+            .created_at(&User::created_at);
+    }
+};
+```
+
+### Column options
+
+Chain these modifiers immediately after `column()` or `id()` to configure the current column.
+
+| Modifier | Effect |
+| --- | --- |
+| `unique(bool)` | Adds a unique constraint |
+| `indexed(bool)` | Adds a non-unique index |
+| `length(n)` | Sets `VARCHAR(n)` for strings |
+| `default_value(v)` | Sets a SQL default |
+| `nullable(bool)` | Allows or disallows NULL |
+| `not_null()` | Same as `nullable(false)` |
+| `references<T>(&T::fk)` | Adds a foreign key |
+| `on_delete_cascade()` | Cascades deletes on the FK |
+| `on_delete_set_null()` | Sets FK to NULL on delete |
+| `on_delete_restrict()` | Restricts deletes on the FK |
+| `on_update_cascade()` | Cascades updates on the FK |
+
+### Supported C++ to SQL type mappings
+
+The `TypeMapper` system handles primitives, Aegon foundational types, enums, and `std::optional` wrappers.
+
+| C++ type | PostgreSQL | SQLite |
+| --- | --- | --- |
+| `bool` | `BOOLEAN` | `INTEGER` |
+| `int8_t` / `uint8_t` | `SMALLINT` | `INTEGER` |
+| `int16_t` / `uint16_t` | `SMALLINT` | `INTEGER` |
+| `int32_t` | `INTEGER` | `INTEGER` |
+| `uint32_t` | `BIGINT` | `INTEGER` |
+| `int64_t` | `BIGINT` | `INTEGER` |
+| `uint64_t` | `NUMERIC(20,0)` | `INTEGER` |
+| `float` | `REAL` | `REAL` |
+| `double` | `DOUBLE PRECISION` | `REAL` |
+| `std::string` | `TEXT` / `VARCHAR(n)` | `TEXT` |
+| `UUID` | `UUID` | `TEXT` |
+| `DateTime` | `TIMESTAMPTZ` | `TEXT` |
+| `Date` | `DATE` | `TEXT` |
+| `Time` | `TIME` | `TEXT` |
+| `Decimal<P,S>` | `NUMERIC(P,S)` | `NUMERIC` |
+| `Json` | `JSONB` | `TEXT` |
+| `IpAddress` | `INET` | `TEXT` |
+| `MacAddress` | `MACADDR` | `TEXT` |
+| `Blob` | `BYTEA` | `BLOB` |
+| `Hash256` | `BYTEA` | `BLOB` |
+| `enum T` | Underlying integer type | Underlying integer type |
+| `std::optional<T>` | `T` (nullable) | `T` (nullable) |
+
+## Query builders
+
+All builders are immutable by chaining and compile parameterized SQL. They share a `WhereClauseBuilder` CRTP base, so `where`, `and_where`, `or_where`, `where_in`, `where_between`, `where_null`, and `where_like` work identically across `SelectBuilder`, `UpdateBuilder`, and `DeleteBuilder`.
+
+### Select
+
+```cpp
+auto q = from<User>()
+    .where(&User::email, Op::Eq, "alice@aegon.dev")
+    .and_where(&User::balance, Op::Gte, 100.50)
+    .order_by(&User::created_at, SortOrder::Desc)
+    .limit(10)
+    .offset(20);
+
+auto result = q.to_sql(DatabaseDialect::PostgreSQL);
+// result.sql  -> parameterized SELECT
+// result.params -> ordered SqlParam values
+```
+
+### Update
+
+```cpp
+auto up = update<User>()
+    .set(&User::bio, "Updated Bio")
+    .set(&User::balance, aegon::data::types::Decimal128::from_string("2000.0000").value())
+    .where(&User::id, Op::Eq, user_id);
+```
+
+### Delete
+
+```cpp
+auto del = delete_from<User>()
+    .where(&User::id, Op::Eq, user_id);
+```
+
+### Where operators
+
+| Method | Operator |
+| --- | --- |
+| `where(field, Op::Eq, val)` | `=` |
+| `where(field, Op::Neq, val)` | `!=` |
+| `where(field, Op::Gt, val)` | `>` |
+| `where(field, Op::Gte, val)` | `>=` |
+| `where(field, Op::Lt, val)` | `<` |
+| `where(field, Op::Lte, val)` | `<=` |
+| `where_like(field, pattern)` | `LIKE` |
+| `where_not_like(field, pattern)` | `NOT LIKE` |
+| `where_in(field, container)` | `IN (...)` |
+| `where_not_in(field, container)` | `NOT IN (...)` |
+| `where_between(field, low, high)` | `BETWEEN` |
+| `where_null(field)` | `IS NULL` |
+| `where_not_null(field)` | `IS NOT NULL` |
+
+Empty `where_in` compiles to `1 = 0`; empty `where_not_in` compiles to `1 = 1`.
+
+## SqlDatabaseClient
+
+`SqlDatabaseClient` is the main entry point for executing queries. It wraps a `PerCoreConnectionPool` and supports primary/replica splitting with round-robin reads.
+
+```cpp
+auto pool = aegon::data::orm::sql::drivers::create_postgres_pool(
+    "host=127.0.0.1 port=5432 dbname=mydb user=postgres password=secret",
+    /*pool_per_core=*/ 8,
+    /*pipelined=*/ true
+);
+
+SqlDatabaseClient db(*pool);
+```
+
+### CRUD operations
+
+```cpp
+// Insert and assign generated key
+User u{.email = "new@aegon.dev", .username = "newuser"};
+co_await db.insert_get_id(u);   // u.id is populated
+
+// Find by primary key
+auto opt = co_await db.find_by_id<User>(42);
+
+// Fetch with builder
+auto users = co_await db.fetch_all(
+    db.from<User>()
+      .where(&User::balance, Op::Gte, 100)
+      .limit(50)
+);
+
+// Update by PK
+size_t n = co_await db.update_entity(u);
+
+// Delete by PK
+bool deleted = co_await db.delete_by_id<User>(u.id);
+```
+
+### Aggregate and pagination helpers
+
+```cpp
+uint64_t total = co_await db.count(db.from<User>());
+auto sum_balance = co_await db.sum(db.from<User>(), &User::balance);
+auto avg_balance = co_await db.avg(db.from<User>(), &User::balance);
+auto page = co_await db.paginate(db.from<User>().order_by(&User::id), 1, 20);
+// page.items, page.total_items, page.total_pages, page.has_next
+```
+
+### Read replica splitting
+
+Pass replica pools to the constructor. Writes always hit the primary; reads round-robin across replicas.
+
+```cpp
+SqlDatabaseClient db(primary_pool, {replica1_pool, replica2_pool});
+// db.insert(u)        -> primary
+// db.fetch_all(q)     -> round-robins across replica1 and replica2
+```
+
+## Connection pool
+
+`PerCoreConnectionPool` maintains a thread-local pool of connections per core to avoid cross-thread contention. It reuses idle connections and respects a per-core capacity limit.
+
+```cpp
+PerCoreConnectionPool pool(factory, /*capacity=*/ 16, /*pipelined=*/ false);
+{
+    auto guard = pool.acquire();
+    // use guard->execute(...) or guard->query(...)
+} // connection returned to the idle pool
+```
+
+## Schema generation
+
+Generate DDL from any entity schema at runtime. The dialect is detected automatically from the primary pool.
+
+```cpp
+// Generate DDL for one entity
+std::string ddl = generate_ddl<User>(DatabaseDialect::PostgreSQL);
+
+// Auto-migrate all entity tables
+co_await db.sync_schema<User, Order, Product>();
+```
+
+`generate_ddl` produces `CREATE TABLE` with columns, primary keys, foreign keys, unique constraints, and indexes. `generate_indexes` returns additional `CREATE INDEX` statements. `generate_drop_table` produces the corresponding `DROP TABLE`.
+
+## Configuration
+
+Use `SqlConfig` with designated initializers, then pass it to the server or pool factory.
+
+```cpp
+SqlConfig cfg{
+    .dialect = DatabaseDialect::PostgreSQL,
+    .host = "127.0.0.1",
+    .port = 5432,
+    .database = "mydb",
+    .user = "postgres",
+    .password = "secret",
+    .pool_per_core = 8
+};
+```
+
+For SQLite, only `dialect` and `database` (the file path) are required. Use `:memory:` for an in-memory database.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Relations and transactions" icon="link" href="/data/orm-relations-transactions">
+    Configure HasOne, HasMany, eager loading, and atomic transactions with optimistic locking.
+  </Card>
+
+  <Card title="ORM cache" icon="bolt" href="/data/orm-cache">
+    Enable per-entity and query-result caching with automatic invalidation.
+  </Card>
+</CardGroup>

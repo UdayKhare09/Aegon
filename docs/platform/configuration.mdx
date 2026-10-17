@@ -1,0 +1,148 @@
+---
+title: "Configuration"
+description: "Load, layer, and validate typed configuration from YAML, .env files, environment variables, and CLI flags using aegon::config."
+keywords:
+  - "config"
+  - "yaml"
+  - "env"
+  - "dotenv"
+  - "cli"
+  - "12-factor"
+  - "aegon"
+---
+
+Aegon provides a layered, 12-factor configuration system in the `aegon::config` namespace. You can load typed structs from YAML files, expand environment variables, import `.env` files, map prefixed environment variables, and override values with CLI flags. All sources compose through a single fluent `ConfigBuilder`.
+
+## Quick start
+
+The simplest way to load configuration is through the `Config` facade. Define a plain struct with default values, then load a YAML file or string directly into it.
+
+```cpp
+#include "config/Config.h"
+
+struct ServerConfig {
+    std::string host = "localhost";
+    int port = 8080;
+    bool tls = false;
+};
+
+struct AppConfig {
+    std::string app_name = "default_app";
+    ServerConfig server;
+};
+
+auto res = aegon::config::Config::load<AppConfig>("config.yaml");
+if (res) {
+    auto& cfg = *res;
+    // cfg.server.port == 8080 if not overridden
+}
+```
+
+If loading fails, `res` contains a `ConfigError` with the file path, line, column, and message.
+
+## Layered configuration with ConfigBuilder
+
+For production services, use `ConfigBuilder` to stack multiple sources. Later layers override earlier ones.
+
+```cpp
+auto res = aegon::config::Config::builder<AppConfig>()
+    .add_file("base.yaml")           // Layer 1: defaults
+    .add_file("override.yaml")       // Layer 2: environment-specific
+    .add_dotenv_file(".env")         // Layer 3: .env variables
+    .add_env_prefix("AEGON__")       // Layer 4: prefixed env vars
+    .add_cli_args(argc, argv)        // Layer 5: CLI flags
+    .build();
+```
+
+Precedence order (highest wins):
+
+1. CLI flags (`--server.port=9090`)
+2. Prefixed environment variables (`AEGON__SERVER__PORT=9090`)
+3. `.env` file and manual `add_env` overrides
+4. Override YAML files
+5. Base YAML files
+6. Struct field defaults
+
+## Environment variable expansion
+
+YAML values can reference environment variables with `${VAR:default}` syntax. If the variable is missing and no default is provided, `build()` returns a `ConfigError`.
+
+```yaml
+server:
+  port: ${SERVER_PORT:8080}
+database:
+  url: ${DATABASE_URL}
+```
+
+To escape a literal `${`, prefix it with a backslash: `\${NOT_EXPANDED}`.
+
+Expansion is enabled by default. You can disable it with `.expand_env_vars(false)`.
+
+## Prefixed environment mapping
+
+`add_env_prefix` scans all environment variables matching the prefix and maps double-underscore separators to nested YAML keys. For example:
+
+| Environment variable | Maps to |
+| --- | --- |
+| `AEGON__SERVER__PORT` | `server.port` |
+| `AEGON__APP_NAME` | `app_name` |
+| `AEGON__DATABASE__MAX_CONNECTIONS` | `database.max_connections` |
+
+## CLI flag overrides
+
+CLI arguments in the form `--key=value` are parsed and mapped to struct fields. Both dots and double underscores act as segment separators.
+
+```bash
+./myapp --server.port=9090 --server.tls=true --app_name=prod
+```
+
+You can pass arguments as `argc`/`argv` or as a `std::vector<std::string>`.
+
+## DotEnv support
+
+Load a `.env` file without polluting the process environment:
+
+```cpp
+builder.add_dotenv_file(".env", /*optional=*/true);
+```
+
+`DotEnv::parse` handles comments, quoted values, inline comments, trailing spaces, and `export` prefixes.
+
+## Error handling
+
+All builder methods return `std::expected<T, ConfigError>`. `ConfigError` provides `message`, `file_path`, `line`, and `column`.
+
+```cpp
+auto res = aegon::config::Config::load<AppConfig>("missing.yaml");
+if (!res) {
+    std::cerr << res.error().to_string() << "\n";
+}
+```
+
+Missing optional files are silently skipped. Missing mandatory files produce an error with `"not found"` in the message.
+
+## Integration with the HTTP server
+
+Configuration structs are commonly injected into the service registry so handlers can access them via the request context.
+
+```cpp
+auto cfg = aegon::config::Config::load<AppConfig>("app.yaml");
+if (!cfg) { /* handle error */ }
+
+aegon::http::Server server;
+server.provide(std::make_shared<AppConfig>(*cfg));
+```
+
+Handlers then retrieve the config with `ctx.service<AppConfig>()`.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Logging" icon="file-lines" href="/platform/logging">
+    Configure structured, async logging for your application.
+  </Card>
+
+  <Card title="I/O engines" icon="bolt" href="/platform/io-engines">
+    Learn how Aegon maps configuration to io_uring, epoll, or IOCP backends.
+  </Card>
+</CardGroup>
