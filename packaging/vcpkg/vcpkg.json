@@ -12,7 +12,6 @@
     "nghttp2",
     "ngtcp2",
     "nghttp3",
-    "libdeflate",
-    "glaze"
+    "libdeflate"
   ]
 }
