@@ -1,6 +1,10 @@
-# Aegon
+<p align="center">
+  <img src="name_logo.svg" alt="AEGON" width="460">
+</p>
 
-**High-Performance C++23 Asynchronous Web & Data Framework**
+<p align="center">
+  <strong>High-Performance C++23 Asynchronous Web &amp; Data Framework</strong>
+</p>
 
 [![C++ Standard](https://img.shields.io/badge/C%2B%2B-23%2F26-blue.svg)](https://en.cppreference.com/w/cpp/23)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -87,6 +91,7 @@ int main() {
 All results are produced by the independent [HttpArena](https://http-arena.com) benchmark platform under identical, scientifically controlled conditions.
 
 ### Reference Hardware & Topology
+
 - **Host OS**: Linux (Ubuntu 24.04 / 25.04, kernel ≥ 6.1)
 - **Container Environment**: Docker container running Arch Linux (`archlinux:latest`, GCC 14)
 - **CPU**: **AMD Ryzen Threadripper PRO 3995WX** (64 Physical Cores, 128 SMT Threads, Zen 2, 2.7 GHz base / 4.2 GHz boost, 280W TDP)
@@ -144,7 +149,8 @@ Unlike peak-throughput tests, **HttpArena Latency profiles** fix the offered loa
 | **`latency-10k`** (Idle Overhead) | 10,000 req/s | 9,980 req/s (99.8%) | **30.44 µs / req** | 29% | **70 µs** | **98 µs** | **80.0 (#11 of 82)** |
 | **`latency-500k-8cpu`** (CPU Cap) | 500,000 req/s | 483,013 req/s (96.6%) | **16.36 µs / req** | 814% | **294 ms** | **2,255 ms** | **44.5 (#1 of 80)** |
 
-#### Key Takeaways:
+#### Key Takeaways
+
 - **`latency-1m` (#1 Overall)**: At 1 Million requests/sec, Aegon spent only **14.9 µs of CPU per request** (beating Swerver at 22.9 µs, Actix-web at 24.9 µs, Drogon at 32.1 µs, and Fiber at 38.3 µs), keeping p99 latency at a sub-millisecond **170 µs**.
 - **`latency-10k`**: Measures the idle standing cost of the framework when nearly unloaded. Aegon consumes just **29% of a single core** across 1,024 open idle connections, maintaining a **70 µs mean latency**.
 - **`latency-500k-8cpu` (#1 Overall)**: Measures behavior under severe CPU constraints (server restricted to 4 physical cores / 8 SMT threads). While other frameworks saw their throughput collapse to 70–88% rate delivery, Aegon held **96.6%** rate at **16.4 µs/req**.
@@ -154,15 +160,17 @@ Unlike peak-throughput tests, **HttpArena Latency profiles** fix the offered loa
 ## Prerequisites & Dependencies
 
 ### Toolchain Requirements
+
 - **C++ Compiler**: GCC 13+, Clang 17+, or MSVC 2022 (v19.38+) with full C++23 coroutine support.
 - **Build System**: CMake 3.20+ and Ninja (recommended).
 
 ### Core Libraries
+
 | Component | Library | Purpose |
 | :--- | :--- | :--- |
 | **Serialization** | [Glaze](https://github.com/stephenberry/glaze) | Compile-time reflection and ultra-fast JSON serialization |
 | **Cryptography** | OpenSSL (>= 3.0) | TLS 1.3, ALPN negotiation, and cryptographic primitives |
-| **Async I/O (Linux)**| `liburing` | High-efficiency Linux `io_uring` system call interface |
+| **Async I/O (Linux)** | `liburing` | High-efficiency Linux `io_uring` system call interface |
 | **HTTP/2** | `nghttp2` | RFC 7540 frame parsing and HPACK compression |
 | **HTTP/3 & QUIC** | `ngtcp2` & `nghttp3` | RFC 9000 QUIC transport and RFC 9114 HTTP/3 handling |
 | **Compression** | `libdeflate` | Whole-buffer deflate / gzip compression |
@@ -173,12 +181,14 @@ Unlike peak-throughput tests, **HttpArena Latency profiles** fix the offered loa
 ## Building & Installation
 
 ### 1. Clone the Repository
+
 ```bash
 git clone https://github.com/your-org/aegon.git
 cd aegon
 ```
 
 ### 2. Configure with CMake
+
 ```bash
 cmake -B build -S . \
     -DCMAKE_BUILD_TYPE=Release \
@@ -187,6 +197,7 @@ cmake -B build -S . \
 ```
 
 #### Build Configuration Flags
+
 | Flag | Default | Description |
 | :--- | :---: | :--- |
 | `AEGON_BUILD_TESTS` | `ON` | Build the comprehensive CTest test suite |
@@ -194,17 +205,20 @@ cmake -B build -S . \
 | `AEGON_BUILD_BENCHMARKS` | `ON` | Build the unified performance benchmarking suite |
 
 ### 3. Compile the Framework
+
 ```bash
 cmake --build build -j$(nproc)
 ```
 
 ### 4. Run Test Suite
+
 ```bash
 docker compose -f docker-compose.test.yml up -d # for live Redis and Postgres tests
 ctest --test-dir build --output-on-failure
 ```
 
 ### 5. Install System-Wide (Optional)
+
 ```bash
 sudo cmake --install build
 ```
