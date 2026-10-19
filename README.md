@@ -183,7 +183,7 @@ Unlike peak-throughput tests, **HttpArena Latency profiles** fix the offered loa
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-org/aegon.git
+git clone https://github.com/UdayKhare09/Aegon.git
 cd aegon
 ```
 
