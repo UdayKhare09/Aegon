@@ -95,6 +95,8 @@ core::os_socket_t Server::create_listen_socket(uint16_t port, const std::string&
     core::init_sockets();
 #if defined(_WIN32)
     core::os_socket_t fd = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+#elif defined(SOCK_CLOEXEC)
+    core::os_socket_t fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
 #else
     core::os_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
 #endif

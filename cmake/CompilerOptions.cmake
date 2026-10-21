@@ -7,6 +7,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
+# Fast compiler caching (ccache)
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "[Build Speed] ccache detected and enabled: ${CCACHE_PROGRAM}")
+endif()
+
 if(MSVC)
     add_compile_options(
         /std:c++latest
@@ -30,4 +37,17 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wno-missing-field-initializers
         -Wno-missing-braces
     )
+
+    # Ultra-fast modern linker (mold / lld)
+    find_program(MOLD_LINKER mold)
+    if(MOLD_LINKER)
+        add_link_options("-fuse-ld=mold")
+        message(STATUS "[Build Speed] Ultra-fast linker detected: mold (${MOLD_LINKER})")
+    else()
+        find_program(LLD_LINKER lld)
+        if(LLD_LINKER)
+            add_link_options("-fuse-ld=lld")
+            message(STATUS "[Build Speed] Fast linker detected: lld (${LLD_LINKER})")
+        endif()
+    endif()
 endif()

@@ -83,6 +83,17 @@ else()
     )
 endif()
 
+target_precompile_headers(aegon_core PRIVATE
+    <vector>
+    <string>
+    <string_view>
+    <span>
+    <memory>
+    <optional>
+    <chrono>
+    <coroutine>
+)
+
 # 2. Configuration System (aegon_config)
 if(TARGET glaze::glaze)
     add_library(aegon_config
@@ -182,6 +193,22 @@ target_link_libraries(aegon_http PUBLIC
 if(WIN32)
     target_link_libraries(aegon_http PUBLIC ws2_32)
 endif()
+
+target_precompile_headers(aegon_http PRIVATE
+    <vector>
+    <string>
+    <string_view>
+    <span>
+    <memory>
+    <optional>
+    <chrono>
+    <array>
+    <unordered_map>
+    <functional>
+    <glaze/glaze.hpp>
+    <openssl/ssl.h>
+    <openssl/crypto.h>
+)
 
 # ==============================================================================
 # Include Directories, Aliases & Export Names

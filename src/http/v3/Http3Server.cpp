@@ -26,6 +26,8 @@ bool Http3Server::start() {
         u_long mode = 1;
         ioctlsocket(udp_fd_, FIONBIO, &mode);
     }
+#elif defined(SOCK_CLOEXEC)
+    udp_fd_ = socket(AF_INET6, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 #else
     udp_fd_ = socket(AF_INET6, SOCK_DGRAM | SOCK_NONBLOCK, 0);
 #endif
@@ -62,6 +64,8 @@ bool Http3Server::start() {
             u_long mode = 1;
             ioctlsocket(udp_fd_, FIONBIO, &mode);
         }
+#elif defined(SOCK_CLOEXEC)
+        udp_fd_ = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 #else
         udp_fd_ = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
 #endif
@@ -110,7 +114,11 @@ void Http3Server::stop() noexcept {
 
     // Wake up io_uring recvmsg before closing socket
     if (port_ > 0) {
+#if defined(SOCK_CLOEXEC)
+        core::os_socket_t poke_fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+#else
         core::os_socket_t poke_fd = socket(AF_INET, SOCK_DGRAM, 0);
+#endif
         if (poke_fd != core::INVALID_OS_SOCKET) {
             sockaddr_in a{};
             a.sin_family = AF_INET;
