@@ -2,9 +2,7 @@
   "title": "Documentation",
   "pages": [
     "index",
-    "---Http Framework---",
     "http",
-    "---Services & Observability---",
     "services"
   ]
 }

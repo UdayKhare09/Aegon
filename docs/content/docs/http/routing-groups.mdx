@@ -14,7 +14,7 @@ It combines an **$O(1)$ static route map** (zero heap allocation lookup) with a 
 
 ## Handler Signatures
 
-Every route handler in Aegon accepts a reference to [`http::Context&`](file:///home/uday/Projects/Aegon/src/http/Context.h). Handlers can be written either asynchronously as C++23 coroutines returning `core::Task<void>` or synchronously returning `void`.
+Every route handler in Aegon accepts a reference to [`http::Context&`](/docs/http/context). Handlers can be written either asynchronously as C++23 coroutines returning `core::Task<void>` or synchronously returning `void`.
 
 <Tabs items={["Asynchronous Coroutine (Recommended)", "Synchronous In-Memory"]}>
   <Tab value="Asynchronous Coroutine (Recommended)">
@@ -45,7 +45,7 @@ server.router().get("/health", [](http::Context& ctx) {
 
 ## Registering HTTP Routes
 
-The [`http::Router`](file:///home/uday/Projects/Aegon/src/http/Router.h) class provides fluent helpers for all standard HTTP methods:
+The `http::Router` class provides fluent helpers for all standard HTTP methods:
 
 ```cpp
 #include <aegon/http/Router.h>
@@ -149,7 +149,7 @@ router.get("/assets/*filepath", [](http::Context& ctx) {
 
 ## Route Groups & API Versioning
 
-[`http::RouteGroup`](file:///home/uday/Projects/Aegon/src/http/RouteGroup.h) allows organizing related endpoints under common URL prefixes and sharing middleware pipelines. Groups can be nested recursively:
+`http::RouteGroup` allows organizing related endpoints under common URL prefixes and sharing middleware pipelines. Groups can be nested recursively:
 
 ```cpp
 // Create an /api root group
@@ -176,7 +176,7 @@ v2.get("/users", [](http::Context& ctx) {
 
 ### RouteGroup Capabilities
 
-`RouteGroup` inherits the uniform HTTP registration API from [`RouteRegistrar`](file:///home/uday/Projects/Aegon/src/http/RouteRegistrar.h):
+`RouteGroup` inherits the uniform HTTP registration API from `RouteRegistrar`:
 
 - `group.get(path, handler)`
 - `group.post(path, handler)`
@@ -251,7 +251,7 @@ Inbound HTTP Request
 
 ## SIMD Vectorized Path Matching
 
-Header file: [`<aegon/http/SimdRouter.h>`](file:///home/uday/Projects/Aegon/src/http/SimdRouter.h)
+Header: `<aegon/http/SimdRouter.h>`
 
 For extreme URL parsing throughput, Aegon includes vectorized string scanning primitives in namespace `aegon::http::simd` utilizing AVX-512, AVX2, or SSE4.2 vector instructions with 64-bit XOR and scalar fallbacks:
 

@@ -6,7 +6,7 @@ description: Unified HTTP lifecycle context with automated compile-time DTO bind
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-The [`http::Context`](file:///home/uday/Projects/Aegon/src/http/Context.h) object (`aegon::http::Context&`) is passed by reference to every route handler. It encapsulates the complete lifecycle of a single HTTP request-response exchange:
+The `http::Context` object (`aegon::http::Context&`) is passed by reference to every route handler. It encapsulates the complete lifecycle of a single HTTP request-response exchange:
 
 1. **Inbound Data**: Accessing `ctx.req()`.
 2. **Outbound Data**: Fluent builder via `ctx.res()`.

@@ -7,7 +7,10 @@ const inter = Inter({
   subsets: ['latin'],
 });
 
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'https://udaykhare09.github.io/Aegon'),
   title: {
     template: '%s | AEGON',
     default: 'AEGON | High-Performance C++23 Framework',
@@ -15,7 +18,7 @@ export const metadata: Metadata = {
   description: 'High-Performance C++23 Asynchronous Web & Data Framework',
   icons: {
     icon: [
-      { url: '/a.svg', type: 'image/svg+xml' },
+      { url: `${basePath}/a.svg`, type: 'image/svg+xml' },
     ],
   },
 };

@@ -8,7 +8,7 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 Inside every route handler, the incoming HTTP request is accessible via `ctx.req()`.
 
-The [`http::Request`](file:///home/uday/Projects/Aegon/src/http/Request.h) object is architected for maximum efficiency: it provides zero-copy string views (`std::string_view`) directly into the underlying socket receive buffer, eliminating heap allocations for headers, path segments, and query parameters.
+The `http::Request` object is architected for maximum efficiency: it provides zero-copy string views (`std::string_view`) directly into the underlying socket receive buffer, eliminating heap allocations for headers, path segments, and query parameters.
 
 ---
 
@@ -119,7 +119,7 @@ router.get("/search", [](http::Context& ctx) {
 
 ## Reading Headers & `HeaderMap`
 
-Headers are stored in [`HeaderMap`](file:///home/uday/Projects/Aegon/src/http/HeaderMap.h), a small-vector structure holding up to 32 headers inline without heap allocations. Lookups are strictly **case-insensitive** (per RFC 9110) using SIMD comparisons.
+Headers are stored in `HeaderMap`, a small-vector structure holding up to 32 headers inline without heap allocations. Lookups are strictly **case-insensitive** (per RFC 9110) using SIMD comparisons.
 
 ### Lookups
 
@@ -235,7 +235,7 @@ router.post("/upload", [](http::Context& ctx) {
 
 ### The `FormFile` Object
 
-Each uploaded file in `multipart/form-data` is represented as a zero-copy [`FormFile`](file:///home/uday/Projects/Aegon/src/http/MultipartParser.h#L18):
+Each uploaded file in `multipart/form-data` is represented as a zero-copy `FormFile`:
 
 - `file.name` (`std::string_view`): Form field name (e.g. `"avatar"`).
 - `file.filename` (`std::string_view`): Client-provided filename (e.g. `"profile.png"`).

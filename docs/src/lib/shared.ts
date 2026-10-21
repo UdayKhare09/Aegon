@@ -5,6 +5,13 @@ export const docsRoute = '/docs';
 export const docsImageRoute = '/og/docs';
 export const docsContentRoute = '/llms.mdx/docs';
 
+export const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+
+export function assetPath(path: string): string {
+  const clean = path.startsWith('/') ? path : `/${path}`;
+  return `${basePath}${clean}`;
+}
+
 // fill this with your actual GitHub info, for example:
 export const gitConfig = {
   user: 'UdayKhare09',

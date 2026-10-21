@@ -6,7 +6,7 @@ description: Server lifecycle orchestration, multi-port TLS/QUIC listeners, unif
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-The [`http::Server`](file:///home/uday/Projects/Aegon/src/http/Server.h) class is the top-level orchestrator of an Aegon web application. It encapsulates network listeners, TLS/QUIC contexts, thread-per-core event loops, dependency injection, and asynchronous lifecycle hooks.
+The `http::Server` class is the top-level orchestrator of an Aegon web application. It encapsulates network listeners, TLS/QUIC contexts, thread-per-core event loops, dependency injection, and asynchronous lifecycle hooks.
 
 ---
 
@@ -108,7 +108,7 @@ Aegon performs fail-fast validation before binding sockets or spawning worker ev
 
 ## Unified Server Configuration (`ServerConfig`)
 
-Aegon centralizes all protocol constraints, kernel parameters, TCP socket options, HTTP/2 & HTTP/3 flow control, flood mitigations, and WebSocket tuning into the `ServerConfig` structure ([`<aegon/http/ServerConfig.h>`](file:///home/uday/Projects/Aegon/src/http/ServerConfig.h)).
+Aegon centralizes all protocol constraints, kernel parameters, TCP socket options, HTTP/2 & HTTP/3 flow control, flood mitigations, and WebSocket tuning into the `ServerConfig` structure (`<aegon/http/ServerConfig.h>`).
 
 Each `Server` instance maintains an isolated configuration, allowing multiple servers with completely independent limits to run concurrently in the same process without global state collision.
 

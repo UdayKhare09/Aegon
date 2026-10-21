@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { motion } from 'motion/react';
 import { ArrowRight, BookOpen, Terminal, Sparkles } from 'lucide-react';
 import { GithubIcon } from '@/components/icons/github';
+import { assetPath } from '@/lib/shared';
 
 export function CtaSection() {
   return (
@@ -18,7 +19,7 @@ export function CtaSection() {
         <div className="relative rounded-3xl p-8 sm:p-12 md:p-16 border border-amber-400/30 bg-gradient-to-b from-neutral-900/90 via-neutral-950/90 to-neutral-950/95 backdrop-blur-xl shadow-2xl text-center overflow-hidden">
           {/* Subtle Spartan decorative emblem in corner */}
           <div className="absolute top-0 right-0 w-64 h-64 -mr-16 -mt-16 opacity-5 pointer-events-none">
-            <img src="/logo.svg" alt="" className="w-full h-full object-contain" />
+            <img src={assetPath('/logo.svg')} alt="" className="w-full h-full object-contain" />
           </div>
 
           <motion.div

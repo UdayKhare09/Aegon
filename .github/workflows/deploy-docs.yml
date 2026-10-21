@@ -38,6 +38,7 @@ jobs:
         working-directory: docs
         env:
           BASE_PATH: /Aegon
+          NEXT_PUBLIC_BASE_PATH: /Aegon
         run: bun run build
 
       - name: Upload Pages artifact

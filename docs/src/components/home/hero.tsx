@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { motion } from 'motion/react';
 import { Terminal, Copy, Check, ArrowRight, Sparkles, Zap, Shield, Cpu } from 'lucide-react';
 import { GithubIcon } from '@/components/icons/github';
+import { assetPath } from '@/lib/shared';
 
 export function Hero() {
   const [copied, setCopied] = useState(false);
@@ -47,7 +48,7 @@ export function Hero() {
           className="flex justify-center mb-6"
         >
           <img
-            src="/logo.svg"
+            src={assetPath('/logo.svg')}
             alt="AEGON"
             className="h-20 sm:h-28 md:h-36 w-auto drop-shadow-[0_0_35px_rgba(255,223,102,0.3)] transition-transform duration-500 hover:scale-105"
           />
