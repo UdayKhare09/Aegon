@@ -21,11 +21,11 @@ Task<int> chained_coroutine() {
 
 int main() {
     std::cout << "=======================================================\n";
-    std::cout << "      AEGON ASYNC CORE & IO_URING TEST SUITE (C++26)   \n";
+    std::cout << "      AEGON ASYNC CORE & IO_URING TEST SUITE (C++23)   \n";
     std::cout << "=======================================================\n\n";
 
     // 1. Coroutine Task Test
-    std::cout << "[TEST 1] Testing C++26 coroutine Task symmetric transfer...\n";
+    std::cout << "[TEST 1] Testing C++23 coroutine Task symmetric transfer...\n";
     {
         auto task = chained_coroutine();
         // Run coroutine

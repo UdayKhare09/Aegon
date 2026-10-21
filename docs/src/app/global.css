@@ -1,0 +1,41 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/generated/spacious.css';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+:root {
+  --color-aegon-gold: #FFDF66;
+  --color-aegon-amber: #F59E0B;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* Custom background grid & glow patterns */
+.aegon-grid-pattern {
+  background-image: radial-gradient(rgba(255, 223, 102, 0.08) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.aegon-glow {
+  box-shadow: 0 0 60px -10px rgba(255, 223, 102, 0.15);
+}
+
+.aegon-card {
+  background: rgba(18, 18, 20, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.aegon-card:hover {
+  border-color: rgba(255, 223, 102, 0.35);
+  box-shadow: 0 10px 30px -10px rgba(255, 223, 102, 0.12);
+  transform: translateY(-2px);
+}

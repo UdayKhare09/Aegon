@@ -29,7 +29,7 @@ All benchmarks were conducted under strict hardware isolation, 100% reproducible
 
 | Rank | Framework | Language | Architecture / I/O Backend | Requests/sec (3-Run Avg) | Avg Latency | p50 Latency | p99 Latency | Total Reqs (30s) |
 |:---:|:---|:---|:---|:---:|:---:|:---:|:---:|:---:|
-| 🥇 | **Aegon** | C++26 | Linux-native `io_uring` + OpenSSL | **423,902.09** | **237.74 µs** | **222.00 µs** | **605.00 µs** | **12,761,803** |
+| 🥇 | **Aegon** | C++23 | Linux-native `io_uring` + OpenSSL | **423,902.09** | **237.74 µs** | **222.00 µs** | **605.00 µs** | **12,761,803** |
 | 🥈 | **Swerver** | Zig | `io_uring_native` + Zig TLS | **382,901.10** | 262.49 µs | 243.33 µs | 655.33 µs | 11,526,615 |
 | 🥉 | **Actix-web** | Rust | Tokio epoll + `rustls` | **349,875.17** | 385.24 µs | 268.00 µs | 2,750.00 µs | 10,499,916 |
 | 4 | **Fiber** | Go | fasthttp prefork + Go crypto/tls | **327,720.40** | 312.37 µs | 299.67 µs | 766.33 µs | 9,929,688 |
@@ -42,7 +42,7 @@ All benchmarks were conducted under strict hardware isolation, 100% reproducible
 
 | Rank | Framework | Language | JSON Engine | Requests/sec (3-Run Avg) | Avg Latency | p50 Latency | p99 Latency | Total Reqs (30s) |
 |:---:|:---|:---|:---|:---:|:---:|:---:|:---:|:---:|
-| 🥇 | **Aegon** | C++26 | Glaze (SIMD / Zero-copy) | **418,027.14** | **246.23 µs** | **224.33 µs** | **867.00 µs** | **12,583,711** |
+| 🥇 | **Aegon** | C++23 | Glaze (SIMD / Zero-copy) | **418,027.14** | **246.23 µs** | **224.33 µs** | **867.00 µs** | **12,583,711** |
 | 🥈 | **Swerver** | Zig | `std.json` streaming | **386,190.38** | 254.47 µs | 240.33 µs | 515.33 µs | 11,664,352 |
 | 🥉 | **Actix-web** | Rust | Serde JSON + `rustls` | **336,283.59** | 378.78 µs | 281.00 µs | 2,690.00 µs | 10,090,724 |
 | 4 | **Fiber** | Go | Go standard `encoding/json` | **296,697.13** | 338.23 µs | 335.33 µs | 726.33 µs | 8,931,249 |
@@ -55,7 +55,7 @@ All benchmarks were conducted under strict hardware isolation, 100% reproducible
 
 | Rank | Framework | Language | Router Architecture | Requests/sec (3-Run Avg) | Avg Latency | p50 Latency | p99 Latency | Total Reqs (30s) |
 |:---:|:---|:---|:---|:---:|:---:|:---:|:---:|:---:|
-| 🥇 | **Aegon** | C++26 | Zero-alloc Radix Router | **413,632.71** | **244.45 µs** | **226.00 µs** | **779.67 µs** | **12,532,664** |
+| 🥇 | **Aegon** | C++23 | Zero-alloc Radix Router | **413,632.71** | **244.45 µs** | **226.00 µs** | **779.67 µs** | **12,532,664** |
 | 🥈 | **Swerver** | Zig | Swerver Router | **375,552.83** | 264.54 µs | 248.00 µs | 577.67 µs | 11,379,169 |
 | 🥉 | **Actix-web** | Rust | Actix Resource Regex/Table + `rustls` | **330,479.97** | 386.19 µs | 286.67 µs | 2,583.33 µs | 9,950,764 |
 | 4 | **Fiber** | Go | fasthttp Tree Router | **307,973.21** | 328.76 µs | 321.33 µs | 748.67 µs | 9,301,955 |

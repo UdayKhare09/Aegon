@@ -1,6 +1,6 @@
 # Aegon HyperStore — Advanced Microservice Sample
 
-A production-grade, multi-file reference architecture demonstrating nearly all features of the **Aegon** C++26 high-performance asynchronous web framework and compile-time ORM without middleware.
+A production-grade, multi-file reference architecture demonstrating nearly all features of the **Aegon** C++23 high-performance asynchronous web framework and compile-time ORM without middleware.
 
 ---
 

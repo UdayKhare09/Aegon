@@ -30,7 +30,7 @@ int main() {
 
     std::string large_payload;
     for (int i = 0; i < 50; ++i) {
-        large_payload += "Item " + std::to_string(i) + ": Aegon high-performance C++26 web framework\n";
+        large_payload += "Item " + std::to_string(i) + ": Aegon high-performance C++23 web framework\n";
     }
     assert(large_payload.size() > 500);
 

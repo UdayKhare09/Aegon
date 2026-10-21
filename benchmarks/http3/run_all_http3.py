@@ -12,7 +12,7 @@ def main():
     results = {}
     print("=" * 80)
     print(" STARTING COMPLETE HTTP/3 BENCHMARK SUITE")
-    print(" 2 Active Frameworks: Aegon (C++26), Swerver (Zig)")
+    print(" 2 Active Frameworks: Aegon (C++23), Swerver (Zig)")
     print(" 3 Unsupported Frameworks: Actix-web (Rust), Drogon (C++), Fiber (Go)")
     print(" 3 Workloads: Plaintext, JSON, User Posts Route")
     print(" Protocol: HTTP/3 over QUIC (RFC 9000 / RFC 9114 / ALPN h3)")

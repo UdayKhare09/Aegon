@@ -311,7 +311,7 @@ void test_mac_address() {
 
 void test_blob() {
     std::cout << "[Test 9] Testing Blob (Binary Buffer, Base64 JSON, Glaze)...\n";
-    std::string raw_data = "Hello, Aegon C++26 Data Types!";
+    std::string raw_data = "Hello, Aegon C++23 Data Types!";
     Blob b(reinterpret_cast<const uint8_t*>(raw_data.data()), raw_data.size());
     TEST_CHECK(b.size() == raw_data.size());
 
@@ -408,7 +408,7 @@ void test_full_enterprise_dto() {
 
 int main() {
     std::cout << "\n=======================================================\n";
-    std::cout << "     AEGON C++26 FOUNDATIONAL DATA TYPES TEST SUITE    \n";
+    std::cout << "     AEGON C++23 FOUNDATIONAL DATA TYPES TEST SUITE    \n";
     std::cout << "=======================================================\n\n";
 
     test_uuid();

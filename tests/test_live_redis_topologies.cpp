@@ -78,9 +78,9 @@ core::Task<void> test_standalone(core::IoEngine& ring) {
     std::cout << "  -> Lists (LPUSH, RPOP) verified: " << *popped << "\n";
 
     // 8. Data Structures: Sets (SADD)
-    assert(co_await client.sadd("set:languages", "c++26"));
+    assert(co_await client.sadd("set:languages", "c++23"));
     assert(co_await client.sadd("set:languages", "asm"));
-    assert(!co_await client.sadd("set:languages", "c++26")); // already present
+    assert(!co_await client.sadd("set:languages", "c++23")); // already present
     std::cout << "  -> Sets (SADD) verified\n";
 
     // 9. Data Structures: Sorted Sets (ZADD)

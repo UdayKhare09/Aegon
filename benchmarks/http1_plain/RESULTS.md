@@ -1,17 +1,17 @@
 # HTTP/1.1 Plain Benchmark Results (5 Frameworks)
 
-Official, reproducible benchmarks comparing **Aegon (C++26)** against industry-leading HTTP servers and web frameworks on identical hardware under Linux.
+Official, reproducible benchmarks comparing **Aegon (C++23)** against industry-leading HTTP servers and web frameworks on identical hardware under Linux.
 
 ---
 
 ## 1. Executive Summary
 
-Under fair hardware saturation (server pinned to 2 physical cores, client load generator pinned to 4 physical cores, 3 consecutive runs averaged), **Aegon (C++26, io_uring)** is the **fastest framework across every measured workload**, beating **Swerver (Zig)**, **Actix-web (Rust)**, **Drogon (C++17)**, and **Fiber (Go)**.
+Under fair hardware saturation (server pinned to 2 physical cores, client load generator pinned to 4 physical cores, 3 consecutive runs averaged), **Aegon (C++23, io_uring)** is the **fastest framework across every measured workload**, beating **Swerver (Zig)**, **Actix-web (Rust)**, **Drogon (C++17)**, and **Fiber (Go)**.
 
 ```
 /plaintext Throughput (req/s)
 ─────────────────────────────────────────────────────────────────────────────
-Aegon (C++26)      ████████████████████████████████████████ 547,145 req/s (100%)
+Aegon (C++23)      ████████████████████████████████████████ 547,145 req/s (100%)
 Swerver (Zig)      ████████████████████████████████        468,613 req/s ( 86%)
 Actix-web (Rust)   ███████████████████████████             400,128 req/s ( 73%)
 Drogon (C++17)     ██████████████████████████              388,383 req/s ( 71%)
@@ -42,7 +42,7 @@ To eliminate client-side load generator bottlenecks, the host was partitioned us
 
 | Rank | Framework | Language & Architecture | 3-Run Avg Throughput | Total Reqs (30s) | Avg Latency | p50 Latency | p99 Latency | vs Aegon |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 **1** | **Aegon** | **C++26 (`io_uring`, zero-alloc routing)** | **547,144.84 req/s** | **5,525,446** | **214.09 µs** | **169.33 µs** | **468.67 µs** | **Baseline (100%)** |
+| 🥇 **1** | **Aegon** | **C++23 (`io_uring`, zero-alloc routing)** | **547,144.84 req/s** | **5,525,446** | **214.09 µs** | **169.33 µs** | **468.67 µs** | **Baseline (100%)** |
 | 🥈 **2** | **Swerver** | **Zig (HttpArena tuned, `io_uring_native`)** | **468,612.69 req/s** | **4,732,879** | **209.88 µs** | **198.33 µs** | **416.33 µs** | **-14.4%** (-78k req/s) |
 | 🥉 **3** | **Actix-web** | Rust (`mimalloc`, tokio/epoll) | **400,128.26 req/s** | **4,015,783** | **271.05 µs** | **239.00 µs** | **559.00 µs** | **-26.9%** (-147k req/s) |
 | 4 | **Drogon** | C++17 (epoll, thread pool) | **388,383.14 req/s** | **3,909,938** | **255.72 µs** | **248.67 µs** | **531.00 µs** | **-29.0%** (-158k req/s) |
@@ -55,7 +55,7 @@ To eliminate client-side load generator bottlenecks, the host was partitioned us
 
 | Rank | Framework | Language & Architecture | 3-Run Avg Throughput | Total Reqs (30s) | Avg Latency | p50 Latency | p99 Latency | vs Aegon |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 **1** | **Aegon** | **C++26 (Glaze compile-time JSON, `io_uring`)** | **543,849.26 req/s** | **5,475,128** | **206.22 µs** | **172.00 µs** | **1,606.67 µs** | **Baseline (100%)** |
+| 🥇 **1** | **Aegon** | **C++23 (Glaze compile-time JSON, `io_uring`)** | **543,849.26 req/s** | **5,475,128** | **206.22 µs** | **172.00 µs** | **1,606.67 µs** | **Baseline (100%)** |
 | 🥈 **2** | **Swerver** | **Zig (`ctx.jsonValue`, buffer pools)** | **465,714.91 req/s** | **4,688,201** | **213.45 µs** | **204.00 µs** | **444.33 µs** | **-14.4%** (-78k req/s) |
 | 🥉 **3** | **Actix-web** | Rust (`serde_json`, `mimalloc`) | **393,235.00 req/s** | **3,959,259** | **265.14 µs** | **248.00 µs** | **1,133.33 µs** | **-27.7%** (-151k req/s) |
 | 4 | **Fiber** | Go (`fastjson`, prefork) | **320,411.14 req/s** | **3,225,558** | **312.83 µs** | **314.00 µs** | **664.00 µs** | **-41.1%** (-223k req/s) |
@@ -68,7 +68,7 @@ To eliminate client-side load generator bottlenecks, the host was partitioned us
 
 | Rank | Framework | Language & Architecture | 3-Run Avg Throughput | Total Reqs (30s) | Avg Latency | p50 Latency | p99 Latency | vs Aegon |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| 🥇 **1** | **Aegon** | **C++26 (Stack-allocated Radix Tree, `io_uring`)** | **544,465.49 req/s** | **5,480,942** | **200.22 µs** | **173.33 µs** | **1,340.67 µs** | **Baseline (100%)** |
+| 🥇 **1** | **Aegon** | **C++23 (Stack-allocated Radix Tree, `io_uring`)** | **544,465.49 req/s** | **5,480,942** | **200.22 µs** | **173.33 µs** | **1,340.67 µs** | **Baseline (100%)** |
 | 🥈 **2** | **Swerver** | **Zig (`ResponseBuilder` buffer pool)** | **460,992.37 req/s** | **4,641,527** | **214.42 µs** | **202.00 µs** | **421.33 µs** | **-15.3%** (-83k req/s) |
 | 🥉 **3** | **Actix-web** | Rust (Resource path matcher, tokio) | **381,962.28 req/s** | **3,844,981** | **265.66 µs** | **255.67 µs** | **452.33 µs** | **-29.8%** (-163k req/s) |
 | 4 | **Fiber** | Go (fast routing params, fasthttp) | **334,278.93 req/s** | **3,365,009** | **298.32 µs** | **298.67 µs** | **612.67 µs** | **-38.6%** (-210k req/s) |

@@ -120,7 +120,7 @@ struct OrderMetadata {
 
 Task<void> test_postgres_live_pipeline() {
     std::cout << "\n=======================================================\n";
-    std::cout << "  AEGON C++26 LIVE POSTGRESQL 17 ORM TEST SUITE        \n";
+    std::cout << "  AEGON C++23 LIVE POSTGRESQL 17 ORM TEST SUITE        \n";
     std::cout << "=======================================================\n\n";
 
     // 1. Initialize Thread-per-Core PostgreSQL Connection Pool

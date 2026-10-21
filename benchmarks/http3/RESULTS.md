@@ -30,7 +30,7 @@ To eliminate CPU cache thrashing, context switching jitter, and client-server co
 
 | Framework | Language | HTTP/3 Engine | RFC 9000 / 9114 Status | Notes |
 | :--- | :---: | :---: | :---: | :--- |
-| **Aegon** | C++26 | `io_uring` + `ngtcp2` + `nghttp3` | **SUPPORTED** | Native coroutines (`std::coroutine`), batch UDP datagram I/O. |
+| **Aegon** | C++23 | `io_uring` + `ngtcp2` + `nghttp3` | **SUPPORTED** | Native coroutines (`std::coroutine`), batch UDP datagram I/O. |
 | **Swerver** | Zig | `io_uring` + OpenSSL QUIC + Native H3 | **SUPPORTED** | Native Zig QUIC state machine + QPACK decompression. |
 | **Actix-web** | Rust | N/A | **UNSUPPORTED** | `actix-server` and `actix-http` only implement TCP streams; no QUIC/UDP socket engine. |
 | **Drogon** | C++ | N/A | **UNSUPPORTED** | Trantor network reactor is strictly TCP `epoll`; no QUIC framing or UDP packet processing. |
@@ -45,7 +45,7 @@ To eliminate CPU cache thrashing, context switching jitter, and client-server co
 
 | Framework | Throughput (req/s) | Total Requests (10s) | Mean Latency | p50 Latency | p99 Latency | Error Rate |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Aegon (C++26)** | **336,440.73** | **3,364,407** | **2.98 ms** | **2.66 ms** | **5.15 ms** | **0.00%** |
+| **Aegon (C++23)** | **336,440.73** | **3,364,407** | **2.98 ms** | **2.66 ms** | **5.15 ms** | **0.00%** |
 | **Swerver (Zig)** | 109,570.60 | 1,095,706 | 9.12 ms | 7.31 ms | 27.13 ms | 0.00% |
 | *Actix-web (Rust)* | *UNSUPPORTED* | - | - | - | - | - |
 | *Drogon (C++)* | *UNSUPPORTED* | - | - | - | - | - |
@@ -61,7 +61,7 @@ To eliminate CPU cache thrashing, context switching jitter, and client-server co
 
 | Framework | Throughput (req/s) | Total Requests (10s) | Mean Latency | p50 Latency | p99 Latency | Error Rate |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Aegon (C++26)** | **331,608.03** | **3,316,080** | **3.02 ms** | **2.70 ms** | **5.41 ms** | **0.00%** |
+| **Aegon (C++23)** | **331,608.03** | **3,316,080** | **3.02 ms** | **2.70 ms** | **5.41 ms** | **0.00%** |
 | **Swerver (Zig)** | 109,342.50 | 1,093,425 | 9.14 ms | 7.33 ms | 24.93 ms | 0.00% |
 | *Actix-web (Rust)* | *UNSUPPORTED* | - | - | - | - | - |
 | *Drogon (C++)* | *UNSUPPORTED* | - | - | - | - | - |
@@ -77,7 +77,7 @@ To eliminate CPU cache thrashing, context switching jitter, and client-server co
 
 | Framework | Throughput (req/s) | Total Requests (10s) | Mean Latency | p50 Latency | p99 Latency | Error Rate |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Aegon (C++26)** | **326,682.63** | **3,266,826** | **3.10 ms** | **2.78 ms** | **6.06 ms** | **0.00%** |
+| **Aegon (C++23)** | **326,682.63** | **3,266,826** | **3.10 ms** | **2.78 ms** | **6.06 ms** | **0.00%** |
 | **Swerver (Zig)** | 108,137.93 | 1,081,379 | 9.23 ms | 7.39 ms | 25.81 ms | 0.00% |
 | *Actix-web (Rust)* | *UNSUPPORTED* | - | - | - | - | - |
 | *Drogon (C++)* | *UNSUPPORTED* | - | - | - | - | - |

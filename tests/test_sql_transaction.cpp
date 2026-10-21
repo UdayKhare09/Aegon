@@ -287,7 +287,7 @@ Task<void> test_pool_connection_reuse() {
 
 int main() {
     std::cout << "\n=======================================================\n";
-    std::cout << "   AEGON C++26 SQL ORM TRANSACTION & POOL TEST SUITE   \n";
+    std::cout << "   AEGON C++23 SQL ORM TRANSACTION & POOL TEST SUITE   \n";
     std::cout << "=======================================================\n\n";
 
     // Run coroutine tasks synchronously using Aegon Task test harness

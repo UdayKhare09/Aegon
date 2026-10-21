@@ -169,7 +169,7 @@ void test_insert_builder_and_auto_mapping() {
         .id = 0,
         .author_id = u.id,
         .title = "Aegon ORM",
-        .body = "C++26 Zero-Macro High-Performance ORM"
+        .body = "C++23 Zero-Macro High-Performance ORM"
     };
 
     auto post_ins = insert_into<Post>().values(p).to_sql(DatabaseDialect::PostgreSQL);
@@ -178,7 +178,7 @@ void test_insert_builder_and_auto_mapping() {
     TEST_CHECK(post_ins.params.size() == 3);
     TEST_CHECK(post_ins.params[0] == "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11");
     TEST_CHECK(post_ins.params[1] == "Aegon ORM");
-    TEST_CHECK(post_ins.params[2] == "C++26 Zero-Macro High-Performance ORM");
+    TEST_CHECK(post_ins.params[2] == "C++23 Zero-Macro High-Performance ORM");
 
     std::cout << "  -> PASS: InsertBuilder auto-maps entities and handles auto-increment IDs.\n";
 }
@@ -245,7 +245,7 @@ void test_row_to_entity_auto_hydration() {
     row1.add_value("550e8400-e29b-41d4-a716-446655440000"); // id
     row1.add_value("test@aegon.dev");                       // email
     row1.add_value("aegon_user");                           // username
-    row1.add_value("Loving C++26 ORM");                     // bio (optional<string>)
+    row1.add_value("Loving C++23 ORM");                     // bio (optional<string>)
     row1.add_value("9876.5432");                            // balance (Decimal128)
     row1.add_value("{\"role\":\"admin\"}");                 // preferences (Json)
     row1.add_value("10.0.0.1");                             // last_login_ip (IpAddress)
@@ -258,7 +258,7 @@ void test_row_to_entity_auto_hydration() {
     TEST_CHECK(u1.id.to_string() == "550e8400-e29b-41d4-a716-446655440000");
     TEST_CHECK(u1.email == "test@aegon.dev");
     TEST_CHECK(u1.username == "aegon_user");
-    TEST_CHECK(u1.bio.has_value() && *u1.bio == "Loving C++26 ORM");
+    TEST_CHECK(u1.bio.has_value() && *u1.bio == "Loving C++23 ORM");
     TEST_CHECK(u1.balance.to_string() == "9876.5432");
     TEST_CHECK(u1.preferences.str() == "{\"role\":\"admin\"}");
     TEST_CHECK(u1.last_login_ip.to_string() == "10.0.0.1");
@@ -516,7 +516,7 @@ void test_coderabbit_review_fixes() {
 
 int main() {
     std::cout << "\n=======================================================\n";
-    std::cout << "  AEGON C++26 SQL QUERY BUILDER & AUTO-MAPPING TESTS   \n";
+    std::cout << "  AEGON C++23 SQL QUERY BUILDER & AUTO-MAPPING TESTS   \n";
     std::cout << "=======================================================\n\n";
 
     test_member_pointer_resolution();

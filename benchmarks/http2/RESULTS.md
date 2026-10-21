@@ -32,7 +32,7 @@ All benchmarks were conducted using **`h2load`** (nghttp2 v1.70.0) with strict h
 
 | Rank | Framework | Language | Architecture / Engine | Requests/sec (3-Run Avg) | Mean Latency | p50 Latency | p99 Latency | Total Reqs (30s) | Status |
 |:---:|:---|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
-| 🥇 | **Aegon** | C++26 | Linux-native `io_uring` + `nghttp2` | **1,750,028.67** | **526.33 µs** | **521.00 µs** | **773.67 µs** | **17,500,287** | **SUPPORTED** |
+| 🥇 | **Aegon** | C++23 | Linux-native `io_uring` + `nghttp2` | **1,750,028.67** | **526.33 µs** | **521.00 µs** | **773.67 µs** | **17,500,287** | **SUPPORTED** |
 | 🥈 | **Actix-web** | Rust | Tokio epoll + `h2` crate (`rustls`) | **693,620.67** | 1,443.33 µs | 1,406.67 µs | 1,823.33 µs | 6,936,207 | **SUPPORTED** |
 | 🥉 | **Swerver** | Zig | `io_uring_native` + Swerver HTTP/2 | **475,583.73** | 2,090.00 µs | 2,163.33 µs | 3,610.00 µs | 4,755,837 | **SUPPORTED** |
 | 4 | **Drogon** | C++17 | Trantor epoll | *N/A* | - | - | - | - | `UNSUPPORTED`* |
@@ -47,7 +47,7 @@ All benchmarks were conducted using **`h2load`** (nghttp2 v1.70.0) with strict h
 
 | Rank | Framework | Language | JSON Engine | Requests/sec (3-Run Avg) | Mean Latency | p50 Latency | p99 Latency | Total Reqs (30s) | Status |
 |:---:|:---|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
-| 🥇 | **Aegon** | C++26 | Glaze (Zero-copy reflection) | **1,695,960.00** | **549.67 µs** | **542.00 µs** | **810.00 µs** | **16,959,600** | **SUPPORTED** |
+| 🥇 | **Aegon** | C++23 | Glaze (Zero-copy reflection) | **1,695,960.00** | **549.67 µs** | **542.00 µs** | **810.00 µs** | **16,959,600** | **SUPPORTED** |
 | 🥈 | **Actix-web** | Rust | Serde JSON + `h2` (`rustls`) | **651,131.33** | 1,546.67 µs | 1,503.33 µs | 2,100.00 µs | 6,511,313 | **SUPPORTED** |
 | 🥉 | **Swerver** | Zig | `std.json` streaming + Swerver HTTP/2 | **476,690.33** | 2,076.67 µs | 2,093.33 µs | 3,906.67 µs | 4,766,903 | **SUPPORTED** |
 | 4 | **Drogon** | C++17 | JsonCpp DOM | *N/A* | - | - | - | - | `UNSUPPORTED` |
@@ -60,7 +60,7 @@ All benchmarks were conducted using **`h2load`** (nghttp2 v1.70.0) with strict h
 
 | Rank | Framework | Language | Router Architecture | Requests/sec (3-Run Avg) | Mean Latency | p50 Latency | p99 Latency | Total Reqs (30s) | Status |
 |:---:|:---|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
-| 🥇 | **Aegon** | C++26 | Zero-alloc Radix Router | **1,667,803.33** | **563.33 µs** | **575.00 µs** | **775.00 µs** | **16,678,033** | **SUPPORTED** |
+| 🥇 | **Aegon** | C++23 | Zero-alloc Radix Router | **1,667,803.33** | **563.33 µs** | **575.00 µs** | **775.00 µs** | **16,678,033** | **SUPPORTED** |
 | 🥈 | **Actix-web** | Rust | Actix Resource Table (`rustls`) | **627,524.00** | 1,600.00 µs | 1,563.33 µs | 1,893.33 µs | 6,275,240 | **SUPPORTED** |
 | 🥉 | **Swerver** | Zig | Swerver Router | **466,247.10** | 2,133.33 µs | 2,193.33 µs | 3,210.00 µs | 4,662,471 | **SUPPORTED** |
 | 4 | **Drogon** | C++17 | Drogon Dynamic Router | *N/A* | - | - | - | - | `UNSUPPORTED` |

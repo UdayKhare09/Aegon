@@ -154,7 +154,7 @@ void test_postgres_driver_specs() {
 
 int main() {
     std::cout << "\n=======================================================\n";
-    std::cout << "     AEGON C++26 SQL DATABASE DRIVERS TEST SUITE       \n";
+    std::cout << "     AEGON C++23 SQL DATABASE DRIVERS TEST SUITE       \n";
     std::cout << "=======================================================\n\n";
 
     auto run_task = [](Task<void> t) {

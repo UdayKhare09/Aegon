@@ -27,7 +27,7 @@
 namespace aegon {
 
 /**
- * @brief Strongly typed version descriptor for modern C++20/C++26 applications.
+ * @brief Strongly typed version descriptor for modern C++20/C++23 applications.
  */
 struct VersionInfo {
     uint32_t major{AEGON_VERSION_MAJOR};

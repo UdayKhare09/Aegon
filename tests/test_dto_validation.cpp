@@ -412,7 +412,7 @@ void test_dto_uuid_validation_and_syntax_error() {
 
 int main() {
     std::cout << "\n=======================================================\n";
-    std::cout << "     AEGON C++26 DTO BINDING & VALIDATION TEST SUITE    \n";
+    std::cout << "     AEGON C++23 DTO BINDING & VALIDATION TEST SUITE    \n";
     std::cout << "=======================================================\n\n";
 
     test_dto_json_binding_success();

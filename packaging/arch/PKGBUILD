@@ -18,7 +18,7 @@ depends=(
     'glaze'
 )
 makedepends=('cmake' 'ninja' 'gcc' 'git')
-options=('staticlibs')
+options=('staticlibs' '!strip' '!lto')
 build() {
     cmake -B "${srcdir}/build" -S "${startdir}/../.." -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \

@@ -6,7 +6,7 @@
   <strong>High-Performance C++23 Asynchronous Web &amp; Data Framework</strong>
 </p>
 
-[![C++ Standard](https://img.shields.io/badge/C%2B%2B-23%2F26-blue.svg)](https://en.cppreference.com/w/cpp/23)
+[![C++ Standard](https://img.shields.io/badge/C%2B%2B-23-blue.svg)](https://en.cppreference.com/w/cpp/23)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-lightgrey.svg)]()
 [![Async Engine](https://img.shields.io/badge/I%2FO-io__uring%20%7C%20epoll%20%7C%20IOCP-orange.svg)]()
@@ -106,36 +106,36 @@ All results are produced by the independent [HttpArena](https://http-arena.com) 
 
 Peak throughput, latency, and concurrency scaling across all 28 throughput profiles:
 
-| Category | Profile | Connections | Throughput | Avg Latency | p99 Latency | Position (In HttpArena) |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **HTTP/2 Cleartext** | `baseline-h2c` | 1,024 | **14,444,079 req/s** | 5.31 ms | 20.57 ms | **#1 of 22** |
-| | `baseline-h2c` | 4,096 | **13,802,882 req/s** | 18.48 ms | 67.71 ms | **#1 of 22** |
-| | `baseline-h2c` | 256 | **13,103,154 req/s** | 1.56 ms | 8.24 ms | **#1 of 22** |
-| | `json-h2c` | 1,024 | **4,000,354 req/s** | 7.80 ms | 31.34 ms | **#1 of 22** |
-| | `json-h2c` | 4,096 | **3,223,981 req/s** | 39.28 ms | 108.52 ms | **#1 of 22** |
-| **HTTP/2 TLS** | `baseline-h2` | 1,024 | **13,414,881 req/s** | 5.71 ms | 89.62 ms | **#1 of 27** |
-| | `baseline-h2` | 256 | **12,529,960 req/s** | 1.58 ms | 13.05 ms | **#1 of 27** |
-| **WebSocket (Pipelined)** | `echo-ws-pipeline` | 4,096 | **63,623,190 msg/s** | 1.03 ms | 1.36 ms | **#1 of 27** |
-| | `echo-ws-pipeline` | 512 | **63,184,451 msg/s** | 129 µs | 237 µs | **#1 of 27** |
-| | `echo-ws-pipeline` | 16,384 | **58,668,976 msg/s** | 4.45 ms | 5.51 ms | **#1 of 27** |
-| **WebSocket (Baseline)** | `echo-ws` | 4,096 | **4,283,047 msg/s** | 956 µs | 1.30 ms | **#1 of 30** |
-| | `echo-ws` | 512 | **4,207,888 msg/s** | 121 µs | 225 µs | **#1 of 30** |
-| | `echo-ws` | 16,384 | **3,951,014 msg/s** | 4.13 ms | 5.17 ms | **#1 of 30** |
-| **WebSocket (Short-Lived)** | `echo-ws-limited` | 512 | **2,189,840 msg/s** | 122 µs | 384 µs | **#1 of 21** |
-| | `echo-ws-limited` | 4,096 | **2,545,648 msg/s** | 1.05 ms | 1.75 ms | **#4 of 21** |
-| **HTTP/1.1 Core** | `pipelined` | 4,096 | **27,608,511 req/s** | 2.37 ms | 3.14 ms | **#3 of 77** |
-| | `baseline` | 4,096 | **3,996,171 req/s** | 1.02 ms | 1.71 ms | **#1 of 83** |
-| | `async` (10ms delay) | 32,000 | **2,647,330 req/s** | 12.01 ms | 13.10 ms | **#1 of 79** |
-| | `limited-conn` (10 req/conn) | 4,096 | **2,597,100 req/s** | 1.45 ms | 2.82 ms | **#2 of 83** |
-| **HTTP/3 over QUIC** | `baseline-h3` | 64 | **2,981,569 req/s** | 1.78 ms | 4.82 ms | **#3 of 16** |
-| | `static-h3` | 64 | **309,158 req/s** | 15.86 ms | 48.33 ms | **#2 of 16** |
-| **Workloads & JSON** | `json-tls` | 4,096 | **1,290,079 req/s** | 3.12 ms | 56.71 ms | **#2 of 80** |
-| | `json-comp` | 4,096 | **962,211 req/s** | 4.21 ms | 9.09 ms | **#1 of 79** |
-| | `json-comp` | 16,384 | **935,723 req/s** | 17.34 ms | 25.40 ms | **#1 of 79** |
-| | `8gbit` (Stream echo) | 512 | **49,349 req/s** (514 MB/s) | 119.9 µs | 169.0 µs | **#25 of 79** |
-| **Static File Serving** | `static-h2` | 256 | **516,574 req/s** | 17.47 ms | 45.78 ms | **#6 of 26** |
-| | `static-tls` | 1,024 | **499,850 req/s** | 2.30 ms | 31.85 ms | **#6 of 42** |
-| | `static-h2` | 1,024 | **461,672 req/s** | 67.66 ms | 140.84 ms | **#5 of 26** |
+| Profile | Connections | Throughput | Avg Latency | p99 Latency | Position (In HttpArena) |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| `baseline-h2c` | 1,024 | **14,444,079 req/s** | 5.31 ms | 20.57 ms | **#1 of 22** |
+| `baseline-h2c` | 4,096 | **13,802,882 req/s** | 18.48 ms | 67.71 ms | **#1 of 22** |
+| `baseline-h2c` | 256 | **13,103,154 req/s** | 1.56 ms | 8.24 ms | **#1 of 22** |
+| `json-h2c` | 1,024 | **4,000,354 req/s** | 7.80 ms | 31.34 ms | **#1 of 22** |
+| `json-h2c` | 4,096 | **3,223,981 req/s** | 39.28 ms | 108.52 ms | **#1 of 22** |
+| `baseline-h2` | 1,024 | **13,414,881 req/s** | 5.71 ms | 89.62 ms | **#1 of 27** |
+| `baseline-h2` | 256 | **12,529,960 req/s** | 1.58 ms | 13.05 ms | **#1 of 27** |
+| `echo-ws-pipeline` | 4,096 | **63,623,190 msg/s** | 1.03 ms | 1.36 ms | **#1 of 27** |
+| `echo-ws-pipeline` | 512 | **63,184,451 msg/s** | 129 µs | 237 µs | **#1 of 27** |
+| `echo-ws-pipeline` | 16,384 | **58,668,976 msg/s** | 4.45 ms | 5.51 ms | **#1 of 27** |
+| `echo-ws` | 4,096 | **4,283,047 msg/s** | 956 µs | 1.30 ms | **#1 of 30** |
+| `echo-ws` | 512 | **4,207,888 msg/s** | 121 µs | 225 µs | **#1 of 30** |
+| `echo-ws` | 16,384 | **3,951,014 msg/s** | 4.13 ms | 5.17 ms | **#1 of 30** |
+| `echo-ws-limited` | 512 | **2,189,840 msg/s** | 122 µs | 384 µs | **#1 of 21** |
+| `echo-ws-limited` | 4,096 | **2,545,648 msg/s** | 1.05 ms | 1.75 ms | **#4 of 21** |
+| `pipelined` | 4,096 | **27,608,511 req/s** | 2.37 ms | 3.14 ms | **#3 of 77** |
+| `baseline` | 4,096 | **3,996,171 req/s** | 1.02 ms | 1.71 ms | **#1 of 83** |
+| `async` (10ms delay) | 32,000 | **2,647,330 req/s** | 12.01 ms | 13.10 ms | **#1 of 79** |
+| `limited-conn` (10 req/conn) | 4,096 | **2,597,100 req/s** | 1.45 ms | 2.82 ms | **#2 of 83** |
+| `baseline-h3` | 64 | **2,981,569 req/s** | 1.78 ms | 4.82 ms | **#3 of 16** |
+| `static-h3` | 64 | **309,158 req/s** | 15.86 ms | 48.33 ms | **#2 of 16** |
+| `json-tls` | 4,096 | **1,290,079 req/s** | 3.12 ms | 56.71 ms | **#2 of 80** |
+| `json-comp` | 4,096 | **962,211 req/s** | 4.21 ms | 9.09 ms | **#1 of 79** |
+| `json-comp` | 16,384 | **935,723 req/s** | 17.34 ms | 25.40 ms | **#1 of 79** |
+| `8gbit` (Stream echo) | 512 | **49,349 req/s** (514 MB/s) | 119.9 µs | 169.0 µs | **#25 of 79** |
+| `static-h2` | 256 | **516,574 req/s** | 17.47 ms | 45.78 ms | **#6 of 26** |
+| `static-tls` | 1,024 | **499,850 req/s** | 2.30 ms | 31.85 ms | **#6 of 42** |
+| `static-h2` | 1,024 | **461,672 req/s** | 67.66 ms | 140.84 ms | **#5 of 26** |
 
 ---
 

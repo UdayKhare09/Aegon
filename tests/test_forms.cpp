@@ -56,12 +56,12 @@ void test_urlencoded_unit() {
     std::cout << "[UNIT TEST] Testing application/x-www-form-urlencoded parsing... " << std::flush;
 
     Request req;
-    req.set_body("username=john_doe&email=john%40example.com&tag=c%2B%2B26&empty_val=&active=true&score=98.5");
+    req.set_body("username=john_doe&email=john%40example.com&tag=c%2B%2B23&empty_val=&active=true&score=98.5");
 
     // 1. Direct form() access
     assert(req.form("username") == "john_doe");
     assert(req.form("email") == "john@example.com");
-    assert(req.form("tag") == "c++26");
+    assert(req.form("tag") == "c++23");
     assert(req.form("empty_val") == "");
     assert(req.form("active") == "true");
     assert(req.form("score") == "98.5");
@@ -125,7 +125,7 @@ void test_multipart_unit() {
         "Content-Disposition: form-data; name=\"document\"; filename=\"release.txt\"\r\n"
         "Content-Type: text/plain\r\n"
         "\r\n"
-        "Aegon C++26 high-performance asynchronous server.\nBuilt on io_uring.\r\n"
+        "Aegon C++23 high-performance asynchronous server.\nBuilt on io_uring.\r\n"
         "--" + boundary + "\r\n"
         "Content-Disposition: form-data; name=\"binary_data\"; filename=\"raw.bin\"\r\n"
         "Content-Type: application/octet-stream\r\n"
@@ -147,7 +147,7 @@ void test_multipart_unit() {
     assert(doc_opt.has_value());
     assert(doc_opt->filename == "release.txt");
     assert(doc_opt->content_type == "text/plain");
-    assert(doc_opt->data == "Aegon C++26 high-performance asynchronous server.\nBuilt on io_uring.");
+    assert(doc_opt->data == "Aegon C++23 high-performance asynchronous server.\nBuilt on io_uring.");
 
     auto bin_opt = form.file("binary_data");
     assert(bin_opt.has_value());
@@ -237,7 +237,7 @@ void test_live_forms_server() {
         std::string temp_upload = (std::filesystem::temp_directory_path() / "aegon_test_upload.dat").generic_string();
         {
             std::ofstream ofs(temp_upload, std::ios::binary);
-            ofs << "Test payload bytes for multipart upload in Aegon C++26!";
+            ofs << "Test payload bytes for multipart upload in Aegon C++23!";
         }
 
         std::string cmd = "curl -s -X POST http://127.0.0.1:" + std::to_string(PORT) +

@@ -103,15 +103,6 @@ public:
         }
         return derived();
     }
-
-    template <typename ClusterT, typename OptionsT>
-    Derived& proxy(std::string_view pattern,
-                   ClusterT cluster,
-                   OptionsT options,
-                   std::vector<MiddlewareFn> middlewares = {}) {
-        return derived().all(pattern, std::move(middlewares),
-                             make_proxy_handler(std::move(cluster), std::move(options)));
-    }
 };
 
 } // namespace aegon::http

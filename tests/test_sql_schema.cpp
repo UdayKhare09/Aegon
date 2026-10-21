@@ -260,7 +260,7 @@ void test_composite_pk_and_indexes() {
 
 int main() {
     std::cout << "\n=======================================================\n";
-    std::cout << "    AEGON C++26 SQL ORM SCHEMA & DIALECT TEST SUITE    \n";
+    std::cout << "    AEGON C++23 SQL ORM SCHEMA & DIALECT TEST SUITE    \n";
     std::cout << "=======================================================\n\n";
 
     test_dialect_traits();

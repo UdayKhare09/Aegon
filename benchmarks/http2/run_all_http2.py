@@ -12,7 +12,7 @@ def main():
     results = {}
     print("=" * 80)
     print(" STARTING COMPLETE HTTP/2 BENCHMARK SUITE")
-    print(" 3 Active Frameworks: Aegon (C++26), Swerver (Zig), Actix-web (Rust)")
+    print(" 3 Active Frameworks: Aegon (C++23), Swerver (Zig), Actix-web (Rust)")
     print(" 2 Unsupported Frameworks: Drogon (C++), Fiber (Go) -> No RFC 7540 HTTP/2")
     print(" 3 Workloads: Plaintext, JSON, User Posts Route")
     print(" Protocol: HTTPS (HTTP/2 over TLS 1.3 / ALPN h2)")

@@ -1,0 +1,127 @@
+---
+title: Aegon
+description: High-Performance C++23 Asynchronous Web & Networking Framework
+---
+
+import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Cpu, Globe, Zap, Layers, Compass, Braces, Rocket, Download, Server } from 'lucide-react';
+
+**Aegon** is an asynchronous, thread-per-core C++23 application and networking framework engineered from the ground up for extreme HTTP throughput, ultra-low latency, and modern developer ergonomics.
+
+Built around standard C++ coroutines (`co_await`), Aegon provides first-class support for modern networking protocols, including HTTP/1.1 (pipelined), cleartext and TLS HTTP/2 (`h2c` and `h2`), HTTP/3 over QUIC, and full RFC 6455-compliant WebSockets.
+
+---
+
+## Key Architectural Highlights
+
+<Cards>
+  <Card title="Thread-per-Core Model" icon={<Cpu />}>
+    Runs a shared-nothing event loop cluster pinned to individual hardware threads. Eliminates cross-thread mutex contention, cache-line bouncing, and lock overhead on the request hot path.
+  </Card>
+  <Card title="Multi-Protocol Engine" icon={<Globe />}>
+    Native support for HTTP/1.1 with pipelining, HTTP/2 multiplexing, HTTP/3 over QUIC (RFC 9000 & RFC 9114), and high-throughput WebSockets.
+  </Card>
+  <Card title="C++23 Coroutines" icon={<Zap />}>
+    Built on native C++23 coroutines (`core::Task<T>`) with symmetric transfer. Eliminates nested callback spaghetti while preserving non-blocking performance.
+  </Card>
+  <Card title="Kernel Async I/O" icon={<Layers />}>
+    Pluggable kernel engines featuring Linux `io_uring` direct submission/completion rings, scalable `epoll` fallback, and Windows `IOCP`.
+  </Card>
+  <Card title="Zero-Allocation Routing" icon={<Compass />}>
+    SIMD-accelerated Radix Tree routing with support for parameterized routes (`:id`), wildcards (`*path`), route grouping, and chained middlewares.
+  </Card>
+  <Card title="Compile-Time Reflection" icon={<Braces />}>
+    Integrated with Glaze for zero-overhead JSON serialization, automatic request binding (`ctx.bind_json<T>()`), and declarative validation.
+  </Card>
+</Cards>
+
+---
+
+## Real-World Performance (HttpArena Benchmarks)
+
+All benchmark numbers are produced by the independent [HttpArena](https://http-arena.com) platform under scientifically controlled bare-metal conditions on a 64-core AMD Ryzen Threadripper PRO 3995WX processor:
+
+| Profile | Concurrency | Peak Throughput | Avg Latency | p99 Latency | Ranking |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **`baseline-h2c`** (HTTP/2 Cleartext) | 1,024 | **14,444,079 req/s** | 5.31 ms | 20.57 ms | **#1 of 22** |
+| **`echo-ws-pipeline`** (WebSocket) | 4,096 | **63,623,190 msg/s** | 1.03 ms | 1.36 ms | **#1 of 27** |
+| **`pipelined`** (HTTP/1.1 Pipelined) | 4,096 | **27,608,511 req/s** | 2.37 ms | 3.14 ms | **#3 of 77** |
+| **`baseline`** (HTTP/1.1 Plaintext) | 4,096 | **3,996,171 req/s** | 1.02 ms | 1.71 ms | **#1 of 83** |
+| **`echo-ws`** (WebSocket Standard) | 4,096 | **4,283,047 msg/s** | 956 µs | 1.30 ms | **#1 of 30** |
+| **`baseline-h3`** (HTTP/3 QUIC) | 64 | **2,981,569 req/s** | 1.78 ms | 4.82 ms | **#3 of 16** |
+
+### CPU Efficiency Under Load
+
+In fixed-rate paced latency tests (`latency-1m`), Aegon sustained 1 Million requests per second while consuming only **14.92 µs of CPU per request** (measured directly from Linux cgroup v2 `cpu.stat`), outperforming leading frameworks across C++, Rust, and Go.
+
+---
+
+## Minimal Example: High-Performance REST API
+
+Here is a complete, working example of an Aegon HTTP service with routing, JSON request binding, and coroutines:
+
+```cpp title="main.cpp"
+#include <http/Server.h>
+#include <core/Task.h>
+#include <iostream>
+
+using namespace aegon;
+
+// Request DTO (parsed via compile-time reflection)
+struct CreateUserRequest {
+    std::string username;
+    std::string email;
+};
+
+// Response DTO (serialized directly to JSON)
+struct UserResponse {
+    uint64_t id;
+    std::string username;
+    std::string email;
+    std::string status;
+};
+
+int main() {
+    http::Router router;
+
+    // 1. Plaintext health check endpoint
+    router.get("/health", [](http::Context& ctx) {
+        ctx.res().status(http::StatusCode::Ok).text("OK");
+    });
+
+    // 2. Coroutine-based JSON endpoint
+    router.post("/api/v1/users", [](http::Context& ctx) -> core::Task<void> {
+        // Automatically parses JSON body; responds with 400 Bad Request if invalid
+        auto req_body = ctx.bind_json<CreateUserRequest>();
+        if (!req_body) {
+            co_return;
+        }
+
+        UserResponse response{
+            .id = 1001,
+            .username = std::move(req_body->username),
+            .email = std::move(req_body->email),
+            .status = "active"
+        };
+
+        // Serialize response using Glaze compile-time reflection
+        ctx.res().status(http::StatusCode::Created).json(response);
+        co_return;
+    });
+
+    // 3. Configure HTTP server and bind to port 8080
+    http::Server server(std::move(router));
+    server.listen(8080, "0.0.0.0");
+
+    std::cout << "Server starting on http://0.0.0.0:8080 across all available cores\n";
+
+    // 4. Launch thread-per-core event loop cluster
+    server.run(std::thread::hardware_concurrency());
+    return 0;
+}
+```
+
+<Callout type="info">
+Notice that route handlers in Aegon can be either synchronous (`void(http::Context&)`) or asynchronous (`core::Task<void>(http::Context&)`). The framework handles both uniformly without performance penalties.
+</Callout>
