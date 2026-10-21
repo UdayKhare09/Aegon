@@ -188,8 +188,8 @@ Aegon's subsystems use `aegon_log` internally to provide deep operational visibi
 
 - **Server Lifecycle**: Server boot, configured listeners, HTTP/HTTPS/QUIC endpoints, and graceful termination.
 - **EventLoop**: CPU core affinity pinning (`pthread_setaffinity_np`), loop execution boundaries, and uncaught root task exceptions.
-- **IoUring Subsystem**: Ring file descriptor setup, kernel submission flags (`IORING_SETUP_DEFER_TASKRUN`, `SINGLE_ISSUER`), and direct file descriptor registrations.
-- **BufferPool**: Hugepage/mmap buffer allocations, buffer ring registration with `io_uring`, and recovery fallbacks.
+- **I/O Engine Subsystems**: Kernel backend initialization (`io_uring`, `epoll`, or `IOCP`), ring/event loop descriptor setups, submission flags (`IORING_SETUP_DEFER_TASKRUN`, `SINGLE_ISSUER`), and direct file descriptor registrations.
+- **BufferPool**: Hugepage/mmap buffer allocations, buffer ring registration with `io_uring` (or user-space freelists on `epoll` / `IOCP`), and recovery fallbacks.
 
 To enable verbose internal telemetry during development or debugging, simply set the log level to `Debug` or `Trace`:
 

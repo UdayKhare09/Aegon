@@ -1,0 +1,318 @@
+---
+title: Topologies (Sentinel & Cluster)
+description: Scalable Redis deployment topologies in Aegon including Standalone, Sentinel High Availability, and Redis Cluster with zero-contention multi-core thread affinity.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Aegon's native Redis subsystem supports three primary server topologies out of the box: **Standalone**, **Sentinel High Availability**, and **Redis Cluster Distributed Sharding**.
+
+To eliminate mutex contention and cache-line bouncing on multi-core servers, Aegon pairs these topologies with **`PerCoreRedisClient`**, pinning isolated, lock-free connection pools to each worker core's event loop (`io_uring`, `epoll`, or `IOCP`).
+
+---
+
+## Topology Matrix & Multi-Core Architecture
+
+It is essential to distinguish **server deployment topologies** (where and how Redis runs in your infrastructure) from **`PerCoreRedisClient`** (how Aegon's multi-core server threads connect to Redis):
+
+| Topology | Role | Multi-Master Sharding | High Availability / Failover | Aegon Config Struct | Client Routing Model |
+| :--- | :--- | :---: | :---: | :--- | :--- |
+| **Standalone** | Server Topology | ❌ No | ❌ No (Single node) | `RedisNodeConfig` | Direct connection to `host:port` |
+| **Sentinel** | Server Topology | ❌ No (1 active master) | ✅ Yes (Automatic quorum failover) | `SentinelConfig` | Dynamic master discovery via Sentinel quorum |
+| **Cluster** | Server Topology | ✅ Yes (16,384 hash slots) | ✅ Yes (Per-shard replica failover) | `ClusterConfig` | Client-side CRC16 slot routing & redirect handling |
+| **`PerCore`** | **Client Engine** | Supported (Wraps any topology) | Supported (Wraps any topology) | `PerCoreRedisClient` | Dedicated socket pool pinned to each worker's `IoEngine` |
+
+<Callout type="info" title="PerCore is Not an Alternative Topology">
+`PerCoreRedisClient` is not an alternative to Sentinel or Cluster. It is Aegon's multi-core wrapper for **any** topology. You can run Standalone Per-Core, Sentinel Per-Core, or **Cluster Per-Core**.
+</Callout>
+
+```
+                  PerCoreRedisClient (Shared Service)
+                                 │
+        ┌────────────────────────┼────────────────────────┐
+        ▼                        ▼                        ▼
+   [ Core 0 ]               [ Core 1 ]               [ Core 2 ]
+  Thread-Local             Thread-Local             Thread-Local
+  Redis Client             Redis Client             Redis Client
+        │                        │                        │
+        ▼                        ▼                        ▼
+   Core 0 IoEngine          Core 1 IoEngine          Core 2 IoEngine
+  Socket Pool              Socket Pool              Socket Pool
+```
+
+---
+
+## 1. Standalone Topology
+
+Connect directly to a single standalone Redis server or managed instance (such as AWS ElastiCache standalone or GCP Cloud Memorystore):
+
+```cpp
+#include <aegon/data/redis/RedisClient.h>
+
+using namespace aegon::data::redis;
+
+RedisNodeConfig config{
+    .host = "127.0.0.1",
+    .port = 6379,
+    .username = "default",
+    .password = "secure_password",
+    .database = 0,
+    .connect_timeout = std::chrono::milliseconds(2000)
+};
+
+// Directly instantiate with 16 connections
+RedisClient redis(loop.engine(), config, /*pool_size=*/16);
+```
+
+---
+
+## 2. Sentinel High Availability
+
+Redis Sentinel monitors primary and replica instances, triggering automatic failover if the primary crashes. Aegon's `RedisSentinelResolver` queries sentinel nodes to discover the active primary address:
+
+```cpp
+#include <aegon/data/redis/RedisClient.h>
+#include <aegon/data/redis/RedisSentinel.h>
+
+using namespace aegon::data::redis;
+
+SentinelConfig config{
+    .master_name = "mymaster",
+    .sentinels = {
+        {"10.0.0.10", 26379},
+        {"10.0.0.11", 26379},
+        {"10.0.0.12", 26379}
+    },
+    .username = "default",
+    .password = "master_auth_password",
+    .database = 0
+};
+
+// Creates RedisClient configured for Sentinel failover
+RedisClient redis(loop.engine(), config, /*pool_size=*/16);
+```
+
+### How Sentinel Master Discovery Works
+
+1. Aegon connects sequentially to the configured sentinels until a live node responds.
+2. It executes `SENTINEL get-master-addr-by-name <master_name>`.
+3. Sentinels respond with the current master's IP and port:
+   ```
+   *2
+   $9
+   10.0.0.42
+   $4
+   6379
+   ```
+4. Aegon dynamically establishes the primary connection pool to the discovered host. If the primary disconnects, the pool re-queries the Sentinels to locate the new elected master.
+
+---
+
+## 3. Redis Cluster (Distributed Sharding)
+
+Redis Cluster partitions the keyspace across **16,384 hash slots**. Aegon's `RedisClusterRouter` implements full client-side routing, querying `CLUSTER SLOTS` to discover shard ranges, calculating key slots via hardware-accelerated CRC16, and transparently handling `-MOVED` and `-ASK` redirects:
+
+```cpp
+#include <aegon/data/redis/RedisClient.h>
+#include <aegon/data/redis/RedisCluster.h>
+
+using namespace aegon::data::redis;
+
+ClusterConfig config{
+    .seed_nodes = {
+        {"10.0.1.1", 7000},
+        {"10.0.1.2", 7001},
+        {"10.0.1.3", 7002}
+    },
+    .password = "cluster_auth_token",
+    .pool_size_per_node = 8 // Sockets per shard on this thread
+};
+
+// Initialize Cluster client
+RedisClient redis(loop.engine(), config);
+```
+
+### Hash Slot Computation & Hash Tags (`Crc16.h`)
+
+Every command target is hashed to a slot between `0` and `16383`:
+
+```
+Slot = CRC16(key) % 16384
+```
+
+```cpp
+#include <aegon/data/redis/Crc16.h>
+
+// Standard key hashing
+uint16_t slot1 = key_slot("user:100:profile"); // Hashes entire string
+
+// Hash tag co-location
+uint16_t slot2 = key_slot("user:{100}:profile");  // Hashes "100"
+uint16_t slot3 = key_slot("user:{100}:orders");   // Hashes "100" (identical slot!)
+```
+
+<Callout type="tip" title="Hash Tag Co-location">
+Enclosing a substring within curly braces `{...}` forces Redis and Aegon to compute the CRC16 hash strictly over the characters inside the braces. This guarantees that related keys reside on the exact same shard, enabling atomic transactions (`MULTI`/`EXEC`) and multi-key commands (`MGET`, `MSET`, Lua scripts) on a distributed cluster.
+</Callout>
+
+### Transparent Redirect Routing
+
+When keys are migrated between shards or failover occurs:
+
+- **`-MOVED <slot> <ip>:<port>`**: Indicates that the hash slot has permanently moved to another shard. `RedisClusterRouter` immediately updates its internal slot lookup table (`slots_[slot] = new_pool`) and re-executes the command on the new node.
+- **`-ASK <slot> <ip>:<port>`**: Indicates a transient migration in progress. `RedisClusterRouter` acquires a connection to the target node, executes an `ASKING` one-time flag command, and immediately follows with the original command without altering the persistent slot mapping.
+
+---
+
+## 4. `PerCoreRedisClient` (Zero-Contention Multi-Core Engine)
+
+In an Aegon multi-threaded HTTP server (`server.run(threads)`), each worker thread runs its own isolated `EventLoop` and `IoEngine` (`io_uring`, `epoll`, or `IOCP`). Sharing a single `RedisClient` protected by standard mutexes causes severe performance degradation due to lock contention, cache-line bouncing, and cross-thread synchronization.
+
+`PerCoreRedisClient` provides a thread-affinity container that lazily instantiates and binds an isolated `RedisClient` to the calling worker's event loop:
+
+<Tabs items={["Standalone PerCore", "Sentinel PerCore", "Cluster PerCore"]}>
+<Tab value="Standalone PerCore">
+
+```cpp
+#include <aegon/data/redis/PerCoreRedisClient.h>
+
+using namespace aegon::data::redis;
+
+RedisNodeConfig config{
+    .host = "127.0.0.1",
+    .port = 6379,
+    .password = "secret"
+};
+
+// 8 connections per core
+PerCoreRedisClient redis(config, /*pool_size=*/8);
+```
+
+</Tab>
+<Tab value="Sentinel PerCore">
+
+```cpp
+#include <aegon/data/redis/PerCoreRedisClient.h>
+
+using namespace aegon::data::redis;
+
+SentinelConfig config{
+    .master_name = "production-master",
+    .sentinels = {{"10.0.0.1", 26379}, {"10.0.0.2", 26379}},
+    .password = "secret"
+};
+
+// 8 connections per core to discovered master
+PerCoreRedisClient redis(config, /*pool_size=*/8);
+```
+
+</Tab>
+<Tab value="Cluster PerCore">
+
+```cpp
+#include <aegon/data/redis/PerCoreRedisClient.h>
+
+using namespace aegon::data::redis;
+
+ClusterConfig config{
+    .seed_nodes = {{"10.0.1.1", 7000}, {"10.0.1.2", 7001}},
+    .password = "secret",
+    .pool_size_per_node = 4 // 4 connections per shard per core
+};
+
+// Client-side CRC16 routing on each core's local ring
+PerCoreRedisClient redis(config);
+```
+
+</Tab>
+</Tabs>
+
+---
+
+## 5. End-to-End HTTP Server Example
+
+Here is a complete, production-grade example demonstrating how to register a distributed **Redis Cluster** across all server threads using `server.provide<PerCoreRedisClient>()` and execute commands inside asynchronous route handlers:
+
+```cpp
+#include <aegon/Server.h>
+#include <aegon/data/redis/PerCoreRedisClient.h>
+
+using namespace aegon;
+using namespace aegon::data::redis;
+
+int main() {
+    Server server;
+
+    // 1. Configure Cluster Seed Nodes
+    ClusterConfig cluster_cfg{
+        .seed_nodes = {
+            {"10.0.1.10", 7000},
+            {"10.0.1.11", 7001},
+            {"10.0.1.12", 7002}
+        },
+        .password = "cluster_auth_secret",
+        .pool_size_per_node = 4 // Dedicated connections per shard per core
+    };
+
+    // 2. Wrap in PerCore container
+    auto per_core_cluster = std::make_shared<PerCoreRedisClient>(cluster_cfg);
+
+    // 3. Register as an application-wide dependency
+    server.provide<PerCoreRedisClient>(per_core_cluster);
+
+    // 4. Retrieve session from cluster
+    server.router().get("/user/:id/session", [](Context& ctx) -> Task<void> {
+        auto& redis = ctx.service<PerCoreRedisClient>();
+        std::string user_id = ctx.param("id");
+
+        // Use hash tag to ensure slot co-location
+        std::string key = "user:{" + user_id + "}:session";
+        auto session = co_await redis->get(key);
+
+        if (!session) {
+            ctx.res().status(StatusCode::NotFound).json({{"error", "Session expired or missing"}});
+            co_return;
+        }
+
+        ctx.res().json({
+            {"user_id", user_id},
+            {"session_data", *session}
+        });
+    });
+
+    // 5. Create or update session with TTL
+    server.router().post("/user/:id/session", [](Context& ctx) -> Task<void> {
+        auto& redis = ctx.service<PerCoreRedisClient>();
+        std::string user_id = ctx.param("id");
+        std::string payload = ctx.req().body();
+
+        std::string key = "user:{" + user_id + "}:session";
+        co_await redis->set(key, payload, std::chrono::seconds(3600));
+
+        ctx.res().status(StatusCode::Created).json({{"status", "stored"}});
+    });
+
+    // Run across 8 worker cores
+    server.listen(8080);
+    server.run(8);
+    return 0;
+}
+```
+
+---
+
+## Sizing & Operational Guidelines
+
+- **Connection Pool Sizing**:
+  - In **Standalone** or **Sentinel** modes, total Redis connections across the application equal:
+    ```
+    Total Connections = Worker Threads × pool_size
+    ```
+  - In **Cluster** mode, each worker core maintains connections to every primary shard:
+    ```
+    Total Connections = Worker Threads × Primary Shards × pool_size_per_node
+    ```
+  - For asynchronous non-blocking I/O, setting `pool_size_per_node` between `4` and `8` is typically optimal, as a single event-loop socket can multiplex thousands of pipelined operations concurrently.
+- **Failover Tolerance**:
+  - Sentinel resolvers maintain exponential backoff when probing downed sentinels.
+  - Cluster slot routing automatically re-probes `CLUSTER SLOTS` if an unknown redirection occurs.

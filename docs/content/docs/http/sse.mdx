@@ -6,7 +6,7 @@ description: High-throughput real-time streaming (RFC 8895) over HTTP/1.1, HTTP/
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-Aegon provides native, high-throughput support for **Server-Sent Events (RFC 8895)** integrated directly into its C++23 coroutine architecture and `io_uring` event loop.
+Aegon provides native, high-throughput support for **Server-Sent Events (RFC 8895)** integrated directly into its C++23 coroutine architecture and pluggable event loop engine (supporting Linux `io_uring`, edge-triggered `epoll`, and Windows `IOCP`).
 
 A single unified API (`co_await ctx.sse()`) streams real-time events seamlessly across **HTTP/1.1**, **HTTP/2**, and **HTTP/3 (QUIC)** with zero boilerplate, zero manual wire formatting, and compile-time JSON serialization.
 

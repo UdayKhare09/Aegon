@@ -12,6 +12,7 @@
     "middlewares",
     "jwt",
     "http-client",
+    "websocket",
     "sse"
   ]
 }

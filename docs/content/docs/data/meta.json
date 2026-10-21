@@ -2,6 +2,8 @@
   "title": "Data Engine",
   "pages": [
     "types",
-    "sql"
+    "sql",
+    "redis",
+    "memstore"
   ]
 }

@@ -1,0 +1,268 @@
+---
+title: MemStore (In-Process Cache)
+description: Ultra-low latency, zero-dependency asynchronous in-process cache backed by a dedicated event-driven thread and non-blocking eventfd / IOCP synchronization.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Aegon ships **MemStore** as a zero-dependency, asynchronous in-process alternative to Redis. Inspired by Redis's single-threaded event loop design, MemStore runs on its own dedicated background thread that exclusively owns the data map.
+
+HTTP worker coroutines post requests to an enqueue ring and `co_await` completions via Linux `eventfd` reads (on `io_uring` or `epoll`) or Windows IOCP event completions. The calling worker's event loop is **never blocked**, and the cache map experiences **zero mutex contention** during read and write execution.
+
+---
+
+## When to Use MemStore vs Redis
+
+| Characteristic | **MemStore** | **Redis** |
+| :--- | :--- | :--- |
+| **Deployment Model** | In-process, zero external infrastructure | Dedicated standalone, Sentinel, or Cluster |
+| **Network Overhead** | 0 ms (shared memory / eventfd / IOCP) | ~0.1–1.0 ms network round-trip (RTT) |
+| **Serialization** | Zero serialization overhead | RESP2 / RESP3 protocol wire packing |
+| **Data Persistence** | None (lifetime of application process) | RDB point-in-time snapshots / AOF logs |
+| **Cross-Node Sharing** | Single process only | Shared across distributed microservices |
+| **Maximum Capacity** | Host process memory limits | Configurable RAM + disk / Cluster partitions |
+| **Primary Use Cases** | Single-node services, embedded systems, local testing | Scalable distributed production clusters |
+
+---
+
+## Architecture & Worker Synchronization
+
+```
+HTTP Worker Coroutine                   Dedicated MemStore Thread
+─────────────────────                   ─────────────────────────
+co_await cache.get("key")
+  │
+  ├─ allocate MemRequest on stack
+  ├─ create eventfd (or Win32 event)
+  ├─ submit(&req) to queue  ──────────► drain request queue
+  ├─ register async event read         process operations on map
+  └─ coroutine suspends                write result to req struct
+                                ◄────── signal eventfd / IOCP
+  event loop completion event           ↓
+  coroutine resumes                     sweep TTL-expired keys
+  read result from stack struct         evict LRU if capacity exceeded
+  close(efd)
+  co_return result
+```
+
+### Architectural Guarantees
+
+1. **Lock-Free Hot Path**: The internal hash map (`std::unordered_map`) and LRU list are strictly thread-confined to the dedicated MemStore thread. No readers or writers contend on the underlying container.
+2. **Sub-Microsecond Dispatch**: Workers hold a brief queue mutex only long enough to push a single pointer (~50–100 nanoseconds), immediately returning to process other network tasks while the I/O engine waits for completion.
+3. **Automatic Lifecycle**: The MemStore background thread starts automatically on construction and shuts down gracefully upon destruction, draining all in-flight requests before terminating.
+
+---
+
+## Setup & CMake Configuration
+
+Include headers from `<aegon/data/memory/...>`:
+
+```cpp
+#include <aegon/data/memory/MemStore.h>
+#include <aegon/data/memory/MemStoreCacheBackend.h>
+
+using namespace aegon::data::memory;
+```
+
+If linking against Aegon as a modular target:
+
+```cmake
+target_link_libraries(my_service PRIVATE Aegon::memory)
+```
+
+---
+
+## Configuration (`MemStoreConfig`)
+
+Configure memory capacity and sweeping intervals:
+
+```cpp
+MemStoreConfig config{
+    .max_entries = 500'000,                      // Evicts least-recently-used key when capacity is reached
+    .sweep_interval = std::chrono::milliseconds(500) // Proactive TTL cleanup sweep frequency
+};
+
+auto store = std::make_shared<MemStore>(config);
+```
+
+| Field | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `max_entries` | `size_t` | `1,000,000` | Maximum number of live keys. When reached, O(1) LRU eviction purges the oldest key before inserting a new one. |
+| `sweep_interval` | `std::chrono::milliseconds` | `500ms` | Interval between proactive TTL sweep iterations across the store. |
+
+---
+
+## Server Registration & Dependency Injection
+
+Register MemStore with Aegon's dependency injection container, or attach it as the Level 2 (L2) cache backend for the SQL ORM:
+
+<Tabs items={["HTTP Server Service", "SQL ORM L2 Cache"]}>
+<Tab value="HTTP Server Service">
+
+```cpp
+#include <aegon/Server.h>
+#include <aegon/data/memory/MemStore.h>
+#include <aegon/data/memory/MemStoreCacheBackend.h>
+
+using namespace aegon;
+using namespace aegon::data::memory;
+
+int main() {
+    Server server;
+
+    // 1. Instantiate shared MemStore
+    auto store = std::make_shared<MemStore>(MemStoreConfig{
+        .max_entries = 250'000
+    });
+
+    // 2. Provide to server dependency container
+    server.provide<MemStore>(store);
+
+    // 3. Consume in asynchronous route handlers
+    server.router().get("/cache/:key", [](Context& ctx) -> Task<void> {
+        auto store = ctx.service<MemStore>();
+        MemStoreCacheBackend cache(store);
+
+        auto val = co_await cache.get(ctx.param("key"));
+        if (!val) {
+            ctx.res().status(StatusCode::NotFound).json({{"error", "Cache miss"}});
+            co_return;
+        }
+
+        ctx.res().json({{"value", *val}});
+    });
+
+    server.listen(8080);
+    server.run(8);
+}
+```
+
+</Tab>
+<Tab value="SQL ORM L2 Cache">
+
+```cpp
+#include <aegon/data/sql/SqlDatabaseClient.h>
+#include <aegon/data/memory/MemStore.h>
+#include <aegon/data/memory/MemStoreCacheBackend.h>
+
+using namespace aegon::data::sql;
+using namespace aegon::data::memory;
+
+Task<void> init_db(SqlDatabaseClient& db) {
+    auto store = std::make_shared<MemStore>();
+    auto mem_backend = std::make_shared<MemStoreCacheBackend>(store);
+
+    // Attach as the ORM's L2 cache backend
+    // Powers entity pointer caching and zero-allocation query invalidation
+    db.set_cache(mem_backend);
+}
+```
+
+</Tab>
+</Tabs>
+
+---
+
+## Core Operations
+
+MemStore implements the standard `CacheBackend` interface, allowing unified usage via `MemStoreCacheBackend`:
+
+### 1. Get
+Returns `std::optional<std::string>` (evaluating to `std::nullopt` on cache miss or expired TTL):
+
+```cpp
+std::optional<std::string> session = co_await cache.get("user:session:100");
+
+if (session) {
+    std::println("Found session: {}", *session);
+} else {
+    std::println("Session missing or expired");
+}
+```
+
+### 2. Set with Optional TTL
+Store persistent values or assign relative time-to-live expirations:
+
+```cpp
+// Persistent value (no TTL)
+co_await cache.set("system:feature_flags", "{\"beta_checkout\": true}");
+
+// Expiring key (purged automatically after 1 hour)
+co_await cache.set("user:session:100", "authenticated", std::chrono::seconds(3600));
+```
+
+### 3. Deletion (Single & Batch)
+Delete one or multiple keys in a single operation:
+
+```cpp
+// Delete single key
+bool existed = co_await cache.del("user:session:100");
+
+// Delete multiple keys (returns count of deleted keys)
+int64_t removed = co_await cache.del_many({"user:100:session", "user:100:cart"});
+```
+
+### 4. Multi-Key Get (`mget`)
+Batch retrieval avoids redundant event loop context transitions:
+
+```cpp
+std::vector<std::optional<std::string>> results = 
+    co_await cache.mget({"setting:theme", "setting:lang", "setting:tz"});
+
+for (const auto& item : results) {
+    if (item) {
+        std::println("Item: {}", *item);
+    }
+}
+```
+
+### 5. Atomic Counter Increment
+Atomically increment 64-bit integer keys. If the key does not exist, it is initialized to `1`:
+
+```cpp
+int64_t current_visits = co_await cache.incr("metrics:landing_page_views");
+```
+
+---
+
+## Dual Expiry & LRU Eviction
+
+MemStore combines two complementary cleanup algorithms to maintain low memory consumption without introducing latency spikes:
+
+### 1. Lazy Expiry
+Whenever `get(key)` is called, MemStore compares `expires_at` against `std::chrono::steady_clock::now()`. If the entry has expired, it is immediately deleted and `std::nullopt` is returned.
+
+### 2. Proactive Periodic Sweep
+Keys that are written with a TTL but never accessed again are swept by the dedicated background thread every `sweep_interval` (default: `500ms`). The sweep iterates through store entries, deleting expired records without holding locks on worker threads.
+
+### 3. Least Recently Used (LRU) Eviction
+When the number of stored keys exceeds `max_entries`:
+- A doubly-linked list (`std::list<std::string>`) tracks chronological access order.
+- Both `get` and `set` operations "touch" the key, moving it to the front of the list in $O(1)$ time.
+- The least-recently-used key at the back of the list is evicted before inserting the new entry.
+
+---
+
+## Real-Time Statistics & Monitoring
+
+MemStore maintains atomic hit and miss counters that can be inspected from any thread without synchronization:
+
+```cpp
+// Live key count (read from store's internal map)
+size_t live_keys = store->size();
+
+// Atomic hit / miss counters
+uint64_t hits = store->hits();
+uint64_t misses = store->misses();
+
+double hit_rate = 0.0;
+if (hits + misses > 0) {
+    hit_rate = (static_cast<double>(hits) / (hits + misses)) * 100.0;
+}
+
+std::println("MemStore Stats: {} keys, {} hits, {} misses ({:.1f}% hit rate)",
+             live_keys, hits, misses, hit_rate);
+
+// Reset counters
+store->reset_stats();
+```

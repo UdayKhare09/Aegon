@@ -8,7 +8,7 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 Aegon features a two-tier high-performance router built specifically for modern asynchronous microservices and high-throughput REST APIs.
 
-It combines an **$O(1)$ static route map** (zero heap allocation lookup) with a cache-aligned **Radix Tree** for dynamic path matching, dynamic parameter extraction, and prefix-scoped route groups.
+It combines an **O(1) static route map** (zero heap allocation lookup) with a cache-aligned **Radix Tree** for dynamic path matching, dynamic parameter extraction, and prefix-scoped route groups.
 
 ---
 
@@ -243,7 +243,7 @@ Inbound HTTP Request
          └── No route matches ──────► 404 Not Found
 ```
 
-1. **Tier 1 (Static Fast-Path)**: Purely static routes (e.g. `/`, `/ping`, `/api/v1/metrics`) are indexed in a contiguous array keyed by HTTP verb. Lookups execute in $O(1)$ time with zero memory allocations.
+1. **Tier 1 (Static Fast-Path)**: Purely static routes (e.g. `/`, `/ping`, `/api/v1/metrics`) are indexed in a contiguous array keyed by HTTP verb. Lookups execute in O(1) time with zero memory allocations.
 2. **Tier 2 (Radix Tree Dynamic Path)**: Parameterized routes (`:param`) are evaluated via a radix tree that extracts parameter views directly into the request object without copying strings.
 3. **HTTP 405 vs 404 Resolution**: If a path exists for `POST` but the client issued `GET`, Aegon recognizes the path match and immediately yields `405 Method Not Allowed` with an RFC 9110-compliant `Allow` header listing permitted verbs, rather than an incorrect `404 Not Found`.
 

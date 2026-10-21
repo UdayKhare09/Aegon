@@ -1,0 +1,322 @@
+---
+title: Relationships & Associations
+description: Relational data modeling in C++23 with HasOne, HasMany, Many-to-Many junction tables, batch eager loading, lazy loading, and active mutators.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Aegon's Object-Relational Mapper (ORM) provides native, compile-time modeling of relational database associations without code generators or runtime reflection.
+
+Supported relationship topologies:
+- **One-to-One (`HasOne<T>`)**: Direct foreign key association where the child entity references the parent primary key.
+- **One-to-Many (`HasMany<T>`)**: Collection association where multiple child entities reference the parent primary key.
+- **Many-to-Many (`HasMany<T>` via `.through<Junction>()`)**: Associative relationship bridged by an intermediate junction table.
+
+---
+
+## Defining Associations in Schemas
+
+Relational fields are declared as members of entity structs and bound inside the `static auto schema()` definition:
+
+```cpp title="Entities.h"
+#include <aegon/data/orm/sql/Sql.h>
+
+using namespace aegon::data::orm::sql;
+
+// 1. One-to-One Child Entity
+struct Profile {
+    int64_t id{0};
+    int64_t user_id{0};
+    std::string bio;
+    std::string avatar_url;
+
+    static auto schema() {
+        return table<Profile>("profiles")
+            .id(&Profile::id)
+            .column(&Profile::user_id, "user_id").references<UserAccount>(&UserAccount::id)
+            .column(&Profile::bio, "bio")
+            .column(&Profile::avatar_url, "avatar_url");
+    }
+};
+
+// 2. One-to-Many Child Entity
+struct OrderRecord {
+    int64_t id{0};
+    int64_t user_id{0};
+    std::string item_name;
+    double price{0.0};
+
+    static auto schema() {
+        return table<OrderRecord>("orders")
+            .id(&OrderRecord::id)
+            .column(&OrderRecord::user_id, "user_id").references<UserAccount>(&UserAccount::id)
+            .column(&OrderRecord::item_name, "item_name")
+            .column(&OrderRecord::price, "price");
+    }
+};
+
+// 3. Many-to-Many Target Entity
+struct Role {
+    int64_t id{0};
+    std::string name;
+
+    static auto schema() {
+        return table<Role>("roles")
+            .id(&Role::id)
+            .column(&Role::name, "name");
+    }
+};
+
+// 4. Many-to-Many Junction Entity
+struct UserRole {
+    int64_t user_id{0};
+    int64_t role_id{0};
+
+    static auto schema() {
+        return table<UserRole>("user_roles")
+            .column(&UserRole::user_id, "user_id")
+            .column(&UserRole::role_id, "role_id")
+            .composite_primary_key(&UserRole::user_id, &UserRole::role_id);
+    }
+};
+
+// 5. Parent Entity with Associations
+struct UserAccount {
+    int64_t id{0};
+    std::string username;
+    std::string email;
+
+    // Association Containers:
+    HasOne<Profile> profile;
+    HasMany<OrderRecord> orders;
+    HasMany<Role> roles;
+
+    static auto schema() {
+        return table<UserAccount>("users")
+            .id(&UserAccount::id)
+            .column(&UserAccount::username, "username")
+            .column(&UserAccount::email, "email")
+            // 1:1 Binding: profile foreign key is Profile::user_id
+            .has_one(&UserAccount::profile, &Profile::user_id)
+            // 1:N Binding: orders foreign key is OrderRecord::user_id
+            .has_many(&UserAccount::orders, &OrderRecord::user_id)
+            // N:M Binding: roles bridged through UserRole junction table
+            .has_many(&UserAccount::roles).through<UserRole>(&UserRole::user_id, &UserRole::role_id);
+    }
+};
+```
+
+---
+
+## Eager Loading (`.include`)
+
+The `.include()` clause completely eliminates the classic **N+1 query problem**. 
+
+Rather than issuing one query for each parent row, Aegon collects all parent primary keys and executes a single secondary batch query (`WHERE foreign_key IN ($1, $2, ...)`), automatically stitching child records to parent structs in memory with zero dictionary lookups:
+
+```
+[ Query 1: Root Entities ] ──► SELECT * FROM "users" WHERE "is_active" = true;
+                                (collects IDs: 1, 2, 3)
+[ Query 2: Batch Orders  ] ──► SELECT * FROM "orders" WHERE "user_id" IN (1, 2, 3);
+[ Query 3: Batch Roles   ] ──► SELECT r.*, j.user_id FROM "roles" r 
+                                JOIN "user_roles" j ON r.id = j.role_id 
+                                WHERE j.user_id IN (1, 2, 3);
+```
+
+### Unscoped Eager Loading
+
+```cpp
+auto users = co_await db.fetch_all(
+    db.from<UserAccount>()
+      .include(&UserAccount::profile)
+      .include(&UserAccount::orders)
+      .include(&UserAccount::roles)
+      .order_by(&UserAccount::id, SortOrder::Asc)
+);
+
+for (const auto& user : users) {
+    std::cout << "User: " << user.username << "\n";
+
+    // 1:1 Profile
+    if (user.profile.has_value()) {
+        std::cout << "  Bio: " << user.profile->bio << "\n";
+    }
+
+    // 1:N Orders
+    for (const auto& order : user.orders) {
+        std::cout << "  Order: " << order.item_name << " ($" << order.price << ")\n";
+    }
+
+    // N:M Roles
+    for (const auto& role : user.roles) {
+        std::cout << "  Role: " << role.name << "\n";
+    }
+}
+```
+
+### Scoped Eager Loading (Nested Filtering, Sorting & Limits)
+
+Filter, sort, and constrain child collections directly during eager loading:
+
+```cpp
+auto users = co_await db.fetch_all(
+    db.from<UserAccount>()
+      .where(&UserAccount::username, Op::Eq, "Alice")
+      // Load only top 3 highest-value orders above $100
+      .include(&UserAccount::orders, [](auto& q) {
+          q.where(&OrderRecord::price, Op::Gte, 100.0)
+           .order_by(&OrderRecord::price, SortOrder::Desc)
+           .limit(3);
+      })
+      // Load only specific roles
+      .include(&UserAccount::roles, [](auto& q) {
+          q.where(&Role::name, Op::Eq, "Admin");
+      })
+);
+```
+
+---
+
+## Relational Filtering (`where_has` & `where_doesnt_have`)
+
+Filter parent records based on child existence or child criteria without manual SQL `JOIN` or `EXISTS` clauses:
+
+```cpp
+// 1. Users who have an associated profile
+auto users_with_bio = co_await db.fetch_all(
+    from<UserAccount>().where_has(&UserAccount::profile)
+);
+
+// 2. Users who have NO orders (inactive accounts)
+auto inactive_users = co_await db.fetch_all(
+    from<UserAccount>().where_doesnt_have(&UserAccount::orders)
+);
+
+// 3. Users with orders exceeding $200
+auto high_value_users = co_await db.fetch_all(
+    from<UserAccount>().where_has(&UserAccount::orders, [](auto& q) {
+        q.where(&OrderRecord::price, Op::Gt, 200.0);
+    })
+);
+
+// 4. Many-to-Many subquery filter
+auto developers = co_await db.fetch_all(
+    from<UserAccount>().where_has(&UserAccount::roles, [](auto& q) {
+        q.where(&Role::name, Op::Eq, "Developer");
+    })
+);
+```
+
+---
+
+## Lazy Loading on Demand (`.load`)
+
+When an entity is fetched without `.include()`, its relations remain unpopulated (`user.orders.is_loaded() == false`), consuming zero additional query overhead.
+
+You can load relations on-demand using `co_await user.orders.load(db)`:
+
+```cpp
+auto user = co_await db.find_by_id<UserAccount>(1);
+
+if (user && !user->orders.is_loaded()) {
+    // Queries database on-demand and populates user->orders
+    co_await user->orders.load(db);
+
+    for (const auto& order : user->orders) {
+        std::cout << order.item_name << "\n";
+    }
+
+    // Subsequent calls are cached no-ops:
+    co_await user->orders.load(db); // Zero SQL queries executed
+}
+```
+
+<Callout type="info">
+**Idempotent & Cached**
+Calling `.load(db)` on an already-loaded relation is an instant no-op. If a `HasOne` relation resolves to no record in the database, `is_loaded()` is set to `true` while `has_value()` remains `false`, preventing redundant queries.
+</Callout>
+
+---
+
+## Active Relational Mutators
+
+Aegon provides active mutator methods on association wrappers to modify relations directly in the database while maintaining in-memory synchronization:
+
+### 1. One-to-One Mutators (`.set` / `.clear`)
+
+```cpp
+// 1. Assign or replace a profile
+Profile new_profile{.bio = "Principal Systems Architect"};
+co_await user.profile.set(db, new_profile);
+
+// 2. Clear association (sets foreign key to NULL or deletes record depending on FK action)
+co_await user.profile.clear(db);
+assert(!user.profile.has_value());
+```
+
+### 2. One-to-Many Mutators (`.add` / `.remove`)
+
+```cpp
+// 1. Add a new order (automatically sets order.user_id and persists to DB)
+OrderRecord new_order{.item_name = "Ultrawide 49-inch Monitor", .price = 1199.0};
+co_await user.orders.add(db, new_order);
+assert(new_order.id > 0); // Generated primary key populated
+
+// 2. Remove order by child ID
+bool removed = co_await user.orders.remove(db, new_order.id);
+assert(removed);
+```
+
+### 3. Many-to-Many Mutators (`.attach` / `.detach`)
+
+```cpp
+// 1. Attach a role (inserts junction row into user_roles)
+Role developer_role{.id = 2, .name = "Developer"};
+co_await user.roles.attach(db, developer_role);
+
+// 2. Detach role by target ID (removes junction row)
+bool detached = co_await user.roles.detach(db, 2);
+assert(detached);
+```
+
+---
+
+## Low-Level Many-to-Many Linking (`db.link` / `db.unlink`)
+
+For direct junction table operations without loading entities:
+
+```cpp
+// Link user 10 to role 3 in user_roles
+co_await db.link<UserRole>(/*user_id=*/10, /*role_id=*/3);
+
+// Unlink user 10 from role 3
+bool unlinked = co_await db.unlink<UserRole>(/*user_id=*/10, /*role_id=*/3);
+```
+
+---
+
+## Transactional Tree Insertion (`db.insert_tree`)
+
+Persist a parent entity and all its nested relations in a single atomic transaction:
+
+```cpp
+UserAccount new_user;
+new_user.username = "David";
+new_user.email = "david@aegon.io";
+
+// Initialize 1:1 Profile
+new_user.profile.set_value(Profile{.bio = "Security Engineer"});
+
+// Initialize 1:N Orders
+new_user.orders.push_back(OrderRecord{.item_name = "YubiKey 5Ci", .price = 75.0});
+
+// Initialize N:M Roles
+new_user.roles.push_back(Role{.id = 1, .name = "Admin"});
+
+// Atomically inserts:
+// 1. UserAccount (generates ID)
+// 2. Profile (with user_id = generated ID)
+// 3. OrderRecord (with user_id = generated ID)
+// 4. UserRole junction row (linking user_id to role_id)
+co_await db.insert_tree(new_user);
+```

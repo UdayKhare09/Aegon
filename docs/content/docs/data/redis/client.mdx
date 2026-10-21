@@ -1,0 +1,370 @@
+---
+title: Redis Client & Commands
+description: High-throughput, native Redis client built on Aegon's pluggable asynchronous I/O engine and C++23 coroutines with zero-copy RESP3 protocol parsing.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Aegon includes a native, non-blocking Redis client engineered directly on top of Aegon's pluggable asynchronous I/O engine (Linux `io_uring`, edge-triggered `epoll`, and Windows `IOCP`) and C++23 coroutines. It completely bypasses external third-party C dependencies (such as `hiredis`) to deliver zero-copy parsing of the RESP2 and RESP3 wire protocols, lock-free connection pooling, and transparent multi-core thread affinity.
+
+---
+
+## Architecture Overview
+
+Traditional Redis clients rely on multi-threaded thread pools or synchronous blocking sockets wrapped in worker queues. Aegon's Redis client is built from the ground up to integrate natively with Aegon's asynchronous runtime:
+
+- **Asynchronous Kernel I/O**: Direct integration with Aegon's pluggable `IoEngine` (`io_uring` multishot queues on Linux 6.1+, `epoll` fallback for legacy/containers, or Windows `IOCP`) for non-blocking socket operations.
+- **Zero-Copy RESP3 Parser**: Streaming state machine parser (`Resp3Parser`) that constructs strongly-typed `RespValue` variants directly from network socket buffers.
+- **Lock-Free Coroutines**: All operations return `core::Task<T>`, suspending the calling coroutine until data arrives on the event loop without blocking worker threads.
+- **Thread-Affinity Pooling**: Paired with `PerCoreRedisClient`, each CPU worker thread manages its own dedicated connection pool pinned to that core's event loop, eliminating mutex contention and cache-line bouncing.
+
+---
+
+## Client Instantiation & Configuration
+
+### Standalone Node Configuration
+
+Configuration options are encapsulated in `RedisNodeConfig`:
+
+```cpp
+#include <aegon/data/redis/RedisClient.h>
+
+using namespace aegon::data::redis;
+
+RedisNodeConfig config{
+    .host = "127.0.0.1",
+    .port = 6379,
+    .username = "default",                    // Optional ACL username
+    .password = "supersecret",                 // Optional AUTH password
+    .database = 0,                            // Default DB index
+    .connect_timeout = std::chrono::milliseconds(2000)
+};
+```
+
+### Direct `RedisClient` vs `PerCoreRedisClient`
+
+Depending on whether your application is single-threaded or runs across multiple CPU cores, you can instantiate either `RedisClient` directly or wrap it in `PerCoreRedisClient`:
+
+<Tabs items={["PerCore (Multi-Threaded Server)", "Direct RedisClient (Single Core)"]}>
+<Tab value="PerCore (Multi-Threaded Server)">
+
+```cpp
+#include <aegon/Server.h>
+#include <aegon/data/redis/PerCoreRedisClient.h>
+
+using namespace aegon;
+using namespace aegon::data::redis;
+
+int main() {
+    Server server;
+
+    RedisNodeConfig config{
+        .host = "127.0.0.1",
+        .port = 6379,
+        .password = "secret"
+    };
+
+    // Lazily allocates an isolated RedisClient pool per CPU worker thread
+    auto redis = std::make_shared<PerCoreRedisClient>(config, /*pool_size=*/8);
+    server.provide<PerCoreRedisClient>(redis);
+
+    server.router().get("/cache/:key", [](Context& ctx) -> Task<void> {
+        auto& client = ctx.service<PerCoreRedisClient>();
+        auto val = co_await client->get(ctx.param("key"));
+        if (!val) {
+            ctx.res().status(StatusCode::NotFound).json({{"error", "Key not found"}});
+            co_return;
+        }
+        ctx.res().json({{"value", *val}});
+    });
+
+    server.listen(8080);
+    server.run(8);
+}
+```
+
+</Tab>
+<Tab value="Direct RedisClient (Single Core)">
+
+```cpp
+#include <aegon/core/EventLoop.h>
+#include <aegon/data/redis/RedisClient.h>
+
+using namespace aegon;
+using namespace aegon::data::redis;
+
+Task<void> run_app(core::EventLoop& loop) {
+    RedisNodeConfig config{
+        .host = "127.0.0.1",
+        .port = 6379
+    };
+
+    // Directly bound to loop.engine()
+    RedisClient redis(loop.engine(), config, /*pool_size=*/16);
+
+    co_await redis.set("app:status", "online");
+    auto status = co_await redis.get("app:status");
+    if (status) {
+        std::println("Status: {}", *status);
+    }
+}
+```
+
+</Tab>
+</Tabs>
+
+---
+
+## Strings API
+
+The Strings API supports fundamental key-value operations, multi-key batches, atomic counters, and key deletion:
+
+```cpp
+// Set key with optional TTL (std::chrono::seconds)
+co_await redis.set("user:session:100", "active", std::chrono::seconds(3600));
+
+// Retrieve string value (returns std::optional<std::string>)
+std::optional<std::string> session = co_await redis.get("user:session:100");
+
+// Atomic increment & decrement
+int64_t views = co_await redis.incr("metrics:page_views");
+int64_t stock = co_await redis.decr("inventory:item:42");
+
+// Multi-key operations (MGET / MSET)
+co_await redis.mset({{"item:1", "apple"}, {"item:2", "banana"}});
+std::vector<std::optional<std::string>> items = co_await redis.mget({"item:1", "item:2", "item:3"});
+
+// Deletion (single and batch)
+bool deleted = co_await redis.del("user:session:100");
+int64_t del_count = co_await redis.del_many({"item:1", "item:2"});
+```
+
+---
+
+## Hashes API
+
+Redis hashes represent structured records mapping string fields to string values:
+
+```cpp
+// Set single field
+co_await redis.hset("user:42:profile", "username", "alex");
+co_await redis.hset("user:42:profile", "email", "alex@example.com");
+
+// Retrieve field
+std::optional<std::string> email = co_await redis.hget("user:42:profile", "email");
+
+// Check if field exists
+bool has_phone = co_await redis.hexists("user:42:profile", "phone");
+
+// Retrieve all field-value pairs
+std::vector<std::pair<std::string, std::string>> all_fields = 
+    co_await redis.hgetall("user:42:profile");
+
+for (const auto& [field, value] : all_fields) {
+    std::println("{} = {}", field, value);
+}
+
+// Delete field
+bool removed = co_await redis.hdel("user:42:profile", "bio");
+```
+
+---
+
+## Lists & FIFO Queues
+
+Lists provide order-preserving sequences optimized for message queues and activity logs:
+
+```cpp
+// Push elements to list
+int64_t len_left = co_await redis.lpush("job:queue", "task_urgent");
+int64_t len_right = co_await redis.rpush("job:queue", "task_standard");
+
+// Pop elements (returns std::optional<std::string>)
+std::optional<std::string> next_task = co_await redis.lpop("job:queue");
+std::optional<std::string> last_task = co_await redis.rpop("job:queue");
+```
+
+---
+
+## Sets (Unordered Collections)
+
+Sets maintain unique, unordered string collections with constant-time membership lookups:
+
+```cpp
+// Add and remove set members
+co_await redis.sadd("user:1:roles", "admin");
+co_await redis.sadd("user:1:roles", "editor");
+co_await redis.srem("user:1:roles", "editor");
+
+// Membership test
+bool is_admin = co_await redis.sismember("user:1:roles", "admin");
+
+// Retrieve all members
+std::vector<std::string> roles = co_await redis.smembers("user:1:roles");
+```
+
+---
+
+## Sorted Sets (Leaderboards & Priority Queues)
+
+Sorted sets associate each member with a 64-bit floating point score, keeping elements ordered at all times:
+
+```cpp
+// Add member with floating-point score
+co_await redis.zadd("leaderboard", "player_1", 1500.0);
+co_await redis.zadd("leaderboard", "player_2", 2100.5);
+co_await redis.zadd("leaderboard", "player_3", 1850.25);
+
+// Query rank and score (0-indexed)
+std::optional<int64_t> top_rank = co_await redis.zrevrank("leaderboard", "player_2"); // 0 (highest)
+std::optional<double> score = co_await redis.zscore("leaderboard", "player_2");        // 2100.5
+
+// Range queries by rank with scores
+std::vector<std::pair<std::string, double>> top_players = 
+    co_await redis.zrevrange_with_scores("leaderboard", 0, 9);
+
+for (const auto& [player, pts] : top_players) {
+    std::println("{}: {:.1f} pts", player, pts);
+}
+
+// Range queries by score threshold
+std::vector<std::string> silver_tier = 
+    co_await redis.zrangebyscore("leaderboard", "1500", "2000");
+
+// Cardinality and score counts
+int64_t total_players = co_await redis.zcard("leaderboard");
+int64_t tiered_count = co_await redis.zcount("leaderboard", "1000", "2000");
+
+// Remove member
+co_await redis.zrem("leaderboard", "player_1");
+```
+
+---
+
+## Key Lifecycle & Expiration
+
+Aegon provides granular controls for time-to-live (TTL) and key inspection:
+
+```cpp
+// Set relative expiration (seconds or milliseconds)
+co_await redis.expire("cache:temp_key", std::chrono::seconds(60));
+co_await redis.pexpire("cache:temp_key", std::chrono::milliseconds(500));
+
+// Check remaining TTL
+// Returns seconds remaining, -1 if key exists with no TTL, or -2 if key does not exist
+int64_t ttl_sec = co_await redis.ttl("cache:temp_key");
+int64_t ttl_ms = co_await redis.pttl("cache:temp_key");
+
+// Remove TTL (persist key)
+co_await redis.persist("cache:temp_key");
+
+// Existence check
+bool exists = co_await redis.exists("cache:temp_key");
+
+// Switch database index
+co_await redis.select_db(1);
+```
+
+---
+
+## Lua Scripting API
+
+Execute atomic Lua scripts on the Redis server. Aegon automatically computes the SHA-1 hash and uses `EVALSHA`, falling back transparently to `EVAL` if the script hasn't been cached on that Redis node (`NOSCRIPT` error):
+
+```cpp
+std::string script = R"(
+    local current = redis.call('GET', KEYS[1])
+    if current == ARGV[1] then
+        return redis.call('DEL', KEYS[1])
+    else
+        return 0
+    end
+)";
+
+// eval_script handles automatic SHA1 calculation, EVALSHA caching, and fallback
+RespValue result = co_await redis.eval_script(
+    script, 
+    /*keys=*/{"lock:invoice:42"}, 
+    /*args=*/{"token_uuid_abc"}
+);
+
+if (result.is_integer() && result.as_integer() == 1) {
+    std::println("Lock released successfully!");
+}
+```
+
+You can also explicitly preload scripts or execute them by SHA-1:
+
+```cpp
+std::string sha1 = co_await redis.script_load(script);
+RespValue val = co_await redis.evalsha(sha1, {"lock:invoice:42"}, {"token_uuid_abc"});
+```
+
+---
+
+## RESP2 & RESP3 Data Model (`RespValue`)
+
+Header: `<aegon/data/redis/Resp3.h>`
+
+When executing raw Redis commands, pipelines, transactions, or Lua scripts, results are returned as `RespValue`. `RespValue` wraps a `std::variant` corresponding to RESP data types:
+
+```cpp
+enum class RespType : uint8_t {
+    Null,
+    SimpleString,
+    Error,
+    Integer,
+    BulkString,
+    Array,
+    Boolean,
+    Double,
+    Push
+};
+```
+
+### Inspection & Extraction Methods
+
+| Method | Return Type | Description |
+|---|---|---|
+| `is_null()` | `bool` | Returns `true` for RESP null values (`$-1\r\n` or `_\r\n`). |
+| `is_string()` | `bool` | Returns `true` for simple strings (`+OK\r\n`) and bulk strings (`$5\r\nhello\r\n`). |
+| `is_integer()` | `bool` | Returns `true` for integers (`:123\r\n`). |
+| `is_double()` | `bool` | Returns `true` for floating-point values (RESP3 `,3.14\r\n`). |
+| `is_boolean()` | `bool` | Returns `true` for booleans (RESP3 `#t\r\n` or `#f\r\n`). |
+| `is_array()` | `bool` | Returns `true` for arrays (`*...`) and push messages. |
+| `is_error()` | `bool` | Returns `true` for error messages (`-ERR ...`). |
+| `as_string()` | `std::string_view` | Extracts string content without copying. |
+| `as_integer()` | `int64_t` | Extracts 64-bit integer value (or `0` if not an integer). |
+| `as_double()` | `double` | Extracts floating-point number. |
+| `as_boolean()` | `bool` | Extracts boolean value. |
+| `as_array()` | `const std::vector<RespValue>&` | Extracts nested vector of elements. |
+
+### Raw Command Execution
+
+Execute arbitrary Redis commands not exposed via convenience wrappers:
+
+```cpp
+// Execute raw command
+RespValue resp = co_await redis.execute({"CLIENT", "ID"});
+
+if (resp.is_integer()) {
+    std::println("Current Connection ID: {}", resp.as_integer());
+}
+
+// Inspect arbitrary nested RESP3 arrays
+RespValue scan_res = co_await redis.execute({"SCAN", "0", "COUNT", "50"});
+if (scan_res.is_array()) {
+    const auto& arr = scan_res.as_array();
+    std::string_view next_cursor = arr[0].as_string();
+    const auto& keys = arr[1].as_array();
+    
+    std::println("Next Cursor: {}", next_cursor);
+    for (const auto& k : keys) {
+        std::println(" - {}", k.as_string());
+    }
+}
+```
+
+<Callout type="info" title="Zero-Copy Views">
+`RespValue::as_string()` returns a `std::string_view` referencing the internal buffer. To keep values beyond the lifetime of the `RespValue` instance, convert them explicitly to `std::string(resp.as_string())`.
+</Callout>

@@ -1,0 +1,277 @@
+---
+title: Mutations & OCC
+description: Typesafe database mutations, auto-increment key generation, hierarchical tree inserts, optimistic concurrency control, and automatic cache invalidation.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Aegon provides type-safe asynchronous operations for inserting, updating, and deleting database records. All mutations execute exclusively on the primary connection pool, enforce Optimistic Concurrency Control (OCC), and trigger transparent L2 cache invalidation.
+
+All mutation operations are native C++23 coroutines returning `core::Task<T>`.
+
+---
+
+## Inserting Records
+
+### 1. Single Entity Insertion (`db.insert`)
+
+Use `db.insert(entity)` to persist an entity to the database:
+
+```cpp
+#include <aegon/data/orm/sql/Sql.h>
+
+using namespace aegon::data::orm::sql;
+
+User user{
+    .username = "marcus_aurelius",
+    .email = "marcus@rome.gov",
+    .bio = "Emperor & Philosopher"
+};
+
+// Executes INSERT INTO "users" (...) VALUES (...)
+// If the primary key is auto-increment, user.id is populated automatically!
+co_await db.insert(user);
+
+std::cout << "Persisted user with generated ID: " << user.id << "\n";
+```
+
+<Callout type="info">
+**Automatic Key Assignment**
+When inserting an entity with an auto-incrementing integer primary key (`int64_t`, `uint64_t`), Aegon automatically extracts the generated identity value (via `RETURNING id` in PostgreSQL or `sqlite3_last_insert_rowid` in SQLite) and writes it back to `user.id` in-place.
+</Callout>
+
+### 2. Explicit Generated Key Retrieval (`db.insert_get_id`)
+
+If you want the database-generated ID returned directly as a return value:
+
+```cpp
+int64_t new_id = co_await db.insert_get_id(user);
+```
+
+### 3. Batch Insertion (`db.insert_all`)
+
+Insert multiple entities sequentially across a single primary connection:
+
+```cpp
+std::vector<User> batch = {
+    {.username = "user1", .email = "u1@test.com"},
+    {.username = "user2", .email = "u2@test.com"},
+    {.username = "user3", .email = "u3@test.com"}
+};
+
+// Executes batch insertion
+co_await db.insert_all(std::span<User>(batch));
+```
+
+### 4. Hierarchical Graph Insertion (`db.insert_tree`)
+
+When an entity contains related 1:1, 1:N, or N:M child models (via `HasOne`, `HasMany`, or `through<Junction>`), `db.insert_tree` writes the parent and all children within an atomic database transaction:
+
+```cpp
+UserAccount account;
+account.username = "Alice";
+account.email = "alice@example.com";
+
+// 1:1 Child Relation
+account.profile.set_value(Profile{
+    .bio = "Cloud Architect",
+    .avatar_url = "/avatars/alice.png"
+});
+
+// 1:N Child Relation
+account.orders.push_back(OrderRecord{.item_name = "Workstation", .price = 2400.0});
+account.orders.push_back(OrderRecord{.item_name = "Monitor", .price = 600.0});
+
+// N:M Child Relation
+account.roles.push_back(Role{.name = "Admin"});
+account.roles.push_back(Role{.name = "Editor"});
+
+// Atomically inserts UserAccount, Profile, OrderRecord, and user_roles junction rows!
+co_await db.insert_tree(account);
+```
+
+---
+
+## Updating Records
+
+### 1. Full Entity Update (`db.update_entity`)
+
+Updates all columns of an existing entity matching its primary key:
+
+```cpp
+auto opt_user = co_await db.find_by_id<User>(42);
+
+if (opt_user) {
+    opt_user->bio = "Updated biography";
+    opt_user->balance = Decimal128("250.0000");
+
+    // Executes UPDATE "users" SET "bio" = $1, "balance" = $2 ... WHERE "id" = 42
+    size_t rows_affected = co_await db.update_entity(*opt_user);
+    std::cout << "Updated " << rows_affected << " record(s).\n";
+}
+```
+
+---
+
+## Optimistic Concurrency Control (OCC)
+
+In high-concurrency environments, multiple worker threads or background tasks may attempt to update the same record simultaneously, risking lost updates.
+
+Aegon provides built-in **Optimistic Concurrency Control** without database table locks.
+
+### 1. Registering a Version Token in the Schema
+
+Declare a version field on your entity and link it in the schema definition:
+
+```cpp
+struct Product {
+    int64_t id{0};
+    std::string name;
+    Decimal128 price;
+    int32_t stock{0};
+    int64_t version{1}; // OCC Version Column
+
+    static auto schema() {
+        return table<Product>("products")
+            .id(&Product::id)
+            .column(&Product::name, "name")
+            .column(&Product::price, "price")
+            .column(&Product::stock, "stock")
+            .version(&Product::version, "version");
+    }
+};
+```
+
+### 2. How Versioning Works During `update_entity`
+
+When updating a versioned entity:
+
+1. Aegon appends a version check to the `WHERE` clause:
+   ```sql
+   UPDATE "products" 
+   SET "stock" = $1, "version" = 2 
+   WHERE "id" = $2 AND "version" = 1;
+   ```
+2. If another transaction modified the record in the interim, the `version` on disk is no longer `1`. The statement affects **0 rows**.
+3. Aegon immediately detects the conflict and throws `aegon::data::orm::sql::OptimisticLockException`.
+4. If successful, `product.version` is automatically incremented in-memory to `2`.
+
+### 3. Handling OCC Conflicts in Business Logic
+
+```cpp
+try {
+    auto product = co_await db.find_by_id<Product>(item_id);
+    if (!product || product->stock < 1) {
+        ctx.res().status(http::StatusCode::BadRequest).text("Out of stock");
+        co_return;
+    }
+
+    product->stock -= 1;
+    co_await db.update_entity(*product);
+
+    ctx.res().json(*product);
+} catch (const aegon::data::orm::sql::OptimisticLockException& ex) {
+    // Conflict: another request reserved the item concurrently
+    ctx.res().status(http::StatusCode::Conflict).problem(
+        http::StatusCode::Conflict,
+        "Concurrent Modification",
+        "The inventory was modified concurrently. Please reload and retry."
+    );
+}
+```
+
+---
+
+## Partial Updates (`UpdateBuilder`)
+
+To update specific fields across rows matching arbitrary criteria without loading entities into memory, use `db.update<Entity>()`:
+
+```cpp
+auto update_query = db.update<User>()
+    .set(&User::is_active, false)
+    .where(&User::last_login_at, Op::Lt, DateTime::now() - std::chrono::hours(24 * 90))
+    .to_sql(db.primary_pool().dialect());
+
+// Executes UPDATE "users" SET "is_active" = $1 WHERE "last_login_at" < $2
+size_t deactivated_count = co_await db.execute(update_query);
+
+std::cout << "Deactivated " << deactivated_count << " inactive accounts.\n";
+```
+
+---
+
+## Deleting Records
+
+### 1. Delete by Primary Key (`db.delete_by_id`)
+
+```cpp
+// Returns Task<bool> indicating whether a row was found and removed
+bool removed = co_await db.delete_by_id<User>(42);
+
+if (removed) {
+    std::cout << "User 42 deleted successfully.\n";
+}
+```
+
+### 2. Batch Deletion (`DeleteBuilder`)
+
+To purge rows matching arbitrary filter criteria:
+
+```cpp
+auto delete_query = db.delete_from<UserSession>()
+    .where(&UserSession::expires_at, Op::Lt, DateTime::now())
+    .to_sql(db.primary_pool().dialect());
+
+// Executes DELETE FROM "user_sessions" WHERE "expires_at" < $1
+size_t expired_sessions = co_await db.execute(delete_query);
+
+std::cout << "Purged " << expired_sessions << " expired sessions.\n";
+```
+
+---
+
+## Automated Cache Invalidation
+
+When a cache backend (Redis or In-Memory) is attached to `SqlDatabaseClient`, mutations coordinate automated cache invalidation based on the schema's `TableCacheConfig`:
+
+```
+Client Mutation (e.g. update_entity)
+            │
+            ▼
+┌──────────────────────────────────────────────┐
+│ Primary Database Write (SQL UPDATE / INSERT) │
+└──────────────────────┬───────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────┐
+│ Automated Cache Flush                        │
+│  1. Bump Table Query Epoch (O(1))            │
+│  2. Evict / Update Entity Key                │
+│  3. Evict / Update Secondary Unique Pointers │
+└──────────────────────────────────────────────┘
+```
+
+1. **`insert()`**:
+   - Automatically increments the table query epoch (`table:epoch`), invalidating cached `SelectBuilder` queries that observe new records.
+2. **`update_entity()`**:
+   - Under `MutationSync::EvictOnWrite`: Deletes the cached entity key (`table:id:<id>`) and unique pointer keys, forcing the fresh entity to be fetched on the next read.
+   - Under `MutationSync::UpdateOnWrite`: Atomically rewrites the cached entity key with the updated struct data.
+   - Increments the table query epoch.
+3. **`delete_by_id()`**:
+   - Immediately purges `table:id:<id>` and unique pointers from the cache backend.
+   - Bumps the table query epoch.
+
+---
+
+## Mutation Method Summary
+
+| Method | Return Type | Description |
+| :--- | :--- | :--- |
+| `co_await db.insert(entity)` | `Task<void>` | Inserts entity and populates auto-increment primary key in-place. |
+| `co_await db.insert_get_id(entity)` | `Task<int64_t>` | Inserts entity and explicitly returns the generated primary key. |
+| `co_await db.insert_all(span)` | `Task<void>` | Performs sequential batch insertion on a single connection. |
+| `co_await db.insert_tree(entity)` | `Task<void>` | Transactionally inserts parent and all 1:1, 1:N, and N:M child relations. |
+| `co_await db.update_entity(entity)` | `Task<size_t>` | Updates all columns of an entity matching primary key; enforces OCC. |
+| `co_await db.update<Entity>()` | `UpdateBuilder<T>` | Fluent builder for partial column updates across matching criteria. |
+| `co_await db.delete_by_id<T>(id)` | `Task<bool>` | Deletes entity by primary key. |
+| `co_await db.delete_from<Entity>()` | `DeleteBuilder<T>` | Fluent builder for bulk deletion across matching criteria. |

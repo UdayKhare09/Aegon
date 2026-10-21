@@ -1,0 +1,201 @@
+---
+title: Transactions & Consistency
+description: ACID transactional execution in C++23 with automatic rollback, 100% API feature parity, savepoints, and deferred cache synchronization.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Aegon provides fully asynchronous ACID transactions via `db.transaction()`. The `Transaction` object features **100% API parity** with `SqlDatabaseClient`, allowing you to execute queries, inserts, updates, deletes, eager loading, relations, and batch operations within an isolated transaction boundary on the primary database connection.
+
+Critically, Aegon solves the classic distributed caching pitfall—**the dirty cache on rollback hazard**—through **Deferred Transactional Cache Synchronization**.
+
+---
+
+## Transaction Lifecycle
+
+Transactions are initiated via `co_await db.transaction(...)` and accept an asynchronous coroutine lambda taking a `Transaction& tx`:
+
+```cpp
+#include <aegon/data/orm/sql/Sql.h>
+
+using namespace aegon::data::orm::sql;
+
+co_await db.transaction([](Transaction& tx) -> core::Task<void> {
+    // 1. Fetch sender and receiver within the transaction boundary
+    auto sender = co_await tx.find_by_id<Account>(1);
+    auto receiver = co_await tx.find_by_id<Account>(2);
+
+    if (!sender || sender->balance < 100.0) {
+        // Throwing any exception automatically triggers ROLLBACK
+        throw std::runtime_error("Insufficient funds for transfer");
+    }
+
+    // 2. Perform atomic balance updates
+    sender->balance -= 100.0;
+    receiver->balance += 100.0;
+
+    co_await tx.update_entity(*sender);
+    co_await tx.update_entity(*receiver);
+
+    // 3. Normal return automatically triggers COMMIT
+    co_return;
+});
+```
+
+### Automatic Commit & Rollback Semantics
+
+- **Automatic `COMMIT` on Success**: If the transaction coroutine completes without throwing, Aegon automatically executes `COMMIT` and releases the leased connection back to the thread-local pool.
+- **Automatic `ROLLBACK` on Exception**: If any exception escapes the transaction block (e.g. business logic error, constraint violation, or `OptimisticLockException`), Aegon catches the exception, immediately issues `ROLLBACK`, discards all uncommitted cache invalidations, and re-throws the original exception to the caller.
+
+---
+
+## Deferred Cache Invalidation
+
+In naive ORM architectures, writing a record immediately mutates or deletes the corresponding cache key in Redis. If the surrounding database transaction is subsequently rolled back due to a constraint violation or server crash, **your cache becomes corrupted**, serving phantom uncommitted data.
+
+Aegon eliminates this through **Deferred Transactional Cache Synchronization**:
+
+```
+                       [ Start Transaction ]
+                                 │
+                   tx.update_entity(order)
+                                 │
+                   SQL UPDATE executed in DB
+                   Cache ops queued in memory:
+                   • [DeferredCacheOp: Del order:1]
+                   • [DeferredCacheOp: Incr orders:epoch]
+                                 │
+                 ┌───────────────┴───────────────┐
+             Success                           Failure
+                 │                                 │
+                 ▼                                 ▼
+            [ COMMIT ]                        [ ROLLBACK ]
+                 │                                 │
+     Flush queued cache ops:              Discard queued ops!
+     • Delete cache keys                  • Cache backend NOT touched
+     • Bump cache epochs                  • Zero stale or phantom data
+```
+
+1. **During the Transaction**: Write operations (`insert`, `update_entity`, `delete_by_id`) record their cache operations into an in-memory queue (`std::vector<DeferredCacheOp>`). The remote cache backend is never modified prematurely.
+2. **On Successful `COMMIT`**: `db.flush_deferred_cache()` applies all queued invalidations, key evictions, and epoch increments atomically.
+3. **On `ROLLBACK`**: The vector of deferred cache operations is discarded immediately. The cache backend remains 100% consistent with the database state.
+
+---
+
+## Feature Parity: `Transaction` vs `SqlDatabaseClient`
+
+The `Transaction` object implements identical interfaces to `SqlDatabaseClient`, eliminating the need to write separate query logic for transactional vs non-transactional code:
+
+| Operation | `SqlDatabaseClient` Method | `Transaction` Equivalent |
+| :--- | :--- | :--- |
+| **Point Lookups** | `db.find_by_id<T>(id)` | `tx.find_by_id<T>(id)` |
+| **Unique Lookups** | `db.find_by_unique(&T::f, val)` | `tx.find_by_unique(&T::f, val)` |
+| **Select Queries** | `db.fetch_all(query)` | `tx.fetch_all(query)` |
+| **First Record** | `db.fetch_one(query)` | `tx.fetch_one(query)` |
+| **Single Insert** | `db.insert(entity)` | `tx.insert(entity)` |
+| **Insert & Get ID** | `db.insert_get_id(entity)` | `tx.insert_get_id(entity)` |
+| **Batch Insert** | `db.insert_all(span<T>)` | `tx.insert_all(span<T>)` |
+| **Tree Insert** | `db.insert_tree(entity)` | `tx.insert_tree(entity)` |
+| **Entity Update** | `db.update_entity(entity)` | `tx.update_entity(entity)` |
+| **Delete by ID** | `db.delete_by_id<T>(id)` | `tx.delete_by_id<T>(id)` |
+| **Lazy Relations** | `db.load(relation)` | `tx.load(relation)` |
+| **Junction Links** | `db.link<Junction>(a, b)` | `tx.link<Junction>(a, b)` |
+| **Junction Unlinks**| `db.unlink<Junction>(a, b)` | `tx.unlink<Junction>(a, b)` |
+| **Aggregations** | `db.count(query)` | `tx.count(query)` |
+| **Raw SQL** | `db.execute(sql, params)` | `tx.execute(sql, params)` |
+
+---
+
+## Manual Transaction Control & Savepoints
+
+While the lambda-based `db.transaction(...)` is recommended for guaranteed exception safety, `Transaction` also provides explicit imperative control for complex multi-phase workflows:
+
+```cpp
+co_await db.transaction([](Transaction& tx) -> core::Task<void> {
+    // 1. First stage mutations
+    co_await tx.insert(order);
+
+    // 2. Create nested savepoint
+    co_await tx.execute("SAVEPOINT inventory_check");
+
+    try {
+        co_await deduct_inventory(tx);
+    } catch (const std::exception& e) {
+        // Rollback only to the savepoint
+        co_await tx.execute("ROLLBACK TO SAVEPOINT inventory_check");
+        order.status = "BACKORDERED";
+        co_await tx.update_entity(order);
+    }
+
+    // 3. Normal return commits the outer transaction
+    co_return;
+});
+```
+
+---
+
+## Transactional HTTP Handler Pattern
+
+Here is an end-to-end example of an Aegon HTTP endpoint performing an atomic database transfer and returning structured JSON responses:
+
+```cpp title="TransferController.cpp"
+#include <aegon/http/Server.h>
+#include <aegon/data/orm/sql/Sql.h>
+
+using namespace aegon;
+
+struct TransferRequest {
+    int64_t from_account_id;
+    int64_t to_account_id;
+    double amount;
+};
+
+void register_transfer_route(http::Server& server) {
+    server.router().post("/api/v1/transfers", [](http::Context& ctx) -> core::Task<void> {
+        auto req = ctx.bind_json<TransferRequest>();
+        if (!req) co_return;
+
+        auto& db = ctx.service<data::orm::sql::SqlDatabaseClient>();
+
+        try {
+            co_await db.transaction([&](data::orm::sql::Transaction& tx) -> core::Task<void> {
+                auto from = co_await tx.find_by_id<Account>(req->from_account_id);
+                auto to = co_await tx.find_by_id<Account>(req->to_account_id);
+
+                if (!from || !to) {
+                    throw std::invalid_argument("Account does not exist");
+                }
+                if (from->balance < req->amount) {
+                    throw std::runtime_error("Insufficient funds");
+                }
+
+                from->balance -= req->amount;
+                to->balance += req->amount;
+
+                // Updates with automatic Optimistic Concurrency Control
+                co_await tx.update_entity(*from);
+                co_await tx.update_entity(*to);
+
+                // Record audit log
+                AuditLog log{
+                    .from_id = from->id,
+                    .to_id = to->id,
+                    .amount = req->amount,
+                    .timestamp = data::types::DateTime::now()
+                };
+                co_await tx.insert(log);
+            });
+
+            ctx.res().status(http::StatusCode::Ok).json(R"({"status":"success"})");
+        } catch (const std::invalid_argument& ex) {
+            ctx.problem(http::StatusCode::NotFound, "Not Found", ex.what());
+        } catch (const std::runtime_error& ex) {
+            ctx.problem(http::StatusCode::UnprocessableEntity, "Transfer Failed", ex.what());
+        } catch (const data::orm::sql::OptimisticLockException& ex) {
+            ctx.problem(http::StatusCode::Conflict, "Conflict", "Concurrent balance update detected. Please retry.");
+        }
+
+        co_return;
+    });
+}
+```

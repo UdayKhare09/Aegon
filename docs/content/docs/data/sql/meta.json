@@ -2,6 +2,11 @@
   "title": "SQL Engine & ORM",
   "pages": [
     "config",
-    "schema"
+    "schema",
+    "querying",
+    "mutations",
+    "relations",
+    "transactions",
+    "cache"
   ]
 }

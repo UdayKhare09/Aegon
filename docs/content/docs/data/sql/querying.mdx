@@ -1,0 +1,335 @@
+---
+title: Querying Data
+description: High-performance type-safe SQL query engine with compile-time member pointers, relationship filtering, aggregations, and automatic pagination.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Aegon's SQL query engine generates parameterized, dialect-optimized SQL for PostgreSQL and SQLite. It provides compile-time type-safety through member pointers (`&Entity::field`), relationship subquery filtering (`where_has`), server-side aggregations, zero-allocation bulk hydration, and automated pagination.
+
+All query operations are fully asynchronous C++23 coroutines (`co_await`), executing without blocking event loop worker threads.
+
+---
+
+## Point Lookups (Primary Key & Unique)
+
+For high-speed single-record lookups, `SqlDatabaseClient` provides direct point lookup methods:
+
+### 1. Find by Primary Key
+
+```cpp
+#include <aegon/data/orm/sql/Sql.h>
+
+using namespace aegon::data::orm::sql;
+
+// Point lookup by primary key (UUID, uint64_t, int64_t, etc.)
+std::optional<User> user = co_await db.find_by_id<User>(user_id);
+
+if (user) {
+    std::cout << "User: " << user->username << " (" << user->email << ")\n";
+}
+```
+
+### 2. Find by Unique Column
+
+```cpp
+// Look up by any column declared with .unique()
+std::optional<User> user = co_await db.find_by_unique(&User::email, "alex@example.com");
+```
+
+<Callout type="info">
+**L2 Cache Transparent Bypass**
+If `.cache_by_id()` or `.by_unique()` are configured on the entity's `TableDef` schema, `find_by_id` and `find_by_unique` check the L2 cache (Redis or in-memory) first. Only on a cache miss is SQL executed, with the result automatically backfilling the cache.
+</Callout>
+
+---
+
+## Fluent Query Builder (`SelectBuilder`)
+
+Construct queries using `db.from<Entity>()` or the standalone `aegon::data::orm::sql::from<Entity>()`:
+
+```cpp
+auto query = db.from<User>()
+    .where(&User::is_active, Op::Eq, true)
+    .order_by(&User::created_at, SortOrder::Desc)
+    .limit(10);
+
+// 1. Fetch all matching entities into a newly allocated vector
+std::vector<User> users = co_await db.fetch_all(query);
+
+// 2. Fetch the first matching entity (automatically appends LIMIT 1)
+std::optional<User> first_admin = co_await db.fetch_one(
+    db.from<User>().where(&User::role, Op::Eq, "admin")
+);
+```
+
+### Zero-Allocation Bulk Hydration (`fetch_into`)
+
+In high-throughput hot paths, creating new `std::vector<Entity>` allocations on every request causes heap fragmentation. Use `fetch_into` to reuse a thread-local buffer:
+
+```cpp
+// Thread-local vector retains allocated buffer capacity across requests
+thread_local std::vector<User> buffer;
+
+// Clears existing elements while preserving vector memory capacity
+co_await db.fetch_into(query, buffer);
+
+for (const auto& user : buffer) {
+    // Process user...
+}
+```
+
+---
+
+## Column Projections (`.select()`)
+
+By default, Aegon selects all columns defined on the entity's schema. You can project specific columns to reduce database serialization and network bandwidth:
+
+```cpp
+// 1. Project specific member pointers
+auto q = db.from<Product>()
+    .select(&Product::id, &Product::name, &Product::price);
+
+// 2. Project column names as strings
+q.select_columns({"id", "name", "price"});
+
+// 3. Reset projection to all schema columns
+q.select();
+```
+
+---
+
+## Filtering with `.where()`
+
+Aegon provides a rich set of typesafe filter methods:
+
+```cpp
+auto q = db.from<User>();
+
+// Equality & Comparisons
+q.where(&User::age, Op::Gte, 21);
+q.and_where(&User::role, Op::Eq, "admin");
+q.or_where(&User::is_superadmin, Op::Eq, true);
+
+// Pattern Matching (LIKE / NOT LIKE)
+q.where(&User::email, Op::Like, "%@company.com");
+
+// Set Membership (IN / NOT IN)
+std::vector<std::string> allowed_roles = {"admin", "editor", "moderator"};
+q.where_in(&User::role, allowed_roles);
+
+// Range Filtering (BETWEEN)
+q.where_between(&User::age, 18, 65);
+
+// Nullability Checks
+q.where_null(&User::deleted_at);
+q.where_not_null(&User::bio);
+```
+
+### Comparison Operators (`Op` Enum)
+
+| Operator | SQL Equivalent | Description |
+| :--- | :--- | :--- |
+| `Op::Eq` | `=` | Strict equality |
+| `Op::Neq` | `!=` or `<>` | Inequity |
+| `Op::Gt` / `Op::Gte` | `>` / `>=` | Greater than / Greater than or equal |
+| `Op::Lt` / `Op::Lte` | `<` / `<=` | Less than / Less than or equal |
+| `Op::Like` / `Op::NotLike` | `LIKE` / `NOT LIKE` | SQL wildcard pattern matching (`%`, `_`) |
+| `Op::In` / `Op::NotIn` | `IN (...)` / `NOT IN (...)` | Collection membership test |
+| `Op::IsNull` / `Op::IsNotNull` | `IS NULL` / `IS NOT NULL` | SQL null check |
+| `Op::Between` | `BETWEEN a AND b` | Closed range check |
+
+---
+
+## Relationship Subquery Filtering (`where_has`)
+
+Filter parent entities based on the existence or properties of related child entities without writing manual `JOIN` or `EXISTS` subqueries:
+
+```cpp
+// 1. Find users who have an active profile
+auto users_with_profile = co_await db.fetch_all(
+    from<UserAccount>().where_has(&UserAccount::profile)
+);
+
+// 2. Find users who have NO orders (inactive accounts)
+auto inactive_users = co_await db.fetch_all(
+    from<UserAccount>().where_doesnt_have(&UserAccount::orders)
+);
+
+// 3. Filter parent entities by child condition
+auto high_value_customers = co_await db.fetch_all(
+    from<UserAccount>().where_has(&UserAccount::orders, [](auto& q) {
+        q.where(&OrderRecord::price, Op::Gte, 500.0);
+    })
+);
+
+// 4. Many-to-Many relationship filtering
+auto administrators = co_await db.fetch_all(
+    from<UserAccount>().where_has(&UserAccount::roles, [](auto& q) {
+        q.where(&Role::name, Op::Eq, "SuperAdmin");
+    })
+);
+```
+
+`where_has` works uniformly across **1:1 (`HasOne`)**, **1:N (`HasMany`)**, and **N:M (`through<Junction>`)** relationships.
+
+---
+
+## Scoped Eager Includes (`.include`)
+
+Eagerly load related child records while filtering and sorting child collections inline:
+
+```cpp
+auto users = co_await db.fetch_all(
+    from<UserAccount>()
+        .where(&UserAccount::username, Op::Eq, "Alice")
+        // Load only the top 5 highest-value orders for this user
+        .include(&UserAccount::orders, [](auto& q) {
+            q.where(&OrderRecord::price, Op::Gte, 50.0)
+             .order_by(&OrderRecord::price, SortOrder::Desc)
+             .limit(5);
+        })
+);
+
+for (const auto& order : users[0].orders) {
+    std::cout << "Order: " << order.item_name << " ($" << order.price << ")\n";
+}
+```
+
+---
+
+## Sorting, Grouping & Having
+
+```cpp
+auto q = db.from<Product>()
+    .where(&Product::category, Op::Eq, "electronics")
+    // Grouping
+    .group_by(&Product::brand)
+    .having(&Product::price, Op::Gt, 50.0)
+    // Multi-column sorting
+    .order_by(&Product::price, SortOrder::Asc)
+    .order_by(&Product::created_at, SortOrder::Desc)
+    // Offset pagination
+    .limit(20)
+    .offset(40);
+```
+
+### Resetting Clauses Dynamically
+
+When constructing dynamic queries conditionally:
+- `q.clear_limit()`: Removes the `LIMIT` restriction.
+- `q.clear_offset()`: Resets `OFFSET` back to 0.
+- `q.clear_order_by()`: Clears all sorting columns.
+
+---
+
+## Server-Side Aggregations
+
+Aegon executes SQL aggregation functions on the database server directly:
+
+```cpp
+// 1. COUNT
+uint64_t total_orders = co_await db.count(from<OrderRecord>());
+uint64_t active_orders = co_await db.count(
+    from<OrderRecord>().where(&OrderRecord::status, Op::Eq, "PROCESSING")
+);
+
+// 2. SUM (returns std::optional<T>)
+std::optional<double> revenue = co_await db.sum(
+    from<OrderRecord>().where(&OrderRecord::status, Op::Eq, "COMPLETED"),
+    &OrderRecord::price
+);
+
+// 3. AVG
+std::optional<double> avg_order_val = co_await db.avg(from<OrderRecord>(), &OrderRecord::price);
+
+// 4. MIN and MAX
+std::optional<double> min_price = co_await db.min(from<OrderRecord>(), &OrderRecord::price);
+std::optional<double> max_price = co_await db.max(from<OrderRecord>(), &OrderRecord::price);
+```
+
+---
+
+## Automated Pagination (`db.paginate`)
+
+Instead of issuing separate count queries and calculating pagination offsets manually, `db.paginate()` executes both in a single step:
+
+```cpp
+// Page 1, 20 records per page
+Page<UserAccount> page = co_await db.paginate(
+    from<UserAccount>()
+        .where(&UserAccount::is_active, Op::Eq, true)
+        .order_by(&UserAccount::created_at, SortOrder::Desc),
+    /*page=*/1,
+    /*per_page=*/20
+);
+
+std::cout << "Current Page: " << page.current_page << "\n";
+std::cout << "Total Items:  " << page.total_items  << "\n";
+std::cout << "Total Pages:  " << page.total_pages  << "\n";
+std::cout << "Has Next:     " << std::boolalpha << page.has_next << "\n";
+std::cout << "Has Prev:     " << std::boolalpha << page.has_prev << "\n";
+
+for (const auto& user : page.items) {
+    std::cout << "User: " << user.username << "\n";
+}
+```
+
+<Callout type="info">
+`db.paginate()` works seamlessly alongside eager includes (`.include(&User::orders)`). Pagination limits are applied strictly to the root entities without corrupting child collections.
+</Callout>
+
+---
+
+## Inspecting Compiled SQL (`.to_sql`)
+
+At any point, inspect the generated SQL string and parameter vector before execution:
+
+```cpp
+auto builder = from<User>()
+    .where(&User::role, Op::Eq, "admin")
+    .order_by(&User::created_at, SortOrder::Desc)
+    .limit(5);
+
+QueryResult qr = builder.to_sql(DatabaseDialect::PostgreSQL);
+
+std::cout << "Generated SQL: " << qr.sql << "\n";
+// Output: SELECT "id", "email", "username", ... FROM "users" WHERE "role" = $1 ORDER BY "created_at" DESC LIMIT 5
+
+for (size_t i = 0; i < qr.params.size(); ++i) {
+    std::cout << "Param $" << (i + 1) << ": " << qr.params[i].to_string() << "\n";
+}
+```
+
+---
+
+## Raw SQL Execution
+
+For complex analytical queries, custom database functions, or administrative DDL statements:
+
+```cpp
+// Execute raw parameterized query returning affected row count
+size_t affected = co_await db.execute(
+    "UPDATE users SET balance = balance + $1 WHERE status = $2",
+    {"50.00", "ACTIVE"}
+);
+```
+
+---
+
+## Query Method Summary
+
+| Method | Return Type | Description |
+| :--- | :--- | :--- |
+| `co_await db.fetch_all(query)` | `Task<std::vector<T>>` | Fetches all rows matching the query. |
+| `co_await db.fetch_one(query)` | `Task<std::optional<T>>` | Appends `LIMIT 1` and fetches the first matching row. |
+| `co_await db.fetch_into(query, vec)` | `Task<void>` | Reuses an existing vector buffer to eliminate heap allocations. |
+| `co_await db.find_by_id<T>(id)` | `Task<std::optional<T>>` | Fast primary key point lookup (with transparent L2 cache bypass). |
+| `co_await db.find_by_unique(&T::f, val)` | `Task<std::optional<T>>` | Fast unique column lookup (with transparent L2 cache bypass). |
+| `co_await db.count(query)` | `Task<uint64_t>` | Executes `SELECT COUNT(*) ...`. |
+| `co_await db.sum(query, &T::f)` | `Task<std::optional<Val>>` | Computes column sum. |
+| `co_await db.avg(query, &T::f)` | `Task<std::optional<double>>` | Computes column average. |
+| `co_await db.min(query, &T::f)` | `Task<std::optional<Val>>` | Finds minimum column value. |
+| `co_await db.max(query, &T::f)` | `Task<std::optional<Val>>` | Finds maximum column value. |
+| `co_await db.paginate(q, page, per_page)` | `Task<Page<T>>` | Returns paginated items with total item/page metadata. |
+| `co_await db.execute(sql, params)` | `Task<size_t>` | Executes arbitrary raw parameterized SQL. |

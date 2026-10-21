@@ -1,0 +1,245 @@
+---
+title: Query & Entity Caching
+description: Zero-allocation L2 database caching with normalized entity pointers, O(1) version epochs, and partitioned multi-tenant invalidation.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Aegon features a zero-allocation, high-throughput Level 2 (L2) caching layer tightly integrated with both the compile-time ORM and pluggable cache backends (Redis or in-process `MemStore`).
+
+It solves the two most notorious problems in enterprise database caching:
+1. **Duplicate Entity Bloat**: Queries returning overlapping records store only normalized primary key pointer lists, reducing cache memory consumption by up to **80%**.
+2. **Invalidation Overhead & Thundering Herds**: Employs O(1) Version Epochs to invalidate entire query result sets instantaneously without issuing slow, blocking `KEYS` or `SCAN` operations.
+
+---
+
+## Cache Backends
+
+Aegon decouples cache storage from cache semantics via the abstract `CacheBackend` interface:
+
+```cpp
+#include <aegon/data/redis/RedisCacheBackend.h>
+#include <aegon/data/redis/PerCoreRedisClient.h>
+#include <aegon/data/orm/sql/SqlDatabaseClient.h>
+
+using namespace aegon::data;
+
+// 1. Thread-per-core Redis Client
+// Pins a separate Redis connection pool to each worker thread's event loop,
+// completely eliminating cross-thread mutex contention.
+auto per_core_redis = std::make_shared<redis::PerCoreRedisClient>(
+    redis::RedisNodeConfig{ .host = "127.0.0.1", .port = 6379 }
+);
+
+// 2. Wrap as an L2 Cache Backend with key prefix
+auto redis_cache = std::make_shared<redis::RedisCacheBackend>(
+    per_core_redis->provider(), "cache:"
+);
+
+// 3. Attach cache backend to SQL Database Client
+db->set_cache(redis_cache);
+```
+
+<Callout type="info">
+**Why `PerCoreRedisClient`?**
+When running multi-threaded Aegon servers (`server.run(threads)`), always prefer `PerCoreRedisClient` over a shared client. Each worker thread operates its own pinned connection pool with zero lock contention and zero cross-core cache invalidation.
+</Callout>
+
+### In-Process MemStore (Embedded / Single-Node)
+
+For standalone microservices that do not run Redis, Aegon provides `MemStore`—an asynchronous in-process key-value store running on a dedicated worker thread with non-blocking eventfd notifications:
+
+```cpp
+#include <aegon/data/memory/MemStore.h>
+#include <aegon/data/memory/MemStoreCacheBackend.h>
+
+using namespace aegon::data::memory;
+
+// Instantiate MemStore with eviction parameters
+auto store = std::make_shared<MemStore>(MemStoreConfig{
+    .max_entries = 500'000,
+    .sweep_interval = std::chrono::milliseconds(500),
+});
+
+// Wrap as a CacheBackend and attach to the SQL client
+auto mem_cache = std::make_shared<MemStoreCacheBackend>(store);
+db->set_cache(mem_cache);
+```
+
+---
+
+## Normalized Entity & Pointer Caching
+
+In traditional caching systems, queries like `SELECT * FROM users WHERE active = true` and `SELECT * FROM users WHERE role = 'admin'` each store separate, duplicate copies of User #1. When User #1 is modified, one query cache is often updated while the other remains stale, leading to cache desynchronization.
+
+Aegon uses **Normalized Pointer Caching**:
+
+```
+[ Query Cache Key ]
+users:q:v1:hash_abc ──────► "1,42,108"  (Comma-separated PK IDs)
+
+[ Normalized Entity Cache ]
+users:id:1          ──────► {"id":1,"name":"Alice","role":"admin"}
+users:id:42         ──────► {"id":42,"name":"Bob","role":"member"}
+users:id:108        ──────► {"id":108,"name":"Charlie","role":"admin"}
+
+[ Secondary Unique Pointer ]
+users:email:alice@x.com ──► "1"
+```
+
+1. **Normalized Storage**: Queries cache only lists of primary keys (`"1,42,108"`).
+2. **Pipelined Hydration**: Aegon retrieves all required entities in a single batch using `MGET` across their primary key keys.
+3. **Instant Consistency**: Updating User #1 immediately reflects across every cached query referencing User #1 without cache desynchronization.
+
+---
+
+## Invalidation Modes (`InvalidationMode`)
+
+Declared on entity table schemas via `.invalidation_mode(...)`:
+
+### 1. `StrictEpoch` (Default)
+Maintains an atomic table version counter (`<table_name>:epoch`) in the cache backend.
+- Query fingerprints incorporate this epoch: `users:q:v<epoch>:<hash>`.
+- Any insert, update, or delete increments the epoch from `v1` to `v2`.
+- Previous query cache entries automatically become unreachable and expire naturally via TTL—**without executing a single `DEL` or `SCAN` command**.
+
+### 2. `Partitioned`
+Scopes query invalidation to a parent foreign key or multi-tenant ID (e.g. `organization_id` or `tenant_id`):
+
+```cpp
+table<Project>("projects")
+    .id(&Project::id)
+    .column(&Project::org_id, "org_id")
+    .partition_by(&Project::org_id);
+```
+
+A mutation in Organization A increments only `projects:part:OrgA:epoch`. Cached queries for Organization B remain completely valid and untouched!
+
+### 3. `PredicateAware`
+Tracks column-level equality values (e.g. `category=electronics`) and increments targeted predicate epochs (`table:pred:category:electronics:epoch`), preserving cache results for unrelated categories.
+
+### 4. `TtlOnly`
+Mutations never invalidate query results; cache entries decay purely according to their configured TTL. Ideal for analytics dashboards, leaderboards, and high-frequency metrics.
+
+---
+
+## Declarative Schema Cache Configuration
+
+Caching policies are declared directly on the compile-time `TableDef` schema:
+
+```cpp title="User.h"
+#include <aegon/data/orm/sql/Table.h>
+
+using namespace aegon::data::orm::sql;
+
+struct User {
+    int64_t id{0};
+    int64_t org_id{0};
+    std::string email;
+    std::string username;
+
+    static auto schema() {
+        return table<User>("users")
+            .id(&User::id)
+            .column(&User::org_id, "org_id")
+            .column(&User::email, "email").unique()
+            .column(&User::username, "username")
+            // 1. Enable primary key caching with a 600-second TTL
+            .cache_by_id(std::chrono::seconds(600))
+            // 2. Configure secondary pointer cache for unique email lookups
+            .by_unique(&User::email)
+            // 3. Partition query invalidation by organization
+            .partition_by(&User::org_id)
+            // 4. Invalidation mode: Partitioned
+            .invalidation_mode(InvalidationMode::Partitioned)
+            // 5. Mutation synchronization policy: EvictOnWrite
+            .mutation_sync(MutationSync::EvictOnWrite);
+    }
+};
+```
+
+### Schema Configuration API Reference
+
+| Method / Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `.cache_by_id(ttl)` | `std::chrono::seconds` | `300s` | Enables normalized entity row caching under `<table_name>:id:<pk>`. |
+| `.by_unique(&Entity::field)` | Member Pointer | None | Sets up unique-column alias pointers `<table_name>:<col>:<val>` pointing to primary key `<pk>`. |
+| `.partition_by(&Entity::field)` | Member Pointer | None | Scopes query epoch invalidations to parent/tenant IDs instead of invalidating the whole table. |
+| `.invalidation_mode(mode)` | `InvalidationMode` | `StrictEpoch` | Determines epoch bumping strategy (`StrictEpoch`, `Partitioned`, `PredicateAware`, `TtlOnly`). |
+| `.mutation_sync(sync)` | `MutationSync` | `EvictOnWrite` | Controls whether `update_entity` deletes the cached entity (`EvictOnWrite`) or overwrites it in-place (`UpdateOnWrite`). |
+
+---
+
+## Query Caching in Action
+
+```cpp
+// 1. Point lookup (transparently checks cache for users:id:42)
+std::optional<User> user = co_await db.find_by_id<User>(42);
+
+// 2. Unique column lookup (checks pointer users:email:alex@x.com -> users:id:42)
+std::optional<User> user2 = co_await db.find_by_unique(&User::email, "alex@x.com");
+
+// 3. Complex query caching with custom TTL (600 seconds)
+auto query = db.from<Product>()
+    .where(&Product::category, Op::Eq, "books")
+    .cached(std::chrono::seconds(600));
+
+std::vector<Product> products = co_await db.fetch_all(query);
+```
+
+---
+
+## Two-Phase Query Pointer Execution Workflow
+
+```
+Incoming Cached Query
+         │
+         ▼
+[ Step 1: Compute Query Fingerprint ]
+  SHA256( Dialect SQL + Bound Parameters + Active Table/Partition/Predicate Epoch )
+         │
+         ▼
+[ Step 2: Check Query Pointer Key ]
+  cache.get("users:q:v2:<fingerprint>")
+         │
+    ┌────┴────────────────────────┐
+    ▼ (Hit)                       ▼ (Miss)
+[ Read ID List: "1,42,108" ]    [ Execute SQL in Database ]
+    │                             │
+    ▼                             ▼
+[ Pipelined MGET ]              [ Extract Primary Keys ]
+  MGET users:id:1 ...             │
+    │                             ▼
+    ▼                           [ Store Query Pointer Key ]
+[ Glaze JSON Deserialization ]    SET users:q:v2:<fp> "1,42,108" EX 600
+    │                             │
+    │ (If any entity missing)     ▼
+    └────────► Re-fetch holes   [ Pipelined MSET Entity Rows ]
+               from SQL           MSET users:id:1 {...} users:id:42 {...}
+```
+
+1. **Deterministic Fingerprinting**: Normalizes the generated SQL query, serializes parameters, and appends the active version epoch.
+2. **Cache Hit**: Retrieves the comma-separated ID string (e.g. `"1,42,108"`), then issues a single pipelined `MGET` for `users:id:1`, `users:id:42`, and `users:id:108`.
+3. **Automatic Hole Healing**: If an individual entity was evicted while the query pointer remained active, Aegon detects the missing key, queries only the missing row from the database, and heals the entity cache.
+4. **Cache Miss**: Executes the SQL query against PostgreSQL / SQLite, saves the primary keys into the query pointer key with the configured TTL, and caches the individual entity records.
+
+---
+
+## Automated Mutation Invalidation
+
+All mutations executed through `SqlDatabaseClient` orchestrate cache updates automatically:
+
+| Operation | Entity Cache Action | Query Cache Action |
+| :--- | :--- | :--- |
+| `co_await db.insert(entity)` | Populates `<table_name>:id:<new_id>` | Increments target epoch counter in O(1), instantaneously invalidating all cached query pointers. |
+| `co_await db.update_entity(entity)` | **`EvictOnWrite`**: Deletes `<table_name>:id:<pk>`.<br />**`UpdateOnWrite`**: Overwrites `<table_name>:id:<pk>`. | Increments target epoch counter. |
+| `co_await db.delete_by_id<T>(id)` | Purges `<table_name>:id:<id>` and unique alias pointer. | Increments target epoch counter. |
+| `co_await db.insert_all(span)` | Batch-inserts entities and warms entity keys. | Atomically increments epoch counter once for the entire batch. |
+
+---
+
+## Transactional Cache Safety
+
+As detailed in [Transactions & Consistency](/docs/data/sql/transactions), mutations inside `db.transaction()` buffer their cache invalidations in memory until the SQL transaction commits successfully. 
+
+If the transaction rolls back, all cache invalidations are discarded, completely preventing cache contamination.

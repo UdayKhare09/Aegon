@@ -1,0 +1,291 @@
+---
+title: Advanced (Locks, Pipelines, Streams)
+description: Enterprise-grade Redis features in Aegon including token-validated distributed locking, zero-RTT pipelining, atomic transactions, persistent Pub/Sub, and consumer-group Streams.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Beyond basic key-value caching, Aegon provides enterprise-grade abstractions over Redis: token-validated distributed locks, zero-RTT pipelining across single instances or cluster shards, atomic `MULTI`/`EXEC` transactions, persistent Pub/Sub listeners, and consumer-group event streams.
+
+---
+
+## 1. Distributed Locking (`RedisLock`)
+
+Distributed locks protect critical shared resources (such as financial transactions, inventory decrements, and scheduled cron jobs) across multiple microservice replicas.
+
+Aegon implements the standard Redlock token-validation pattern using Lua scripts to prevent premature lock theft and race conditions:
+
+```cpp
+#include <aegon/data/redis/RedisClient.h>
+#include <aegon/data/redis/RedisLock.h>
+
+using namespace aegon::data::redis;
+
+// Acquire lock with 5000ms TTL, retrying every 50ms up to 10 times
+std::optional<RedisLock> lock = co_await redis.lock(
+    "lock:payout:user_123",
+    std::chrono::milliseconds(5000),             // Initial lease TTL
+    std::chrono::milliseconds(50),               // Retry backoff delay
+    /*max_retries=*/10
+);
+
+if (!lock) {
+    ctx.res().status(StatusCode::Conflict).json({{"error", "Resource is locked by another process"}});
+    co_return;
+}
+
+// Critical section: execute sensitive workflow safely
+// ...
+
+// Extend lease TTL if computation runs long
+bool extended = co_await lock->extend(std::chrono::milliseconds(3000));
+
+// Safe release: token-validated deletion prevents releasing someone else's lock
+bool released = co_await lock->release();
+```
+
+### Safety Guarantees
+
+- **Unique Ownership Tokens**: When `lock()` acquires the key using `SET key token PX ttl NX`, it generates a unique UUID token.
+- **Atomic Safe Release**: `lock.release()` executes an atomic Lua script:
+  ```lua
+  if redis.call('GET', KEYS[1]) == ARGV[1] then
+      return redis.call('DEL', KEYS[1])
+  else
+      return 0
+  end
+  ```
+  If the lease expires and another node acquires the lock before `release()` is called, the script sees mismatched tokens and avoids deleting the newer lock.
+- **Atomic Lease Extension**: `lock.extend(extra_ttl)` verifies token ownership via `PEXPIRE` inside Lua before extending the lease.
+
+---
+
+## 2. Command Pipelining (`RedisPipeline`)
+
+Network round-trip latency (RTT) is the primary bottleneck for Redis throughput. Command pipelining packs dozens of Redis commands into a single TCP write buffer over the event loop engine (`io_uring`, `epoll`, or `IOCP`), dispatching the entire batch in a single network round-trip.
+
+```cpp
+#include <aegon/data/redis/RedisClient.h>
+#include <aegon/data/redis/RedisPipeline.h>
+
+using namespace aegon::data::redis;
+
+auto pipe = redis.pipeline();
+
+// Chain multiple commands fluently
+pipe.set("user:1:name", "Alice")
+    .incr("user:1:logins")
+    .hset("user:1:meta", "last_ip", "192.168.1.100")
+    .get("user:1:name");
+
+// Submit entire pipeline over IoEngine
+std::vector<RespValue> results = co_await pipe.execute();
+
+for (const auto& res : results) {
+    if (res.is_string()) {
+        std::println("String: {}", res.as_string());
+    } else if (res.is_integer()) {
+        std::println("Integer: {}", res.as_integer());
+    }
+}
+```
+
+### Cluster Pipeline Support
+
+When using `RedisPipeline` with Redis Cluster, Aegon automatically inspects the keys in the batch, groups them by their target shard pool, executes the sub-batches concurrently over the cluster nodes, and reconstructs the response vector in the original command order:
+
+```
+              RedisPipeline::execute()
+                         │
+      ┌──────────────────┼──────────────────┐
+      ▼                  ▼                  ▼
+ [ Shard 1 Batch ]  [ Shard 2 Batch ]  [ Shard 3 Batch ]
+  (CRC16 Slots)      (CRC16 Slots)      (CRC16 Slots)
+      │                  │                  │
+      └──────────────────┼──────────────────┘
+                         ▼
+           Reconstructed Ordered Results
+```
+
+---
+
+## 3. Atomic Transactions (`MULTI` / `EXEC`)
+
+To execute multiple operations sequentially and atomically on a single Redis connection, use `redis.multi()`:
+
+```cpp
+#include <aegon/data/redis/RedisClient.h>
+#include <aegon/data/redis/RedisTransaction.h>
+
+using namespace aegon::data::redis;
+
+// Acquires dedicated connection guard and executes MULTI
+std::optional<RedisTransaction> opt_tx = co_await redis.multi();
+if (!opt_tx) {
+    throw std::runtime_error("Failed to acquire connection for transaction");
+}
+
+auto& tx = *opt_tx;
+
+// Queue operations
+tx.incr("stats:visits")
+  .incr("stats:daily_counter");
+
+// Atomically commit via EXEC
+std::vector<RespValue> tx_results = co_await tx.exec();
+
+for (const auto& res : tx_results) {
+    if (res.is_integer()) {
+        std::println("Counter updated to: {}", res.as_integer());
+    }
+}
+
+// Or cancel pending commands if an error occurred
+// co_await tx.discard();
+```
+
+<Callout type="warning" title="Cluster Transactions & Hash Tags">
+Redis Cluster requires all keys within a single `MULTI`/`EXEC` block to map to the exact same hash slot. Always use hash tags (such as `user:{123}:visits` and `user:{123}:counter`) to ensure the keys reside on the same cluster shard.
+</Callout>
+
+---
+
+## 4. Pub/Sub Messaging
+
+Aegon supports asynchronous Publish/Subscribe messaging with both direct channel subscriptions and pattern-based wildcards.
+
+### Publishing Messages
+
+Any `RedisClient` connection can publish messages to any channel:
+
+```cpp
+int64_t receivers = co_await redis.publish(
+    "orders:events", 
+    R"({"event":"order_placed","order_id":9012})"
+);
+```
+
+### Subscribing via `RedisSubscriber`
+
+`RedisSubscriber` allocates an isolated connection dedicated solely to receiving streaming push messages:
+
+```cpp
+#include <aegon/data/redis/RedisClient.h>
+#include <aegon/data/redis/RedisSubscriber.h>
+
+using namespace aegon::data::redis;
+
+Task<void> start_subscriber(RedisClient& redis) {
+    auto sub = redis.subscriber();
+    bool connected = co_await sub.connect();
+    if (!connected) co_return;
+
+    // Subscribe to exact channels and pattern wildcards
+    co_await sub.subscribe({"orders:events", "system:alerts"});
+    co_await sub.psubscribe({"notifications:user:*"});
+
+    // Event consumption loop
+    while (sub.is_connected()) {
+        std::optional<RedisMessage> msg = co_await sub.next_message();
+        if (!msg) break;
+
+        std::println("Channel: {}", msg->channel);
+        if (!msg->pattern.empty()) {
+            std::println("Matched Pattern: {}", msg->pattern);
+        }
+        std::println("Payload: {}", msg->payload);
+    }
+}
+```
+
+The `RedisMessage` structure contains:
+```cpp
+struct RedisMessage {
+    std::string channel; // Target channel name
+    std::string pattern; // Empty for exact subscriptions, pattern for PSUBSCRIBE
+    std::string payload; // Message body
+};
+```
+
+---
+
+## 5. Redis Streams & Consumer Groups
+
+Redis Streams provide an append-only log data structure with consumer groups, persistent offset tracking, and explicit delivery acknowledgments.
+
+### Appending to Streams (`XADD`)
+
+Append entries to a stream with auto-generated IDs (`*`) and optional max-length eviction:
+
+```cpp
+// Append order creation event
+std::string msg_id = co_await redis.xadd(
+    "orders:stream",
+    "*",                                    // Auto-generate millisecond timestamp ID
+    {
+        {"order_id", "10492"},
+        {"customer_id", "501"},
+        {"total", "149.99"}
+    },
+    /*maxlen=*/100'000                     // Optional stream trimming
+);
+
+std::println("Added message with ID: {}", msg_id);
+```
+
+### Consumer Groups (`XGROUP CREATE` & `XREADGROUP`)
+
+Consumer groups allow multiple instances of a service to cooperatively consume stream items:
+
+```cpp
+// 1. Create consumer group starting at the latest stream entry ($)
+// mkstream=true creates the stream automatically if it does not yet exist
+co_await redis.xgroup_create(
+    "orders:stream", 
+    "order_processors", 
+    /*id=*/"$", 
+    /*mkstream=*/true
+);
+
+// 2. Read new messages for this consumer
+std::vector<StreamReadResult> results = co_await redis.xreadgroup(
+    "order_processors",                     // Group name
+    "worker_node_1",                        // Consumer ID
+    {"orders:stream"},                      // Target streams
+    {">"},                                  // Special ID '>' reads unassigned messages
+    /*count=*/10,                           // Batch size
+    /*block_ms=*/std::chrono::milliseconds(2000) // Non-blocking async sleep
+);
+
+// 3. Process and acknowledge messages
+for (const auto& stream : results) {
+    for (const auto& msg : stream.messages) {
+        std::println("Processing message ID: {}", msg.id);
+
+        for (const auto& [field, value] : msg.fields) {
+            std::println("  {} = {}", field, value);
+        }
+
+        // Acknowledge successful processing
+        int64_t acked = co_await redis.xack("orders:stream", "order_processors", {msg.id});
+    }
+}
+```
+
+### Stream Inspection & Maintenance
+
+```cpp
+// Query stream length
+int64_t stream_size = co_await redis.xlen("orders:stream");
+
+// Query range of messages by ID range
+std::vector<StreamMessage> entries = co_await redis.xrange(
+    "orders:stream", 
+    "-",    // Earliest message
+    "+",    // Latest message
+    /*count=*/50
+);
+
+// Explicit message deletion
+int64_t deleted_count = co_await redis.xdel("orders:stream", {msg_id});
+```

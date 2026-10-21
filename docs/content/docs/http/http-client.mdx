@@ -1,12 +1,12 @@
 ---
 title: HTTP Client
-description: Asynchronous Linux io_uring HTTP/1.1, HTTP/2 & HTTP/3 client with keep-alive connection pooling, Glaze serialization, and thread-per-core isolation.
+description: Asynchronous cross-platform HTTP/1.1, HTTP/2 & HTTP/3 client powered by pluggable I/O backends (io_uring, epoll, IOCP), keep-alive connection pooling, Glaze serialization, and thread-per-core isolation.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-Aegon includes an asynchronous, high-performance HTTP/1.1, HTTP/2, and HTTP/3 client built directly on Linux `io_uring` and OpenSSL 3. Designed with symmetrical developer ergonomics to Aegon's server API, `HttpClient` integrates seamlessly with C++23 coroutines, compile-time Glaze JSON reflection, persistent keep-alive connection pooling, and fluent request builders.
+Aegon includes an asynchronous, high-performance HTTP/1.1, HTTP/2, and HTTP/3 client built on Aegon's pluggable I/O engine (Linux `io_uring`, edge-triggered `epoll`, and Windows `IOCP`) with OpenSSL 3. Designed with symmetrical developer ergonomics to Aegon's server API, `HttpClient` integrates seamlessly with C++23 coroutines, compile-time Glaze JSON reflection, persistent keep-alive connection pooling, and fluent request builders.
 
 ```cpp
 #include <http/client/HttpClient.h>
@@ -25,8 +25,8 @@ The client engine is modular and designed for zero-allocation performance on the
 - **`HttpClient`**: The central client engine managing client-level configuration and persistent socket pools.
 - **`RequestBuilder`**: Fluent, chainable builder for composing outbound requests (`.query()`, `.header()`, `.bearer_auth()`, `.json(dto)`, `.send()`).
 - **`ConnectionPool`**: Thread-aware pool of open TCP/TLS sockets recycled across consecutive requests using `keep-alive` per origin (`scheme://host:port`).
-- **`PerCoreHttpClient`**: Thread-per-core wrapper ensuring worker threads have dedicated, lock-free connection pools pinned to their local `io_uring` ring.
-- **`TlsClientStream`**: Asynchronous TLS client wrapper using OpenSSL memory BIOs (`BIO_s_mem`) driven by `io_uring` non-blocking operations, supporting Server Name Indication (SNI), Application-Layer Protocol Negotiation (ALPN), and system CA validation.
+- **`PerCoreHttpClient`**: Thread-per-core wrapper ensuring worker threads have dedicated, lock-free connection pools pinned to their local event loop engine (`io_uring`, `epoll`, or `IOCP`).
+- **`TlsClientStream`**: Asynchronous TLS client wrapper using OpenSSL memory BIOs (`BIO_s_mem`) driven by non-blocking operations, supporting Server Name Indication (SNI), Application-Layer Protocol Negotiation (ALPN), and system CA validation.
 - **`Url`**: High-performance RFC 3986 URL parser extracting scheme, host, port, path, query, and fragment without heap allocations.
 
 ```
@@ -47,7 +47,7 @@ The client engine is modular and designed for zero-allocation performance on the
                                │
                                ▼
        ┌───────────────────────────────────────────────┐
-       │             io_uring (Linux Kernel)           │
+       │          IoEngine (io_uring / epoll / IOCP)   │
        │  Zero-copy send / direct recv / event loop    │
        └───────────────────────────────────────────────┘
 ```
@@ -498,7 +498,7 @@ HttpClient dev_client(ClientConfig{
 
 ## Multi-Threaded Servers & `PerCoreHttpClient`
 
-When running Aegon in a multi-threaded server (`server.run(N)`), sharing a single global `HttpClient` across worker threads introduces cross-thread lock contention inside the socket connection pool and violates `io_uring` thread-affinity.
+When running Aegon in a multi-threaded server (`server.run(N)`), sharing a single global `HttpClient` across worker threads introduces cross-thread lock contention inside the socket connection pool and violates event loop thread-affinity.
 
 Aegon provides **`PerCoreHttpClient`** (`#include <http/client/PerCoreHttpClient.h>`):
 
@@ -516,12 +516,12 @@ Aegon provides **`PerCoreHttpClient`** (`#include <http/client/PerCoreHttpClient
          Core 0 Sockets         Core 1 Sockets         Core 2 Sockets
                  │                      │                      │
                  ▼                      ▼                      ▼
-          Core 0 io_uring        Core 1 io_uring        Core 2 io_uring
+          Core 0 IoEngine        Core 1 IoEngine        Core 2 IoEngine
 ```
 
 ### Key Advantages
 
-1. **Zero Cross-Ring I/O**: Sockets are bound to the calling thread's `io_uring` ring, preventing cross-core ring submission or wait penalties.
+1. **Zero Cross-Thread I/O**: Sockets are bound to the calling thread's event loop engine (`io_uring`, `epoll`, or `IOCP`), preventing cross-core submission or wait penalties.
 2. **Lock-Free Connection Pool**: Each CPU core maintains its own isolated keep-alive connection pool. No mutex contention on socket checkout or release.
 3. **L1/L2 Cache Locality**: Memory buffers, TLS sessions, and HPACK/QPACK dynamic tables stay pinned to the worker core's local CPU caches.
 4. **Service Registry Integration**: Easily registered in `server.provide<PerCoreHttpClient>()` and accessed directly via `ctx.service<PerCoreHttpClient>()`.

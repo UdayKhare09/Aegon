@@ -290,7 +290,7 @@ static auto schema() {
 
 | Mode | Enum Value | Description |
 | :--- | :--- | :--- |
-| **Strict Epoch** | `InvalidationMode::StrictEpoch` | $O(1)$ epoch increment on write, atomically invalidating query results for the table. |
+| **Strict Epoch** | `InvalidationMode::StrictEpoch` | O(1) epoch increment on write, atomically invalidating query results for the table. |
 | **Partitioned** | `InvalidationMode::Partitioned` | Increments tenant/partition-specific epochs without invalidating unrelated tenant data. |
 | **Predicate Aware** | `InvalidationMode::PredicateAware` | Evaluates write mutations against cached query filter conditions. |
 | **TTL Only** | `InvalidationMode::TtlOnly` | Decays strictly by elapsed time; writes do not invalidate cached reads. |
