@@ -1,0 +1,400 @@
+---
+title: Foundational Data Types
+description: Zero-overhead, memory-efficient foundational data types designed for high-performance HTTP JSON DTOs, SQL ORM schemas, and Redis storage.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Aegon provides a unified suite of zero-overhead, memory-efficient foundational data types defined in `<aegon/data/types/Types.h>`.
+
+These types serve as framework-wide primitives: they integrate seamlessly across **HTTP JSON DTO serialization & validation**, **SQL ORM table mappings**, and **Redis storage**, eliminating manual type conversion and serialization boilerplate.
+
+```cpp
+#include <aegon/data/types/Types.h>
+
+using namespace aegon::data;
+```
+
+---
+
+## Type Matrix & Memory Layout
+
+Every foundational type is engineered with strict memory footprint constraints, cache alignment, and value-type semantics:
+
+| Type | Memory Size | Purpose | Key Capabilities |
+| :--- | :---: | :--- | :--- |
+| **`UUID`** | 16 bytes | Unique Identifiers | RFC 9562 v4 random & v7 time-sortable, SIMD AVX2/NEON parser, zero-allocation `to_chars()`. |
+| **`DateTime`** | 8 bytes | Timestamps | 64-bit UTC microsecond epoch, ISO 8601 parser/formatter with timezone offsets (`+05:30`, `Z`). |
+| **`Date`** | 4 bytes | Calendar Date | 32-bit Howard Hinnant civil calendar algorithms (`YYYY-MM-DD`), day arithmetic without timezone drift. |
+| **`Time`** | 8 bytes | Time of Day | Microsecond precision time-of-day (`HH:MM:SS.ffffff`), range `[00:00:00, 23:59:59.999999]`. |
+| **`Decimal`** | 16 bytes | Financial Math | Exact 128-bit scaled fixed-point math (`Decimal<18, 4>`, `Decimal128`), zero IEEE-754 roundoff errors. |
+| **`IpAddress`** | 16 bytes | Network Addressing | Dual IPv4 and IPv6 address parsing, CIDR subnet matching (`in_subnet`), private/loopback checks. |
+| **`MacAddress`** | 6 bytes | Hardware ID | 48-bit IEEE 802 MAC address parsing (`aa:bb:cc:dd:ee:ff`, `aa-bb-cc-dd-ee-ff`). |
+| **`Json`** | Variable | Dynamic JSON | Dynamic JSON wrapper integrating with Glaze reflection and SQL `JSONB` columns. |
+| **`Blob`** | Variable | Raw Binary Data | Contiguous byte vector (`std::vector<uint8_t>`) with hex (`\x...`) and Base64 codecs. |
+| **`Hash256`** | 32 bytes | Cryptography | Fixed 256-bit SHA-256 digest container with constant-time equality check against timing attacks. |
+
+---
+
+## 1. `UUID` & `UUIDGenerator` (RFC 9562)
+
+Aegon provides native, hardware-accelerated support for RFC 9562 UUIDs with dedicated optimizations for both **UUIDv4** (pure cryptographic randomness) and **UUIDv7** (time-ordered, index-friendly unique IDs).
+
+```cpp
+#include <aegon/data/types/UUID.h>
+#include <aegon/data/types/UUIDGenerator.h>
+
+using namespace aegon::data;
+
+// 1. Generate random UUIDv4
+UUID id_v4 = UUIDGenerator::v4();
+assert(id_v4.version() == 4);
+
+// 2. Generate monotonically sortable UUIDv7 (ideal for DB primary keys)
+UUID id_v7 = UUIDGenerator::v7();
+assert(id_v7.version() == 7);
+uint64_t created_ms = id_v7.timestamp_ms(); // 48-bit UNIX millisecond timestamp
+
+// 3. High-throughput vectorized batch generation
+std::vector<UUID> batch(1000);
+UUIDGenerator::v7_batch(batch); // Vectorized generation amortizing entropy syscalls
+
+// 4. Zero-allocation SIMD format into a stack buffer
+char buffer[37];
+id_v7.to_chars(buffer);
+buffer[36] = '\0';
+
+// 5. Fast SIMD string parsing
+auto parsed = UUID::from_string("018d3b8f-7c2a-7f32-9b51-72f10b7a89e1");
+if (parsed && !parsed->is_nil()) {
+    std::string str = parsed->to_string(); // Hyphenated 36-char string
+}
+
+// 6. Direct 16-byte raw buffer view
+std::span<const uint8_t, 16> raw_bytes = id_v7.as_bytes();
+```
+
+<Callout type="info">
+**Why UUIDv7 for Database Primary Keys?**
+Standard UUIDv4 values are randomly distributed, causing B-Tree index fragmentation and cache eviction in relational databases. UUIDv7 embeds a 48-bit UNIX millisecond timestamp in the most significant bits, ensuring sequential clustered index insertions and maximizing page cache locality.
+</Callout>
+
+### Core API Reference
+
+| Method | Signature | Description |
+| :--- | :--- | :--- |
+| `UUIDGenerator::v4()` | `static UUID v4() noexcept` | Generates a cryptographically secure random UUIDv4. |
+| `UUIDGenerator::v7()` | `static UUID v7() noexcept` | Generates a time-ordered sortable UUIDv7 with sub-millisecond counter. |
+| `UUIDGenerator::v4_batch()` | `static void v4_batch(std::span<UUID> out) noexcept` | Vectorized batch generation of UUIDv4s. |
+| `UUIDGenerator::v7_batch()` | `static void v7_batch(std::span<UUID> out) noexcept` | Vectorized batch generation of monotonically ordered UUIDv7s. |
+| `from_string()` | `static std::optional<UUID> from_string(std::string_view str) noexcept` | SIMD-accelerated parser supporting hyphenated strings. |
+| `to_chars()` | `char* to_chars(char* out) const noexcept` | Zero-allocation SIMD format into a caller-supplied 36-byte buffer. |
+| `timestamp_ms()` | `constexpr uint64_t timestamp_ms() const noexcept` | Extracts the 48-bit UNIX timestamp from UUIDv7. |
+| `is_nil()` | `constexpr bool is_nil() const noexcept` | Returns `true` if all 128 bits are zero. |
+| `version()` | `constexpr uint8_t version() const noexcept` | Returns the UUID specification version (e.g. `4` or `7`). |
+
+---
+
+## 2. Temporal Types: `DateTime`, `Date`, and `Time`
+
+Temporal types store timestamps and civil calendar components efficiently without timezone ambiguities or floating-point conversions.
+
+### `DateTime` (Microsecond Timestamps)
+
+`DateTime` stores a 64-bit signed integer count of microseconds since the UNIX epoch (`1970-01-01 00:00:00 UTC`), occupying only 8 bytes:
+
+```cpp
+#include <aegon/data/types/DateTime.h>
+
+using namespace aegon::data;
+
+// Current UTC timestamp
+DateTime now = DateTime::now();
+int64_t micros = now.epoch_micros();
+
+// Format to ISO 8601 UTC string: "2026-10-21T18:10:00.123456Z"
+std::string iso = now.to_iso8601();
+
+// Parse ISO 8601 strings with 'Z' or timezone offsets
+auto parsed_utc = DateTime::from_string("2026-10-21T18:10:00.000000Z");
+auto parsed_offset = DateTime::from_string("2026-10-21T23:40:00.000000+05:30");
+
+if (parsed_offset) {
+    // Automatically normalized to UTC epoch
+    assert(parsed_utc->epoch_micros() == parsed_offset->epoch_micros());
+}
+
+// Time arithmetic
+DateTime future = now + std::chrono::hours(24);
+std::chrono::microseconds diff = future - now;
+```
+
+### `Date` (Civil Calendar Dates)
+
+`Date` represents an isolated year-month-day calendar date packed into 4 bytes:
+
+```cpp
+#include <aegon/data/types/Date.h>
+
+using namespace aegon::data;
+
+Date release_day(2026, 10, 21);
+assert(release_day.year() == 2026);
+assert(release_day.month() == 10);
+assert(release_day.day() == 21);
+
+// Add / subtract days safely
+Date next_week = release_day.add_days(7);
+
+// Parse / Format (YYYY-MM-DD)
+std::string formatted = release_day.to_string(); // "2026-10-21"
+auto parsed_date = Date::from_string("2026-12-31");
+```
+
+### `Time` (Time of Day)
+
+`Time` represents a civil time of day with microsecond precision packed into 8 bytes:
+
+```cpp
+#include <aegon/data/types/Time.h>
+
+using namespace aegon::data;
+
+// 14:30:00.500000
+Time event_time(14, 30, 0, 500'000);
+
+assert(event_time.hour() == 14);
+assert(event_time.minute() == 30);
+assert(event_time.second() == 0);
+assert(event_time.microsecond() == 500'000);
+
+// Format: "14:30:00.500000"
+std::string str = event_time.to_string();
+auto parsed_time = Time::from_string("09:15:30.000000");
+```
+
+---
+
+## 3. `Decimal` (Fixed-Point Financial Math)
+
+Binary floating-point types (`float`, `double`) cannot represent base-10 fractions accurately (e.g. `0.1 + 0.2 != 0.3`). Aegon provides `Decimal<Precision, Scale>` and `Decimal128` matching SQL `DECIMAL(18, 4)` and `DECIMAL(38, 10)` standards.
+
+```cpp
+#include <aegon/data/types/Decimal.h>
+
+using namespace aegon::data;
+
+// 1. Construct fixed-point decimal
+Decimal balance("1500.7500");
+Decimal price("49.9900");
+Decimal tax_rate("0.0825");
+
+// 2. Exact arithmetic without roundoff error
+Decimal tax = price * tax_rate;
+Decimal total = price + tax;
+Decimal remaining_balance = balance - total;
+
+// 3. Comparisons
+if (remaining_balance.is_positive()) {
+    std::string display = remaining_balance.to_string(); // "1446.6358"
+}
+
+// 4. Double conversion for reporting / charts
+double approx = remaining_balance.to_double();
+```
+
+<Callout type="warning">
+Never use `float` or `double` for currency, pricing, or ledger calculations. Aegon's `Decimal` types use 128-bit scaled integers internally to eliminate IEEE-754 precision drift entirely.
+</Callout>
+
+---
+
+## 4. `IpAddress` (Dual IPv4 & IPv6)
+
+`IpAddress` is a unified, 16-byte memory structure capable of holding either an IPv4 or an IPv6 address:
+
+```cpp
+#include <aegon/data/types/IpAddress.h>
+
+using namespace aegon::data;
+
+// Parse IPv4
+auto ipv4 = IpAddress::from_string("192.168.1.100");
+assert(ipv4->is_v4());
+assert(ipv4->is_private());
+
+// Parse IPv6
+auto ipv6 = IpAddress::from_string("2001:db8::ff00:42:8329");
+assert(ipv6->is_v6());
+
+// CIDR Subnet Membership
+auto subnet = *IpAddress::from_string("192.168.1.0");
+bool inside_lan = ipv4->in_subnet(subnet, 24); // true (192.168.1.100 is in 192.168.1.0/24)
+
+// Address classification
+bool is_loop = ipv4->is_loopback();   // false
+bool is_priv = ipv4->is_private();    // true
+std::string formatted = ipv4->to_string(); // "192.168.1.100"
+```
+
+---
+
+## 5. `Blob`, `Hash256`, and `MacAddress`
+
+<Tabs items={["Blob (Binary)", "Hash256 (SHA-256)", "MacAddress (Hardware)"]}>
+  <Tab value="Blob (Binary)">
+```cpp
+#include <aegon/data/types/Blob.h>
+
+using namespace aegon::data;
+
+Blob buffer;
+buffer.assign({0xDE, 0xAD, 0xBE, 0xEF});
+
+// Convert to hex string: "deadbeef"
+std::string hex = buffer.to_hex();
+
+// Convert to Base64 string: "3q2+7w=="
+std::string b64 = buffer.to_base64();
+
+// Decode back into binary
+auto decoded = Blob::from_base64("3q2+7w==");
+assert(decoded->as_bytes() == buffer.as_bytes());
+```
+  </Tab>
+
+  <Tab value="Hash256 (SHA-256)">
+```cpp
+#include <aegon/data/types/Hash256.h>
+
+using namespace aegon::data;
+
+// Construct 32-byte hash container from 64-char hex string
+auto hash1 = Hash256::from_hex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+auto hash2 = Hash256::from_hex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+// Constant-time comparison (prevents side-channel timing attacks)
+bool is_match = (*hash1 == *hash2);
+assert(is_match);
+```
+  </Tab>
+
+  <Tab value="MacAddress (Hardware)">
+```cpp
+#include <aegon/data/types/MacAddress.h>
+
+using namespace aegon::data;
+
+// Parse standard 48-bit IEEE 802 MAC format
+auto mac = MacAddress::from_string("00:1A:2B:3C:4D:5E");
+if (mac) {
+    // Formats back to standard colon-separated hex: "00:1a:2b:3c:4d:5e"
+    std::string str = mac->to_string();
+    
+    // Check multicast / unicast bit
+    bool is_multicast = mac->is_multicast();
+}
+```
+  </Tab>
+</Tabs>
+
+---
+
+## 6. Dynamic `Json` Type
+
+When handling arbitrary or unstructured JSON payloads within typed DTOs or database entities, use `aegon::data::Json`:
+
+```cpp
+#include <aegon/data/types/Json.h>
+
+using namespace aegon::data;
+
+// Parse unstructured JSON
+auto doc = Json::from_string(R"({"status":"active","metrics":{"cpu":14.2}})");
+
+if (doc) {
+    std::string serialized = doc->to_string();
+    assert(!doc->is_null());
+}
+```
+
+---
+
+## Cross-Framework Integration
+
+Aegon's foundational types work natively with all major framework subsystems without writing custom glue code.
+
+### 1. HTTP DTOs with Glaze Serialization & Validation
+
+All foundational data types reflect automatically into Glaze and `aegon::validation::Validator`:
+
+```cpp title="UserAccountDTO.h"
+#include <aegon/data/types/Types.h>
+#include <aegon/data/validation/Validator.h>
+
+using namespace aegon::data;
+
+struct CreateAccountRequest {
+    UUID client_id;
+    std::string account_name;
+    Decimal128 initial_deposit;
+    IpAddress registration_ip;
+    DateTime request_time;
+
+    // Fluent declarative validation
+    void validate(aegon::validation::ValidationRules& v) const {
+        v.field("client_id", client_id).not_nil();
+        v.field("account_name", account_name).required().min_len(3).max_len(50);
+        v.field("initial_deposit", initial_deposit).positive();
+    }
+};
+```
+
+Route handlers can bind and validate this payload with zero manual mapping:
+
+```cpp
+server.router().post("/api/v1/accounts", [](http::Context& ctx) -> core::Task<void> {
+    // Automatically parses JSON and validates rules; yields 422 if invalid
+    auto req = ctx.bind_json<CreateAccountRequest>();
+    if (!req) {
+        co_return;
+    }
+
+    std::cout << "Creating account for UUID: " << req->client_id.to_string() << "\n";
+    std::cout << "Deposit: " << req->initial_deposit.to_string() << "\n";
+
+    ctx.res().status(http::StatusCode::Created).json(R"({"status":"ok"})");
+    co_return;
+});
+```
+
+### 2. SQL ORM Schema Definition
+
+Foundational types map directly to native SQL column types across PostgreSQL, MySQL, and SQLite:
+
+```cpp title="AccountEntity.h"
+#include <aegon/data/types/Types.h>
+#include <aegon/data/orm/sql/TableDef.h>
+
+using namespace aegon::data;
+
+struct AccountEntity {
+    UUID id;                       // -> UUID / CHAR(36)
+    std::string name;              // -> VARCHAR(255)
+    Decimal<18, 4> balance;        // -> NUMERIC(18, 4)
+    IpAddress last_known_ip;       // -> INET / VARCHAR(45)
+    DateTime created_at;           // -> TIMESTAMPTZ / TIMESTAMP
+    DateTime updated_at;           // -> TIMESTAMPTZ / TIMESTAMP
+
+    static auto schema() {
+        return TableDef<AccountEntity>("accounts")
+            .id(&AccountEntity::id)
+            .column(&AccountEntity::name).not_null()
+            .column(&AccountEntity::balance).not_null()
+            .column(&AccountEntity::last_known_ip)
+            .created_at(&AccountEntity::created_at)
+            .updated_at(&AccountEntity::updated_at);
+    }
+};
+```

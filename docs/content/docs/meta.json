@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "http",
-    "services"
+    "services",
+    "data"
   ]
 }
