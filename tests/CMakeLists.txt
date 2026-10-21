@@ -2,6 +2,13 @@
 # Aegon Test Suite & CTest Registrations
 # ==============================================================================
 
+# Ensure test assertions (assert) are never stripped out by -DNDEBUG in Release builds
+if(MSVC)
+    add_compile_options(/UNDEBUG)
+else()
+    add_compile_options(-UNDEBUG)
+endif()
+
 function(aegon_add_test name)
     if(ARGN)
         set(all_targets_exist TRUE)
