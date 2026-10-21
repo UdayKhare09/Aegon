@@ -1,0 +1,274 @@
+---
+title: Routing & Groups
+description: Two-tier high-performance HTTP routing with O(1) static maps, SIMD path acceleration, dynamic parameters, and hierarchical route groups.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Aegon features a two-tier high-performance router built specifically for modern asynchronous microservices and high-throughput REST APIs.
+
+It combines an **$O(1)$ static route map** (zero heap allocation lookup) with a cache-aligned **Radix Tree** for dynamic path matching, dynamic parameter extraction, and prefix-scoped route groups.
+
+---
+
+## Handler Signatures
+
+Every route handler in Aegon accepts a reference to [`http::Context&`](file:///home/uday/Projects/Aegon/src/http/Context.h). Handlers can be written either asynchronously as C++23 coroutines returning `core::Task<void>` or synchronously returning `void`.
+
+<Tabs items={["Asynchronous Coroutine (Recommended)", "Synchronous In-Memory"]}>
+  <Tab value="Asynchronous Coroutine (Recommended)">
+```cpp
+// Returns core::Task<void> and uses co_await / co_return for async I/O
+server.router().get("/users/:id", [](http::Context& ctx) -> core::Task<void> {
+    auto user_id = ctx.req().param("id");
+
+    // Perform asynchronous non-blocking queries
+    // auto user = co_await db.find_by_id(user_id.value_or(""));
+
+    ctx.res().text("User ID: " + std::string(user_id.value_or("unknown")));
+    co_return;
+});
+```
+  </Tab>
+  <Tab value="Synchronous In-Memory">
+```cpp
+// If a handler only performs synchronous in-memory work, Aegon lifts void(Context&) automatically
+server.router().get("/health", [](http::Context& ctx) {
+    ctx.res().json(R"({"status":"healthy"})");
+});
+```
+  </Tab>
+</Tabs>
+
+---
+
+## Registering HTTP Routes
+
+The [`http::Router`](file:///home/uday/Projects/Aegon/src/http/Router.h) class provides fluent helpers for all standard HTTP methods:
+
+```cpp
+#include <aegon/http/Router.h>
+#include <aegon/http/Server.h>
+
+using namespace aegon;
+
+http::Router& router = server.router();
+
+// HTTP GET
+router.get("/items", [](http::Context& ctx) {
+    ctx.res().text("Listing items");
+});
+
+// HTTP POST
+router.post("/items", [](http::Context& ctx) {
+    ctx.res().status(http::StatusCode::Created).text("Item created");
+});
+
+// HTTP PUT
+router.put("/items/:id", [](http::Context& ctx) {
+    ctx.res().text("Item updated");
+});
+
+// HTTP PATCH
+router.patch("/items/:id", [](http::Context& ctx) {
+    ctx.res().text("Item partially updated");
+});
+
+// HTTP DELETE (method is 'del' since 'delete' is a C++ keyword)
+router.del("/items/:id", [](http::Context& ctx) {
+    ctx.res().status(http::StatusCode::NoContent);
+});
+
+// Match all standard HTTP methods (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS)
+router.all("/webhook", [](http::Context& ctx) {
+    ctx.res().text("Webhook received");
+});
+```
+
+### Generic HTTP Verbs (`add_route`)
+
+To bind methods not covered by shorthand helpers (e.g. `HEAD`, `OPTIONS`, `CONNECT`, `TRACE`), use `add_route`:
+
+```cpp
+router.add_route(http::Method::OPTIONS, "/cors", [](http::Context& ctx) {
+    ctx.res().header("Access-Control-Allow-Origin", "*");
+    ctx.res().status(http::StatusCode::NoContent);
+});
+```
+
+---
+
+## Path Parameters
+
+Routes support dynamic path segment parameters prefixed with a colon (`:param_name`). Captured segments are parsed zero-copy into string views referencing the receive buffer:
+
+```cpp
+router.get("/users/:id", [](http::Context& ctx) {
+    std::optional<std::string_view> id = ctx.req().param("id");
+
+    if (!id) {
+        ctx.res().status(http::StatusCode::BadRequest).text("Missing ID");
+        return;
+    }
+
+    ctx.res().text("Requested user: " + std::string(*id));
+});
+```
+
+<Callout type="info">
+Up to 8 route parameters per request are stored inline within a fixed-size stack buffer in `Request` with zero dynamic heap allocations.
+</Callout>
+
+### Multiple Parameters
+
+Combine multiple parameters across segments:
+
+```cpp
+router.get("/orgs/:org/repos/:repo/issues/:number", [](http::Context& ctx) {
+    auto org = ctx.req().param("org").value_or("");
+    auto repo = ctx.req().param("repo").value_or("");
+    auto number = ctx.req().param("number").value_or("");
+
+    ctx.res().text(std::format("Issue #{}: {}/{}", number, org, repo));
+});
+```
+
+### Wildcard Parameters
+
+For catch-all paths and file hierarchies, routes support wildcard parameters prefixed with an asterisk (`*name`). The wildcard captures the entire remainder of the path:
+
+```cpp
+router.get("/assets/*filepath", [](http::Context& ctx) {
+    auto filepath = ctx.req().param("filepath").value_or("");
+    ctx.res().text("Serving asset: " + std::string(filepath));
+});
+```
+
+---
+
+## Route Groups & API Versioning
+
+[`http::RouteGroup`](file:///home/uday/Projects/Aegon/src/http/RouteGroup.h) allows organizing related endpoints under common URL prefixes and sharing middleware pipelines. Groups can be nested recursively:
+
+```cpp
+// Create an /api root group
+auto api = server.router().group("/api");
+
+// Nest a /v1 sub-group -> /api/v1
+auto v1 = api.group("/v1");
+
+v1.get("/users", [](http::Context& ctx) {
+    ctx.res().text("API v1: Users");
+});
+
+v1.post("/users", [](http::Context& ctx) {
+    ctx.res().status(http::StatusCode::Created).text("API v1: User Created");
+});
+
+// Nest a /v2 sub-group -> /api/v2
+auto v2 = api.group("/v2");
+
+v2.get("/users", [](http::Context& ctx) {
+    ctx.res().text("API v2: Users (with enhanced schema)");
+});
+```
+
+### RouteGroup Capabilities
+
+`RouteGroup` inherits the uniform HTTP registration API from [`RouteRegistrar`](file:///home/uday/Projects/Aegon/src/http/RouteRegistrar.h):
+
+- `group.get(path, handler)`
+- `group.post(path, handler)`
+- `group.put(path, handler)`
+- `group.del(path, handler)`
+- `group.patch(path, handler)`
+- `group.all(path, handler)`
+- `group.add_route(method, path, handler)`
+- `group.static_files(path, directory, options)`
+- `group.group(sub_prefix)`
+- `group.prefix()` — Returns the cumulative path prefix string view.
+
+Path normalization automatically handles leading and trailing slashes so `join_paths("/api/", "/v1")` safely becomes `"/api/v1"`.
+
+---
+
+## Custom Error & Fallback Handlers
+
+Aegon provides centralized hooks to handle unhandled exceptions, missing routes (`404`), and method mismatches (`405`):
+
+```cpp
+// 1. Global Exception Boundary Handler
+router.set_error_handler([](http::Context& ctx, std::exception_ptr ex) -> core::Task<void> {
+    try {
+        if (ex) std::rethrow_exception(ex);
+    } catch (const std::exception& e) {
+        ctx.problem(http::StatusCode::InternalServerError, "Server Error", e.what());
+    }
+    co_return;
+});
+
+// 2. Custom 404 Not Found Handler
+router.set_not_found_handler([](http::Context& ctx) {
+    ctx.res().status(http::StatusCode::NotFound).json(R"({"error":"Endpoint not found"})");
+});
+
+// 3. Custom 405 Method Not Allowed Handler
+router.set_method_not_allowed_handler([](http::Context& ctx) {
+    ctx.res().status(http::StatusCode::MethodNotAllowed).text("Method not supported on this endpoint");
+});
+```
+
+---
+
+## Two-Tier Matching Architecture
+
+Aegon's `Router` uses a two-tier hybrid architecture to ensure optimal route dispatch latency:
+
+```
+Inbound HTTP Request
+         │
+         ▼
+[ Tier 1: Static Route Map ]
+  • Normalized path O(1) hash lookup
+  • Zero allocations, instant method match
+         │ (miss)
+         ▼
+[ Tier 2: Radix Tree ]
+  • Dynamic token extraction (:id, wildcards)
+  • Parameter extraction into Request params vector
+         │
+         ├── Found handler ─────────► Execute Handler in Exception Boundary
+         ├── Path exists, wrong verb ► 405 Method Not Allowed (RFC 9110 Allow header)
+         └── No route matches ──────► 404 Not Found
+```
+
+1. **Tier 1 (Static Fast-Path)**: Purely static routes (e.g. `/`, `/ping`, `/api/v1/metrics`) are indexed in a contiguous array keyed by HTTP verb. Lookups execute in $O(1)$ time with zero memory allocations.
+2. **Tier 2 (Radix Tree Dynamic Path)**: Parameterized routes (`:param`) are evaluated via a radix tree that extracts parameter views directly into the request object without copying strings.
+3. **HTTP 405 vs 404 Resolution**: If a path exists for `POST` but the client issued `GET`, Aegon recognizes the path match and immediately yields `405 Method Not Allowed` with an RFC 9110-compliant `Allow` header listing permitted verbs, rather than an incorrect `404 Not Found`.
+
+---
+
+## SIMD Vectorized Path Matching
+
+Header file: [`<aegon/http/SimdRouter.h>`](file:///home/uday/Projects/Aegon/src/http/SimdRouter.h)
+
+For extreme URL parsing throughput, Aegon includes vectorized string scanning primitives in namespace `aegon::http::simd` utilizing AVX-512, AVX2, or SSE4.2 vector instructions with 64-bit XOR and scalar fallbacks:
+
+| Function | Signature | Description |
+| :--- | :--- | :--- |
+| `simd_common_prefix()` | `size_t simd_common_prefix(std::string_view a, std::string_view b) noexcept` | Computes longest common prefix using 128/256-bit SIMD vector equality. |
+| `simd_find_char()` | `const char* simd_find_char(const char* s, size_t len, char target) noexcept` | Scans a buffer for a delimiter (e.g. `/`, `?`, `:`) using vectorized broadcast registers. |
+| `simd_starts_with()` | `bool simd_starts_with(std::string_view str, std::string_view prefix) noexcept` | Accelerated prefix check with unaligned SIMD loads. |
+
+```cpp
+#include <aegon/http/SimdRouter.h>
+
+using namespace aegon::http::simd;
+
+// Vectorized delimiter search across URL path
+const char* slash = simd_find_char(path.data(), path.size(), '/');
+
+// Accelerated prefix comparison for router trie nodes
+bool matches = simd_starts_with("/api/v1/users/42", "/api/v1/");
+```

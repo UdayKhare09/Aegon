@@ -1,0 +1,258 @@
+---
+title: HTTP Request
+description: Zero-copy request envelope with SIMD query parsing, inline header maps, RFC 6265 cookies, and multipart support.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Inside every route handler, the incoming HTTP request is accessible via `ctx.req()`.
+
+The [`http::Request`](file:///home/uday/Projects/Aegon/src/http/Request.h) object is architected for maximum efficiency: it provides zero-copy string views (`std::string_view`) directly into the underlying socket receive buffer, eliminating heap allocations for headers, path segments, and query parameters.
+
+---
+
+## Basic Request Properties
+
+```cpp
+#include <aegon/http/Router.h>
+
+using namespace aegon;
+
+router.post("/api/echo", [](http::Context& ctx) {
+    const http::Request& req = ctx.req();
+
+    // HTTP Method (enum class Method)
+    http::Method m = req.method();                    // e.g. Method::POST
+    std::string_view method_str = to_string(m);       // "POST"
+
+    // URL Path
+    std::string_view path = req.path();               // "/api/echo"
+
+    // Raw Query String (without leading '?')
+    std::string_view raw_query = req.query();         // e.g. "page=1&sort=desc"
+
+    // Raw Request Body
+    std::string_view body = req.body();
+
+    // HTTP Protocol Version
+    http::HttpVersion ver = req.version();
+    std::string_view ver_str = to_string(ver);        // "HTTP/1.1", "HTTP/2.0", "HTTP/3.0"
+
+    ctx.res().text("Received " + std::string(method_str) + " on " + std::string(path));
+});
+```
+
+---
+
+## Direct JSON Deserialization (`req.json<T>()`)
+
+You can parse the request body directly into a C++ struct using Glaze compile-time reflection:
+
+```cpp
+struct LoginRequest {
+    std::string username;
+    std::string password;
+};
+
+router.post("/auth/login", [](http::Context& ctx) {
+    std::expected<LoginRequest, glz::error_ctx> result = ctx.req().json<LoginRequest>();
+
+    if (!result) {
+        ctx.res().status(http::StatusCode::BadRequest).text("Malformed JSON");
+        return;
+    }
+
+    const LoginRequest& creds = *result;
+    ctx.res().text("Authenticating: " + creds.username);
+});
+```
+
+---
+
+## Route Parameters (`:param`)
+
+Parameters captured from dynamic path segments (e.g. `/users/:id`) are retrieved using `req.param(name)`:
+
+```cpp
+router.get("/users/:id", [](http::Context& ctx) {
+    std::optional<std::string_view> id = ctx.req().param("id");
+
+    if (!id) {
+        ctx.res().status(http::StatusCode::BadRequest).text("Missing user ID parameter");
+        return;
+    }
+
+    ctx.res().text("User ID: " + std::string(*id));
+});
+```
+
+<Callout type="info">
+Up to 8 route parameters per request are stored inline within a fixed-size stack buffer in `Request` with zero dynamic memory allocation.
+</Callout>
+
+---
+
+## Query Parameters (`?key=value`)
+
+Individual query parameters from the URL query string are parsed on-demand with SIMD acceleration:
+
+```cpp
+router.get("/search", [](http::Context& ctx) {
+    std::optional<std::string_view> query = ctx.req().query_param("q");
+    std::optional<std::string_view> page  = ctx.req().query_param("page");
+
+    std::string response = "Search query: " + std::string(query.value_or("all"));
+    if (page) {
+        response += ", Page: " + std::string(*page);
+    }
+
+    ctx.res().text(response);
+});
+```
+
+- **`req.query("key")`**: Exact alias for `req.query_param("key")`.
+- **Valueless Flags**: For query flags like `?debug`, calling `req.query_param("debug")` returns an empty string `""` wrapped in `std::optional` rather than `nullopt`.
+- **Full Query String**: `req.query()` returns the entire raw query string without the leading `?`.
+
+---
+
+## Reading Headers & `HeaderMap`
+
+Headers are stored in [`HeaderMap`](file:///home/uday/Projects/Aegon/src/http/HeaderMap.h), a small-vector structure holding up to 32 headers inline without heap allocations. Lookups are strictly **case-insensitive** (per RFC 9110) using SIMD comparisons.
+
+### Lookups
+
+```cpp
+// Direct header lookup (case-insensitive)
+std::optional<std::string_view> auth = ctx.req().header("Authorization");
+std::optional<std::string_view> content_type = ctx.req().header("content-type");
+
+if (auth && auth->starts_with("Bearer ")) {
+    std::string_view token = auth->substr(7);
+    // Authenticate token...
+}
+```
+
+### Checking Existence & Iteration
+
+```cpp
+const http::HeaderMap& headers = ctx.req().headers();
+
+// Check existence
+if (headers.contains("X-API-Key")) {
+    // ...
+}
+
+// Iterate all headers
+for (const auto& entry : headers) {
+    // entry.name  (std::string_view)
+    // entry.value (std::string_view)
+}
+
+// Header count
+size_t count = headers.size();
+```
+
+---
+
+## Reading Cookies (`req.cookie()`)
+
+Inbound HTTP cookies sent via the `Cookie` header are retrieved directly using `ctx.req().cookie(name)`:
+
+```cpp
+router.get("/dashboard", [](http::Context& ctx) {
+    std::optional<std::string_view> session_id = ctx.req().cookie("session_id");
+
+    if (!session_id) {
+        ctx.res().status(http::StatusCode::Unauthorized).text("Missing session cookie");
+        return;
+    }
+
+    ctx.res().text("Authenticated session: " + std::string(*session_id));
+});
+```
+
+- **Zero-Allocation**: Returns `std::optional<std::string_view>` directly referencing the socket buffer.
+- **RFC 6265 Compliance**: Strips whitespace around delimiters and strips surrounding double-quotes if values are quoted (e.g., `Cookie: token="abc"` produces `abc`).
+- **Missing Cookie Safety**: Returns `std::nullopt` if the cookie or header is absent.
+
+---
+
+## Form Parameters (`application/x-www-form-urlencoded`)
+
+Inbound HTML form submissions sent via standard `POST` or `PUT` with `Content-Type: application/x-www-form-urlencoded` can be read using `req.form(key)` (or `req.form_param(key)`):
+
+```cpp
+router.post("/login", [](http::Context& ctx) {
+    std::optional<std::string> user = ctx.req().form("username");
+    std::optional<std::string> pass = ctx.req().form("password");
+
+    if (!user || !pass) {
+        ctx.res().status(http::StatusCode::BadRequest).text("Missing credentials");
+        return;
+    }
+
+    ctx.res().text("Welcome back, " + *user);
+});
+```
+
+| Method | Return Type | Memory Behavior | Decoding |
+| :--- | :--- | :--- | :--- |
+| `req.query_param(key)` | `std::optional<std::string_view>` | **Zero-allocation** (points into buffer) | Preserves zero-copy slice |
+| `req.form_param(key)` | `std::optional<std::string>` | Allocates decoded string | URL-decodes `%XX` and `+` spaces |
+| `req.query()` | `std::string_view` | **Zero-allocation** (entire raw string) | Raw buffer slice |
+
+---
+
+## Multipart Uploads (`multipart/form-data`)
+
+For file attachments and mixed binary/text forms (RFC 7578), use `req.multipart()`:
+
+```cpp
+router.post("/upload", [](http::Context& ctx) {
+    auto form = ctx.req().multipart();
+    if (!form) {
+        ctx.res().status(http::StatusCode::BadRequest).text("Malformed multipart payload");
+        return;
+    }
+
+    // 1. Access textual fields
+    std::optional<std::string_view> desc = form->get("description");
+
+    // 2. Access uploaded file(s)
+    if (auto avatar = form->file("avatar")) {
+        std::cout << "Received: " << avatar->filename << " (" << avatar->size() << " bytes)\n";
+        std::cout << "MIME type: " << avatar->content_type << "\n";
+
+        // Persist binary payload directly to disk
+        avatar->save_to("/var/uploads/" + std::string(avatar->filename));
+    }
+
+    ctx.res().status(http::StatusCode::Created).json(R"({"status":"saved"})");
+});
+```
+
+### The `FormFile` Object
+
+Each uploaded file in `multipart/form-data` is represented as a zero-copy [`FormFile`](file:///home/uday/Projects/Aegon/src/http/MultipartParser.h#L18):
+
+- `file.name` (`std::string_view`): Form field name (e.g. `"avatar"`).
+- `file.filename` (`std::string_view`): Client-provided filename (e.g. `"profile.png"`).
+- `file.content_type` (`std::string_view`): MIME type (e.g. `"image/png"`).
+- `file.data` (`std::string_view`): **Zero-copy** slice into the receive buffer.
+- `file.size()`: File length in bytes.
+- `file.save_to(filepath)`: Streams binary data directly to disk.
+
+---
+
+## HTTP Protocol & RFC Compliance
+
+The `Request` object exposes helper methods for protocol negotiation and RFC compliance:
+
+| Method | Return Type | Description |
+| :--- | :--- | :--- |
+| `req.version()` | `HttpVersion` | Returns `Http1_0`, `Http1_1`, `Http2`, or `Http3`. |
+| `req.expect_continue()` | `bool` | Returns `true` if client sent `Expect: 100-continue`. |
+| `req.is_upgrade_h2c()` | `bool` | Returns `true` if client requested `Upgrade: h2c` (HTTP/2 cleartext upgrade). |
+| `req.headers().empty()` | `bool` | Returns `true` if no headers were parsed. |

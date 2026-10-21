@@ -1,0 +1,351 @@
+---
+title: Server Lifecycle
+description: Server lifecycle orchestration, multi-port TLS/QUIC listeners, unified ServerConfig tuning, and coroutine lifecycle workers.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+The [`http::Server`](file:///home/uday/Projects/Aegon/src/http/Server.h) class is the top-level orchestrator of an Aegon web application. It encapsulates network listeners, TLS/QUIC contexts, thread-per-core event loops, dependency injection, and asynchronous lifecycle hooks.
+
+---
+
+## Server Initialization & Networking
+
+```cpp
+#include <aegon/http/Server.h>
+
+using namespace aegon::http;
+
+int main() {
+    Router router;
+    Server server(std::move(router));
+
+    // Bind address and port (default host is "0.0.0.0")
+    server.listen(8080, "0.0.0.0");
+
+    // Multi-Port Listening: Plaintext & TLS on the same worker event loops
+    server.enable_tls("/etc/ssl/certs/server.crt", "/etc/ssl/private/server.key");
+    server.listen(8080);      // Port 8080: Plaintext HTTP/1.1
+    server.listen_tls(8443);  // Port 8443: TLS HTTP/1.1, HTTP/2, and HTTP/3
+
+    server.run(std::thread::hardware_concurrency());
+    return 0;
+}
+```
+
+<Callout type="info">
+`server.listen(port)` and `server.listen_tls(port)` perform immediate validation and throw `std::runtime_error` if `port == 0` or outside valid port ranges (`1 - 65535`).
+
+When multiple ports are configured, all listeners share the same worker threads, buffer pools, and `io_uring` event loops with zero cross-port overhead. Plaintext ports completely bypass TLS handshakes.
+</Callout>
+
+---
+
+## TLS / HTTPS Configuration (`TlsContext`)
+
+Aegon embeds OpenSSL / BoringSSL for TLS 1.3 encryption and ALPN protocol negotiation (`h2`, `http/1.1`):
+
+```cpp
+server.enable_tls("/etc/ssl/certs/server.crt", "/etc/ssl/private/server.key");
+```
+
+`enable_tls` verifies file existence and cryptographic format at startup, throwing descriptive configuration errors if keys or certificates are missing or unreadable (`access(R_OK)`).
+
+---
+
+## HTTP/3 over QUIC & Progressive Alt-Svc Ladder
+
+When TLS is enabled, HTTP/3 (over UDP) is automatically initialized on **every TLS listener port** (e.g. `8443`) using `SO_REUSEPORT` across all worker threads:
+
+```cpp
+server.enable_http3(true); // Default is true when TLS is active
+```
+
+Aegon automatically advertises protocol upgrades to connecting clients via RFC-compliant progressive `Alt-Svc` response headers:
+
+- **HTTP/1.1 TLS Connections**:
+  ```http
+  Alt-Svc: h3=":<port>"; ma=86400, h2=":<port>"; ma=86400
+  ```
+- **HTTP/2 TLS Connections**:
+  ```http
+  Alt-Svc: h3=":<port>"; ma=86400
+  ```
+- **Plaintext & HTTP/3 Connections**: No `Alt-Svc` header is emitted.
+
+All listener ports are tracked and passed into connection accept loops directly, eliminating `getsockname()` syscall overhead entirely.
+
+---
+
+## WebSocket (RFC 6455) Routing
+
+Aegon allows binding WebSocket routes directly onto the router:
+
+```cpp
+// 1. High-throughput echo endpoint
+server.router().ws_echo("/ws/echo");
+
+// 2. Interactive WebSocket handler
+server.router().ws("/ws/chat", [](websocket::WebSocket& ws) {
+    ws.on_text([](websocket::WebSocket& ws, std::string_view msg) -> core::Task<void> {
+        co_await ws.send_text(msg);
+    });
+});
+```
+
+---
+
+## Startup Misconfiguration Diagnostics
+
+Aegon performs fail-fast validation before binding sockets or spawning worker event loops:
+
+- **Invalid Port Detection**: Invoking `.listen(0)` throws `std::runtime_error` with `"Server configuration error: port must be greater than 0 (1-65535)"`.
+- **TLS Certificate & Key Verification**: Invoking `.enable_tls(cert, key)` validates that both certificate and private key files exist and are readable. If missing, Aegon throws `std::runtime_error` detailing the missing file path.
+- **Fail-Fast Socket Binding**: Socket creation and `bind()` errors abort startup with clear error diagnostics.
+
+---
+
+## Unified Server Configuration (`ServerConfig`)
+
+Aegon centralizes all protocol constraints, kernel parameters, TCP socket options, HTTP/2 & HTTP/3 flow control, flood mitigations, and WebSocket tuning into the `ServerConfig` structure ([`<aegon/http/ServerConfig.h>`](file:///home/uday/Projects/Aegon/src/http/ServerConfig.h)).
+
+Each `Server` instance maintains an isolated configuration, allowing multiple servers with completely independent limits to run concurrently in the same process without global state collision.
+
+```cpp
+#include <aegon/http/Server.h>
+#include <aegon/http/ServerConfig.h>
+
+using namespace aegon::http;
+
+ServerConfig cfg;
+
+// 1. Protocol compliance and payload limits
+cfg.limits.max_body_size = 32 * 1024 * 1024; // 32 MB -> 413 Payload Too Large
+cfg.limits.max_headers_size = 128 * 1024;    // 128 KB -> 431 Header Fields Too Large
+cfg.limits.max_uri_length = 16384;           // 16 KB -> 414 URI Too Long
+
+// 2. Linux io_uring & Provided Buffer Pool
+cfg.ring_entries = 8192;                     // Submission queue capacity
+cfg.buffer_pool_entries = 16384;             // Multishot provided buffer pool count
+cfg.buffer_size = 4096;                      // Buffer slice size in bytes
+
+// 3. TCP socket options
+cfg.tcp.nodelay = true;                      // TCP_NODELAY (disable Nagle's algorithm)
+cfg.tcp.keepalive = true;                    // SO_KEEPALIVE
+cfg.tcp.keepidle = 60;                       // Probes after 60s idle
+cfg.tcp.keepintvl = 10;                      // 10s between keepalive probes
+cfg.tcp.keepcnt = 3;                         // Drop after 3 unanswered probes
+
+// 4. HTTP/2 and HTTP/3 tuning
+cfg.h2_max_concurrent_streams = 256;         // Concurrent streams per client
+cfg.h2_initial_window_size = 2 * 1024 * 1024;// 2 MB initial flow control window
+cfg.rst_burst_limit = 1000;                  // Rapid Reset flood threshold
+
+// 5. WebSocket tuning
+cfg.websocket.max_message_size = 16 * 1024 * 1024; // 16 MB -> CloseCode::MessageTooBig (1009)
+cfg.websocket.max_frame_size = 16 * 1024 * 1024;   // 16 MB per frame limit
+cfg.websocket.require_masked_frames = true;        // RFC 6455 §5.1 masking enforcement
+cfg.websocket.auto_ping_interval_sec = 30;         // Heartbeat ping every 30s (0 = disabled)
+cfg.websocket.ping_timeout_sec = 10;               // Close after 10s missing pong
+cfg.websocket.initial_buffer_capacity = 4096;      // Buffer pre-allocation per session
+
+// 6. Protocol feature toggles
+cfg.enable_http3 = true;                     // Enable HTTP/3 over QUIC on TLS listeners
+
+// Apply full config to server
+server.config(cfg);
+```
+
+### Fluent Configuration API
+
+You can also configure any setting fluently directly on the `Server` instance:
+
+```cpp
+server.max_body_size(32 * 1024 * 1024)
+      .max_headers_size(128 * 1024)
+      .max_uri_length(16384)
+      .ring_entries(8192)
+      .buffer_pool_entries(16384)
+      .buffer_size(4096)
+      .tcp_nodelay(true)
+      .tcp_keepalive(true, /*idle=*/60, /*intvl=*/10, /*cnt=*/3)
+      .h2_max_concurrent_streams(512)
+      .h2_initial_window_size(2 * 1024 * 1024)
+      .rst_burst_limit(2000)
+      .enable_http3(true);
+```
+
+### Configuration Reference
+
+| Option | Method / Field | Default | Description |
+| :--- | :--- | :--- | :--- |
+| **Max Body Size** | `.max_body_size(bytes)` / `limits.max_body_size` | `10 MB` | Inbound payload limit across H1, H2, and H3. Violations return `413 Payload Too Large`. |
+| **Max Headers Size** | `.max_headers_size(bytes)` / `limits.max_headers_size` | `64 KB` | Maximum total HTTP header section size. Violations return `431 Request Header Fields Too Large`. |
+| **Max URI Length** | `.max_uri_length(bytes)` / `limits.max_uri_length` | `8 KB` | Maximum request target length. Violations return `414 URI Too Long`. |
+| **Ring Entries** | `.ring_entries(n)` / `ring_entries` | `4096` | Kernel `io_uring` submission queue entries (SQEs) per worker event loop. |
+| **Buffer Pool Entries** | `.buffer_pool_entries(n)` / `buffer_pool_entries` | `8192` | Number of provided buffer slices registered with the kernel buffer pool group. |
+| **Buffer Size** | `.buffer_size(bytes)` / `buffer_size` | `4096` | Size in bytes of each provided buffer slice. |
+| **TCP NoDelay** | `.tcp_nodelay(bool)` / `tcp.nodelay` | `true` | Enables `TCP_NODELAY` to eliminate Nagle's algorithm latency. |
+| **TCP KeepAlive** | `.tcp_keepalive(bool, idle, intvl, cnt)` / `tcp.keepalive` | `true` | Enables `SO_KEEPALIVE` with idle timer (60s), probe interval (10s), and retry count (3). |
+| **H2 Max Concurrent Streams** | `.h2_max_concurrent_streams(n)` / `h2_max_concurrent_streams` | `256` | Maximum concurrent active HTTP/2 streams per client connection. |
+| **H2 Initial Window Size** | `.h2_initial_window_size(n)` / `h2_initial_window_size` | `1 MB` | Initial HTTP/2 stream and connection flow-control window size in bytes. |
+| **Rapid Reset Burst Limit** | `.rst_burst_limit(n)` / `rst_burst_limit` | `1000` | Flood mitigation: threshold of rapid stream resets allowed before terminating connection. |
+| **Enable HTTP/3** | `.enable_http3(bool)` / `enable_http3` | `true` | Enables HTTP/3 (QUIC) over UDP for all TLS listener ports. |
+| **WS Max Message Size** | `.ws_max_message_size(bytes)` / `websocket.max_message_size` | `16 MB` | Maximum allowed WebSocket message size. Violations close with `1009 MessageTooBig`. |
+| **WS Max Frame Size** | `.ws_max_frame_size(bytes)` / `websocket.max_frame_size` | `16 MB` | Maximum single WebSocket frame payload limit. |
+| **WS Require Masking** | `.ws_require_masked_frames(bool)` / `websocket.require_masked_frames` | `true` | Enforces RFC 6455 §5.1 client frame masking. |
+| **WS Auto Ping Interval** | `.ws_auto_ping_interval(sec)` / `websocket.auto_ping_interval_sec` | `0` | Proactive heartbeat interval in seconds (`0` = disabled). |
+
+---
+
+## Dependency Injection (`provide`)
+
+You can register shared dependencies at server initialization so they become accessible to all route handlers and lifecycle hooks:
+
+```cpp
+// 1. Register a database pool
+auto db = std::make_shared<DatabaseClient>("postgres://localhost:5432/app");
+server.provide<DatabaseClient>(db);
+
+// 2. Register named instances
+server.provide_named<DatabaseClient>("replica", "postgres://replica:5432/app");
+
+// 3. Register in-place directly via argument forwarding
+server.provide<RedisClient>("127.0.0.1", 6379);
+```
+
+To retrieve a service from the server instance:
+
+```cpp
+std::shared_ptr<DatabaseClient> db = server.service<DatabaseClient>();
+std::shared_ptr<DatabaseClient> replica = server.service<DatabaseClient>("replica");
+```
+
+<Callout type="tip">
+When `server.run()` is called, the server automatically seals the service registry into an immutable direct-indexed table, enabling route handlers to look up dependencies with zero mutex locks on the hot path.
+</Callout>
+
+---
+
+## Asynchronous Lifecycle Hooks
+
+Aegon provides coroutine-driven hooks to execute async workflows during startup, background execution, and graceful shutdown:
+
+```
+       [ server.run() ]
+              │
+              ▼
+   1. Execute .on_start() hooks (migrations, cache warming)
+              │
+              ▼
+   2. Spawn .spawn_worker() coroutines (stream consumers)
+              │
+              ▼
+   3. Open listener & accept traffic (io_uring event loops)
+              │
+         [ SIGINT / SIGTERM / server.stop() ]
+              │
+              ▼
+   4. Stop accepting new connections
+              │
+              ▼
+   5. Execute .on_stop() hooks (graceful draining & flush)
+              │
+              ▼
+       [ Shutdown Complete ]
+```
+
+### 1. Startup Hooks (`.on_start`)
+
+Executed asynchronously before the socket starts accepting inbound traffic. Ideal for database migrations and cache pre-warming:
+
+```cpp
+server.on_start([](http::Server& s) -> core::Task<void> {
+    auto db = s.service<DatabaseClient>();
+    std::cout << "[Lifecycle] Running database migrations...\n";
+    // co_await db->execute_migration();
+
+    std::cout << "[Lifecycle] Pre-warming cache...\n";
+    co_return;
+});
+```
+
+### 2. Shutdown Hooks (`.on_stop`)
+
+Executed asynchronously during graceful shutdown:
+
+```cpp
+server.on_stop([](http::Server& s) -> core::Task<void> {
+    std::cout << "[Lifecycle] Flushing telemetry and closing connection pools...\n";
+    // co_await metrics.flush();
+    co_return;
+});
+```
+
+### 3. Background Workers (`.spawn_worker`)
+
+Spawns long-running coroutines directly on the server event loops. Ideal for Redis stream consumers, Kafka workers, or scheduled telemetry jobs:
+
+```cpp
+server.spawn_worker([](http::Server& s, core::EventLoop& loop) -> core::Task<void> {
+    while (true) {
+        co_await loop.sleep_for(std::chrono::seconds(10));
+        std::cout << "[Worker] Heartbeat tick\n";
+    }
+});
+```
+
+---
+
+## Running the Server
+
+### Single-Threaded Mode
+
+Runs on the calling thread's `EventLoop`:
+
+```cpp
+server.run();
+```
+
+### Thread-per-Core Shared-Nothing Cluster
+
+Aegon uses Linux `SO_REUSEPORT` kernel load-balancing across independent event loops. Each worker thread runs its own isolated `io_uring` instance pinned to a CPU core with zero lock contention:
+
+```cpp
+// Run with 8 worker threads
+server.run(8);
+
+// Or automatically match available hardware threads:
+server.run(std::thread::hardware_concurrency());
+```
+
+### Graceful Termination
+
+To programmatically stop the server from a POSIX signal handler:
+
+```cpp
+#include <csignal>
+
+static http::Server* g_server = nullptr;
+
+void handle_signal(int sig) {
+    if (g_server) {
+        std::cout << "\nReceived shutdown signal. Stopping server...\n";
+        g_server->stop();
+    }
+}
+
+int main() {
+    Router router;
+    Server server(std::move(router));
+    server.listen(8080);
+
+    g_server = &server;
+    std::signal(SIGINT, handle_signal);
+    std::signal(SIGTERM, handle_signal);
+
+    server.run(std::thread::hardware_concurrency());
+    return 0;
+}
+```

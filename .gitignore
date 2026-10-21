@@ -22,3 +22,4 @@ scratch
 *.pkg.tar.*
 packaging/arch/pkg/
 packaging/arch/src/
+old_docs

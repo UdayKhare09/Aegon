@@ -1,0 +1,295 @@
+---
+title: Context & Binding
+description: Unified HTTP lifecycle context with automated compile-time DTO binding, RFC 7807 problem details, service injection, and per-request middleware state.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+The [`http::Context`](file:///home/uday/Projects/Aegon/src/http/Context.h) object (`aegon::http::Context&`) is passed by reference to every route handler. It encapsulates the complete lifecycle of a single HTTP request-response exchange:
+
+1. **Inbound Data**: Accessing `ctx.req()`.
+2. **Outbound Data**: Fluent builder via `ctx.res()`.
+3. **Data Binding**: Zero-boilerplate deserialization & validation of JSON bodies, query strings, and path parameters.
+4. **Service Resolution**: Resolving databases, caches, and business services via the `ServiceRegistry`.
+5. **RFC 7807 Error Reporting**: Standardized API error responses via `ctx.problem()`.
+6. **Per-Request State**: Request-scoped data bag for passing middleware state downstream.
+
+---
+
+## Accessing Request & Response
+
+```cpp
+#include <aegon/http/Router.h>
+
+using namespace aegon;
+
+router.get("/ping", [](http::Context& ctx) {
+    // Inbound request
+    http::Method method = ctx.req().method();
+
+    // Outbound response
+    ctx.res().text("pong");
+});
+```
+
+---
+
+## Type-Safe Data Binding
+
+Aegon features automated compile-time binding for JSON bodies, URL query parameters, and route parameters. If parsing or validation fails, Aegon automatically populates `ctx.res()` with appropriate HTTP error codes (`400 Bad Request` or `422 Unprocessable Entity`) and returns `std::nullopt`.
+
+### 1. JSON Body Binding (`bind_json<T>`)
+
+Define your Data Transfer Object (DTO) with standard C++ fields and an optional `validate()` hook:
+
+```cpp
+#include <aegon/data/validation/Validator.h>
+
+struct CreateUserRequest {
+    std::string name;
+    std::string email;
+    int age;
+
+    // Optional validation hook:
+    void validate(aegon::validation::ValidationRules& v) const {
+        v.check("name", name).required().min_len(2).max_len(50);
+        v.check("email", email).required().email();
+        v.check("age", age).min(18).max(120);
+    }
+};
+```
+
+Bind directly in the handler:
+
+```cpp
+router.post("/users", [](http::Context& ctx) {
+    // 1. Attempt deserialization & validation
+    auto dto = ctx.bind_json<CreateUserRequest>();
+    if (!dto) {
+        // Automatic 400 Bad Request or 422 Unprocessable Entity has already been set!
+        return;
+    }
+
+    // 2. Safe, validated DTO access
+    std::cout << "Creating user: " << dto->name << " (" << dto->email << ")\n";
+    ctx.res().status(http::StatusCode::Created).json(*dto);
+});
+```
+
+#### Automatic Error Responses
+- **Malformed JSON Syntax**: Returns `400 Bad Request` with exact character offset error diagnostics from Glaze.
+- **Validation Violations**: Returns `422 Unprocessable Entity` with an RFC 7807 problem details envelope listing failing fields and violation messages.
+
+---
+
+### 2. Query String Binding (`bind_query<T>`)
+
+Extract and type-convert URL query parameters (e.g. `?page=1&limit=25&active=true`) into a typed struct:
+
+```cpp
+struct PaginationQuery {
+    int page{1};
+    int limit{20};
+    bool active{true};
+
+    void validate(aegon::validation::ValidationRules& v) const {
+        v.check("page", page).min(1);
+        v.check("limit", limit).min(1).max(100);
+    }
+};
+
+router.get("/items", [](http::Context& ctx) {
+    auto query = ctx.bind_query<PaginationQuery>();
+    if (!query) return;
+
+    ctx.res().text(std::format("Page: {}, Limit: {}, Active: {}", 
+                               query->page, query->limit, query->active));
+});
+```
+
+---
+
+### 3. Route Parameter Binding (`bind_path<T>`)
+
+Convert dynamic path segments into typed numerical or string fields:
+
+```cpp
+struct UserRouteParams {
+    uint64_t id;
+};
+
+router.get("/users/:id", [](http::Context& ctx) {
+    auto params = ctx.bind_path<UserRouteParams>();
+    if (!params) return;
+
+    ctx.res().text(std::format("Fetching user #{}", params->id));
+});
+```
+
+---
+
+### 4. Form Body Binding (`bind_form<T>`)
+
+Automatically parse, decode, and validate HTML form submissions (`application/x-www-form-urlencoded`):
+
+```cpp
+struct LoginForm {
+    std::string username;
+    std::string password;
+    bool remember{false};
+
+    void validate(aegon::validation::ValidationRules& v) const {
+        v.check("username", username).min_len(3).max_len(30);
+        v.check("password", password).min_len(8);
+    }
+};
+
+router.post("/login", [](http::Context& ctx) {
+    auto form = ctx.bind_form<LoginForm>();
+    if (!form) return; // Automatic 400 or 422 response populated!
+
+    ctx.res().text("Logged in as " + form->username);
+});
+```
+
+---
+
+### 5. Multipart Form Access (`multipart()`)
+
+For file uploads and mixed multipart forms (`multipart/form-data`), call `ctx.multipart()`:
+
+```cpp
+router.post("/upload", [](http::Context& ctx) {
+    auto form = ctx.multipart();
+    if (!form) {
+        return ctx.res().status(http::StatusCode::BadRequest).text("Invalid multipart body");
+    }
+
+    if (auto avatar = form->file("avatar")) {
+        std::cout << "Received " << avatar->filename << " (" << avatar->size() << " bytes)\n";
+        avatar->save_to("/var/uploads/" + std::string(avatar->filename));
+    }
+
+    ctx.res().status(http::StatusCode::Created).json(R"({"status":"uploaded"})");
+});
+```
+
+<Callout type="info">
+For full details on file uploads, binary slices, and multi-file handling, see [**Static Files & SPAs**](/docs/http/static-files).
+</Callout>
+
+---
+
+## Dependency Injection & Services
+
+Handlers access shared application dependencies (like databases, Redis clients, or configuration objects) directly through `Context`:
+
+```cpp
+router.get("/stats", [](http::Context& ctx) {
+    // Throws std::runtime_error if service was not registered at server startup
+    auto& db = ctx.service<SqlDatabaseClient>();
+
+    // Optional lookup (returns nullptr if absent)
+    if (auto* redis = ctx.try_service<RedisClient>()) {
+        // Use Redis cache...
+    }
+
+    ctx.res().text("Stats retrieved");
+});
+```
+
+| Method | Return Type | Behavior |
+| :--- | :--- | :--- |
+| `ctx.service<T>(name = "")` | `T&` | Retrieves reference to registered service; throws `std::runtime_error` if missing. |
+| `ctx.try_service<T>(name = "")` | `T*` | Retrieves pointer to service or `nullptr` if unregistered. |
+| `ctx.has_service<T>(name = "")` | `bool` | Checks if service of type `T` is registered. |
+
+---
+
+## RFC 7807 Problem Details
+
+Aegon natively supports RFC 7807 (`application/problem+json`) for standardized, machine-readable error responses:
+
+```cpp
+router.get("/orders/:id", [](http::Context& ctx) {
+    auto id = ctx.req().param("id").value_or("");
+
+    if (id == "999") {
+        ctx.problem(
+            http::StatusCode::NotFound,
+            "Order Not Found",
+            "No order exists with identifier " + std::string(id),
+            "https://api.example.com/errors/not-found"
+        );
+        return;
+    }
+
+    ctx.res().text("Order found");
+});
+```
+
+Output envelope:
+```json
+{
+  "type": "https://api.example.com/errors/not-found",
+  "title": "Order Not Found",
+  "status": 404,
+  "detail": "No order exists with identifier 999",
+  "instance": "/orders/999"
+}
+```
+
+---
+
+## Static File Serving Shorthand
+
+`ctx.send_file(path, mime_type)` is a convenient shorthand for `ctx.res().file(path, mime_type)`:
+
+```cpp
+router.get("/logo.png", [](http::Context& ctx) {
+    ctx.send_file("public/images/logo.png");
+});
+```
+
+---
+
+## Per-Request Typed Data Bag (Middleware State)
+
+Middlewares often produce request-scoped data (such as authenticated user identities, decoded JWT tokens, or distributed tracing contexts) that must be safely accessed by downstream handlers.
+
+The `Context` object provides a type-safe per-request store with zero overhead:
+
+| Method | Return Type | Behavior |
+| :--- | :--- | :--- |
+| `ctx.set<T>(value)` | `void` | Stores a typed copy of `T` in the request context. |
+| `ctx.get<T>()` | `T*` | Nullable pointer; returns `nullptr` if not set. |
+| `ctx.local<T>()` | `T&` | Reference accessor; throws `std::runtime_error` if missing. |
+| `ctx.has<T>()` | `bool` | Checks if a value of type `T` has been stored. |
+
+### Example
+
+```cpp
+struct CurrentUser {
+    std::string user_id;
+    std::string role;
+};
+
+// 1. Set by an authentication middleware
+router.use([](http::Context& ctx, http::Next next) -> core::Task<void> {
+    ctx.set<CurrentUser>(CurrentUser{
+        .user_id = "usr_42",
+        .role = "admin"
+    });
+    co_await next(ctx);
+});
+
+// 2. Read by downstream route handlers
+router.get("/profile", [](http::Context& ctx) {
+    if (auto* user = ctx.get<CurrentUser>()) {
+        ctx.res().text("Hello, " + user->user_id);
+    } else {
+        ctx.res().status(http::StatusCode::Unauthorized).text("Unauthorized");
+    }
+});
+```
