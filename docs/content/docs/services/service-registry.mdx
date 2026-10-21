@@ -1,0 +1,190 @@
+---
+title: Service Registry & Dependency Injection
+description: Compile-time typed dependency injection container with frozen immutable zero-lock hot-path lookups.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Modern web services depend on shared singleton components: database connection pools, Redis clients, background job queues, external payment clients, and telemetry sinks.
+
+Aegon provides a built-in, high-performance dependency injection container called **`ServiceRegistry`**. It allows binding services by type and optional name at startup, automatically freezes the registry upon `server.run()`, and resolves dependencies inside coroutine route handlers via an immutable **Zero-Lock Hot Path**.
+
+---
+
+## How It Works
+
+`ServiceRegistry` assigns a sequential, compile-time static type ID to each registered type (`detail::service_type_id<T>()`).
+
+1. **Startup Phase (Dynamic Registration)**:
+   Services are registered dynamically on the server prior to listening. Registration is thread-safe and protected by a mutex.
+2. **Runtime Phase (Frozen Registry & Zero-Lock Hot Path)**:
+   When `server.run()` or `server.run(threads)` starts, `services_->freeze()` is invoked. The registry constructs immutable, direct-indexed pointer tables. Lookups inside route handlers (`ctx.service<T>()`) execute with **zero mutex locks, zero hash collisions, zero allocations, and zero cache-line contention** across all CPU cores.
+
+```
+       [ Server Startup / Bootstrapping ]
+                       │
+                       ▼
+       server.provide<SqlDatabaseClient>(master_db)
+       server.provide<SqlDatabaseClient>("replica", read_db)   <-- Keyed Service
+       server.provide<PerCoreRedisClient>(redis)
+       server.provide<PerCoreHttpClient>(http_client)
+                       │
+                       ▼  server.run()
+             [ Frozen Registry ]
+     Direct Flat Array (Unkeyed) + Immutable Hash Table (Keyed)
+                       │
+                       ▼  Request Dispatched to Worker Core
+              [ In Route Handler ]
+       auto& db = ctx.service<SqlDatabaseClient>();            <-- ZERO LOCK O(1)
+       auto& replica = ctx.service<SqlDatabaseClient>("replica");
+```
+
+---
+
+## Registering Services
+
+Services can be registered unkeyed (default) or with distinct string keys:
+
+### 1. In-Place Construction (`provide<T, Args...>`)
+
+Instantiate services directly inside the container without separate `std::make_shared`:
+
+```cpp
+// Constructs std::make_shared<OrderService>(apiKey, timeoutMs)
+server.provide<OrderService>("api_key_secret", 5000);
+```
+
+### 2. Shared Pointer Registration (`provide<T>`)
+
+Pass pre-configured `std::shared_ptr<T>` instances:
+
+```cpp
+auto redis = std::make_shared<PerCoreRedisClient>(
+    RedisNodeConfig{.host = "127.0.0.1", .port = 6379}
+);
+
+server.provide<PerCoreRedisClient>(redis);
+```
+
+### 3. Keyed / Named Services (`provide<T>(name, ...)` & `provide_named<T>()`)
+
+Register multiple instances of the same type under distinct names (e.g. primary writer vs read-replica databases, multi-tier caches):
+
+```cpp
+// Register primary write database and read replica database
+server.provide<SqlDatabaseClient>("primary", primary_db);
+server.provide<SqlDatabaseClient>("replica", replica_db);
+
+// Construct named cache in-place
+server.provide_named<RedisClient>("session_cache", "10.0.0.1", 6380);
+```
+
+---
+
+## Accessing Services in Handlers
+
+Inside any route handler or middleware, access services through `Context`:
+
+### 1. Required Service (`ctx.service<T>()` or `ctx.service<T>(name)`)
+
+Retrieves a direct reference `T&`. If the service is missing, throws a descriptive `std::runtime_error`:
+
+```cpp
+server.router().post("/orders", [](http::Context& ctx) -> core::Task<void> {
+    // Zero-lock O(1) retrieval
+    auto& orders = ctx.service<OrderService>();
+    auto& master_db = ctx.service<SqlDatabaseClient>("primary");
+
+    // Process order...
+    ctx.res().status(http::StatusCode::Created).text("Order placed");
+    co_return;
+});
+```
+
+### 2. Optional Service (`ctx.try_service<T>()` or `ctx.try_service<T>(name)`)
+
+Returns a raw pointer `T*`, or `nullptr` if the service was not registered:
+
+```cpp
+server.router().get("/metrics", [](http::Context& ctx) -> core::Task<void> {
+    if (auto* stats = ctx.try_service<MetricsCollector>()) {
+        ctx.res().json(stats->snapshot());
+    } else {
+        ctx.res().text("Metrics collection is disabled");
+    }
+    co_return;
+});
+```
+
+### 3. Check Existence (`ctx.has_service<T>()` or `ctx.has_service<T>(name)`)
+
+```cpp
+if (ctx.has_service<SqlDatabaseClient>("replica")) {
+    // Route read traffic to read replica...
+}
+```
+
+---
+
+## `ServiceRegistry` API Reference
+
+If you interact with `ServiceRegistry` directly (e.g. inside `.on_start()` lifecycle hooks or custom subsystems):
+
+```cpp
+http::ServiceRegistry& registry = server.services();
+```
+
+| Method | Return Type | Description |
+| :--- | :--- | :--- |
+| `register_service<T>(shared_ptr<T>)` | `void` | Registers an unkeyed instance of `T`. Throws if frozen. |
+| `register_service<T>(name, shared_ptr<T>)` | `void` | Registers a named/keyed instance of `T`. Throws if frozen. |
+| `freeze()` | `void` | Freezes the registry and activates the zero-lock hot-path tables. (Idempotent). |
+| `is_frozen()` | `bool` | Returns `true` if the registry has been frozen. |
+| `has<T>(name = "")` | `bool` | Returns `true` if a service of type `T` (and optional `name`) exists. |
+| `get<T>(name = "")` | `T*` | Returns raw pointer to `T`, or `nullptr` if missing. **Zero lock when frozen.** |
+| `get_shared<T>(name = "")` | `std::shared_ptr<T>` | Returns `shared_ptr<T>`, or `nullptr` if missing. **Zero lock when frozen.** |
+| `require<T>(name = "")` | `T&` | Returns reference to `T`; throws `std::runtime_error` if missing. |
+
+---
+
+## Example: Multi-Database Architecture
+
+```cpp
+#include <http/Server.h>
+#include <iostream>
+
+using namespace aegon;
+
+int main() {
+    http::Server server;
+
+    // 1. Register primary writer and read replica
+    server.provide<SqlDatabaseClient>("primary", std::make_shared<SqlDatabaseClient>(primary_cfg));
+    server.provide<SqlDatabaseClient>("replica", std::make_shared<SqlDatabaseClient>(replica_cfg));
+
+    // 2. Register domain services
+    server.provide<UserRepository>();
+
+    // Route: read from replica
+    server.router().get("/users/:id", [](http::Context& ctx) -> core::Task<void> {
+        auto& db = ctx.service<SqlDatabaseClient>("replica");
+        // Query read replica...
+        ctx.res().text("User read from replica");
+        co_return;
+    });
+
+    // Route: write to primary
+    server.router().post("/users", [](http::Context& ctx) -> core::Task<void> {
+        auto& db = ctx.service<SqlDatabaseClient>("primary");
+        // Write to primary...
+        ctx.res().status(http::StatusCode::Created).text("User written to primary");
+        co_return;
+    });
+
+    // server.run() automatically freezes services for zero-lock hot-path lookups
+    server.listen(8080);
+    server.run();
+    return 0;
+}
+```

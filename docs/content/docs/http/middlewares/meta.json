@@ -1,0 +1,10 @@
+{
+  "title": "Built-in Middleware",
+  "pages": [
+    "access-log",
+    "compress",
+    "cors",
+    "security-headers",
+    "auth"
+  ]
+}

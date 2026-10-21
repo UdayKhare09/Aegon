@@ -1,0 +1,9 @@
+{
+  "title": "Services & Observability",
+  "pages": [
+    "logging",
+    "config",
+    "service-registry",
+    "validation"
+  ]
+}

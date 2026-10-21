@@ -3,6 +3,8 @@
   "pages": [
     "index",
     "---Http Framework---",
-    "http"
+    "http",
+    "---Services & Observability---",
+    "services"
   ]
 }

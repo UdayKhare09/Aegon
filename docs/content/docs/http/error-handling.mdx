@@ -1,0 +1,352 @@
+---
+title: Error Handling
+description: Asynchronous global exception boundaries, RFC 7807 Problem Details, domain error mapping, and centralized 404/405 overrides.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Aegon treats error handling as a first-class citizen. Every incoming HTTP request executes within an asynchronous **global exception boundary** in `Router::dispatch()`.
+
+Unhandled exceptions never crash worker threads or leak open socket connections. Instead, they are caught and translated into standardized [RFC 7807 Problem Details](https://datatracker.ietf.org/doc/html/rfc7807) JSON responses or routed to your custom application error handler.
+
+---
+
+## Global Exception Boundary
+
+When a route handler throws an exception or fails an assertion, Aegon intercepts it at the dispatcher level:
+
+```
+                  Client Request
+                        │
+                        ▼
+               [ Router::dispatch() ]
+                        │
+                  Execute Handler
+                 (co_await handler)
+                        │
+           ┌────────────┴────────────┐
+       Success                     Throws Exception
+           │                                 │
+           ▼                                 ▼
+   Send Response             [ Global Exception Boundary ]
+                                             │
+                            ┌────────────────┴────────────────┐
+                            ▼                                 ▼
+               Custom Error Handler?                Default Behavior
+                        │                                     │
+                 Execute Handler               Emit RFC 7807 500 Problem JSON
+```
+
+### Default Exception Handling (RFC 7807)
+
+If no custom error handler is registered, any unhandled `std::exception` produces an `application/problem+json` response with HTTP 500:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Internal Server Error",
+  "status": 500,
+  "detail": "Database connection timed out",
+  "instance": "/api/users/123"
+}
+```
+
+If an unknown exception type is thrown (not inheriting from `std::exception`), Aegon emits:
+```json
+{
+  "type": "about:blank",
+  "title": "Internal Server Error",
+  "status": 500,
+  "detail": "An internal server error occurred.",
+  "instance": "/api/users/123"
+}
+```
+
+---
+
+## Custom Global Error Handler
+
+You can customize error mapping across your entire application by attaching an `ErrorHandler` to `router.set_error_handler()`:
+
+<Tabs items={["Asynchronous Handler", "Synchronous Handler"]}>
+  <Tab value="Asynchronous Handler">
+```cpp
+router.set_error_handler([](http::Context& ctx, std::exception_ptr ex) -> core::Task<void> {
+    try {
+        if (ex) std::rethrow_exception(ex);
+    } 
+    catch (const std::invalid_argument& e) {
+        ctx.problem(
+            http::StatusCode::BadRequest, 
+            "Invalid Argument", 
+            e.what()
+        );
+    } 
+    catch (const std::runtime_error& e) {
+        ctx.problem(
+            http::StatusCode::InternalServerError, 
+            "Runtime Error", 
+            e.what()
+        );
+    } 
+    catch (...) {
+        ctx.problem(
+            http::StatusCode::InternalServerError, 
+            "Internal Error", 
+            "An unexpected error occurred"
+        );
+    }
+    co_return;
+});
+```
+  </Tab>
+  <Tab value="Synchronous Handler">
+```cpp
+router.set_error_handler([](http::Context& ctx, std::exception_ptr ex) {
+    try {
+        if (ex) std::rethrow_exception(ex);
+    } catch (const std::exception& e) {
+        ctx.problem(http::StatusCode::InternalServerError, "Server Error", e.what());
+    }
+});
+```
+  </Tab>
+</Tabs>
+
+### Domain-Specific Exception Mapping
+
+In production applications, custom domain exceptions can be mapped to precise HTTP status codes:
+
+```cpp
+// Domain exceptions
+struct DomainNotFoundException : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+struct DomainConflictException : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+struct DomainUnauthorizedException : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+// Global error handler
+router.set_error_handler([](http::Context& ctx, std::exception_ptr ex) {
+    try {
+        if (ex) std::rethrow_exception(ex);
+    }
+    catch (const DomainNotFoundException& e) {
+        ctx.problem(http::StatusCode::NotFound, "Resource Not Found", e.what());
+    }
+    catch (const DomainConflictException& e) {
+        ctx.problem(http::StatusCode::Conflict, "Conflict", e.what());
+    }
+    catch (const DomainUnauthorizedException& e) {
+        ctx.problem(http::StatusCode::Unauthorized, "Unauthorized", e.what());
+    }
+    catch (const std::exception& e) {
+        ctx.problem(http::StatusCode::InternalServerError, "Internal Server Error", e.what());
+    }
+    catch (...) {
+        ctx.problem(http::StatusCode::InternalServerError, "Internal Server Error", "Unknown fatal error");
+    }
+});
+```
+
+<Callout type="tip">
+**Fail-Safe Interception**: If your custom error handler itself throws an unhandled exception, Aegon safely intercepts it and emits a fallback RFC 7807 500 response (`"Unknown error in custom error handler"`), guaranteeing that the socket connection is cleanly closed and never leaked.
+</Callout>
+
+---
+
+## 404 Not Found & 405 Method Not Allowed
+
+### Custom 404 Handler
+
+When a requested route path does not match any registered static or dynamic routes, Aegon triggers the 404 handler.
+
+By default, Aegon responds with:
+```json
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "Cannot GET /nonexistent",
+  "instance": "/nonexistent"
+}
+```
+
+To override this behavior:
+```cpp
+router.set_not_found_handler([](http::Context& ctx) {
+    ctx.problem(
+        http::StatusCode::NotFound,
+        "Resource Not Found",
+        "The requested endpoint does not exist on this server."
+    );
+});
+```
+
+### Custom 405 Handler & RFC 9110 `Allow` Headers
+
+When a URL path matches one or more registered routes under different HTTP methods (for example, `/orders` exists for `POST` but the client sent `DELETE`), Aegon triggers the 405 handler.
+
+<Callout type="info">
+**RFC 9110 §15.5.6 Compliance**: When generating a 405 response, Aegon automatically inspects the internal Radix Tree and populates the `Allow` header with all valid verbs for that path (e.g. `Allow: GET, POST`).
+</Callout>
+
+By default, Aegon responds with:
+```json
+{
+  "type": "about:blank",
+  "title": "Method Not Allowed",
+  "status": 405,
+  "detail": "Method DELETE is not allowed for /api/v1/orders",
+  "instance": "/api/v1/orders"
+}
+```
+
+To customize the 405 response:
+```cpp
+router.set_method_not_allowed_handler([](http::Context& ctx) {
+    ctx.problem(
+        http::StatusCode::MethodNotAllowed,
+        "Method Not Allowed",
+        "The requested HTTP verb is not supported on this endpoint."
+    );
+});
+```
+
+---
+
+## Emitting Problem Details (`ctx.problem()`)
+
+Inside any route handler or middleware, emit standardized RFC 7807 errors using `ctx.problem()`:
+
+```cpp
+router.post("/transfer", [](http::Context& ctx) {
+    bool has_sufficient_funds = false;
+
+    if (!has_sufficient_funds) {
+        ctx.problem(
+            http::StatusCode::Forbidden,
+            "Insufficient Funds",
+            "Account balance ($12.50) is lower than requested transfer amount ($50.00)",
+            "https://api.bank.com/errors/insufficient-funds"
+        );
+        return;
+    }
+
+    ctx.res().text("Transfer complete");
+});
+```
+
+### Signature & Parameters
+
+```cpp
+Response& Context::problem(
+    StatusCode status, 
+    std::string_view title, 
+    std::string_view detail = "", 
+    std::string_view type = "about:blank"
+);
+```
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `status` | `StatusCode` | *(required)* | HTTP status code (e.g. `StatusCode::BadRequest`, `StatusCode::NotFound`). |
+| `title` | `std::string_view` | *(required)* | Short, human-readable summary of the problem type. |
+| `detail` | `std::string_view` | `""` | Optional human-readable explanation specific to this occurrence. |
+| `type` | `std::string_view` | `"about:blank"` | URI reference identifying the problem category. |
+
+`ctx.problem()` automatically:
+1. Sets HTTP status code on `res`.
+2. Sets `Content-Type: application/problem+json`.
+3. Sets `instance` to `req.path()`.
+4. Serializes the JSON payload using Glaze.
+
+### Structure of `ProblemDetails`
+
+The underlying [`ProblemDetails`](file:///home/uday/Projects/Aegon/src/http/ProblemDetails.h) structure maps directly to RFC 7807:
+
+```cpp
+namespace aegon::http {
+
+struct ProblemDetails {
+    std::string type{"about:blank"}; // URI reference identifying problem type
+    std::string title;               // Short, human-readable summary
+    int status{500};                 // HTTP status code
+    std::string detail;              // Detailed explanation specific to this occurrence
+    std::string instance{};          // URI reference identifying specific request (e.g. req.path())
+
+    [[nodiscard]] std::string to_json() const;
+};
+
+} // namespace aegon::http
+```
+
+---
+
+## Automatic Request Binding & Validation Errors
+
+When using `ctx.bind_json<T>()`, `ctx.bind_query<T>()`, `ctx.bind_path<T>()`, or `ctx.bind_form<T>()`, Aegon performs automatic error interception:
+
+### 1. Malformed Payloads (HTTP 400 Bad Request)
+If the client submits invalid JSON or malformed URL syntax, binding fails immediately and responds with HTTP 400:
+
+```json
+{
+  "status": 400,
+  "error": "Bad Request",
+  "message": "Malformed JSON payload: 1:12: expected value, got syntax error"
+}
+```
+
+### 2. Validation Violations (HTTP 422 Unprocessable Entity)
+If the DTO implements a `validate(validation::ValidationRules& v)` hook and validation rules fail:
+
+```json
+{
+  "violations": [
+    {
+      "field": "email",
+      "message": "must be a valid email address"
+    },
+    {
+      "field": "age",
+      "message": "must be at least 18"
+    }
+  ]
+}
+```
+
+The handler receives `std::nullopt` and can return immediately without manual error formatting:
+
+```cpp
+router.post("/users", [](http::Context& ctx) {
+    auto user = ctx.bind_json<CreateUserRequest>();
+    if (!user) return; // 400 or 422 was already sent automatically!
+
+    // Proceed with validated user...
+});
+```
+
+---
+
+## Startup Misconfiguration Diagnostics
+
+Aegon performs fail-fast validation before the server begins accepting connections:
+
+```cpp
+http::Server server;
+
+// Throws std::runtime_error("Server listen error: port must be greater than 0")
+server.listen(0);
+
+// Throws std::runtime_error("Server TLS configuration error: Certificate file not found: ...")
+server.enable_tls("/invalid/path/cert.pem", "/invalid/path/key.pem");
+```
+
+Catching these exceptions at startup ensures misconfigurations are discovered immediately during process initialization rather than failing silently in production.
