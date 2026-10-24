@@ -289,7 +289,7 @@ struct RecvmsgAwaiter : IoAwaiter {
 
 class MultishotAcceptStream {
 public:
-    struct StreamState : IoAwaiter, std::enable_shared_from_this<StreamState> {
+    struct StreamState : IoAwaiter {
         IoEngine& engine;
         os_socket_t listen_fd{INVALID_OS_SOCKET};
         bool armed{false};
@@ -298,7 +298,6 @@ public:
         bool use_direct{false};
         std::deque<AcceptResult> backlog{};
         AcceptResult current_result{};
-        std::shared_ptr<StreamState> self_{nullptr};
 #if defined(_WIN32)
         os_socket_t client_sock{INVALID_OS_SOCKET};
         alignas(8) uint8_t accept_buf[(sizeof(sockaddr_storage) + 16) * 2]{};
@@ -360,7 +359,7 @@ private:
 
 class MultishotRecvStream {
 public:
-    struct StreamState : IoAwaiter, std::enable_shared_from_this<StreamState> {
+    struct StreamState : IoAwaiter {
         IoEngine& engine;
         os_socket_t socket_fd{INVALID_OS_SOCKET};
         uint16_t bgid{0};
@@ -369,7 +368,6 @@ public:
         bool cancelled{false};
         std::deque<RecvResult> backlog{};
         RecvResult current_result{};
-        std::shared_ptr<StreamState> self_{nullptr};
 #if defined(_WIN32)
         WSABUF wsa_buf{};
         uint16_t allocated_bid{0};

@@ -174,6 +174,15 @@ size_t IoUringEngine::process_completions() noexcept {
         uint32_t flags     = cqe->flags;
 
         if (user_data != 0) {
+            if (!cancelled_user_data_.empty()) {
+                auto it = cancelled_user_data_.find(user_data);
+                if (it != cancelled_user_data_.end()) {
+                    if ((flags & 0x02 /* IORING_CQE_F_MORE */) == 0 || res < 0) {
+                        cancelled_user_data_.erase(it);
+                    }
+                    continue;
+                }
+            }
             auto* awaiter = reinterpret_cast<IoAwaiter*>(user_data);
             awaiter->on_completion(res, flags);
         }
@@ -218,6 +227,7 @@ void IoUringEngine::submit_multishot_accept(MultishotAcceptStream::StreamState& 
 
 void IoUringEngine::cancel_multishot_accept(MultishotAcceptStream::StreamState& st) noexcept {
     if (st.armed && initialized_) {
+        cancelled_user_data_.insert(reinterpret_cast<uint64_t>(&st));
         struct io_uring_sqe* sqe = acquire_sqe();
         if (sqe) {
             io_uring_prep_cancel64(sqe, reinterpret_cast<uint64_t>(&st), 0);
@@ -257,6 +267,7 @@ void IoUringEngine::submit_multishot_recv(MultishotRecvStream::StreamState& st) 
 
 void IoUringEngine::cancel_multishot_recv(MultishotRecvStream::StreamState& st) noexcept {
     if (st.armed && initialized_) {
+        cancelled_user_data_.insert(reinterpret_cast<uint64_t>(&st));
         struct io_uring_sqe* sqe = acquire_sqe();
         if (sqe) {
             io_uring_prep_cancel64(sqe, reinterpret_cast<uint64_t>(&st), 0);
@@ -380,6 +391,7 @@ void IoUringEngine::submit_cancel(CancelAwaiter& aw) noexcept {
         resume_continuation(aw);
         return;
     }
+    cancelled_user_data_.insert(aw.user_data);
     io_uring_prep_cancel64(sqe, aw.user_data, aw.cancel_flags);
     io_uring_sqe_set_data(sqe, &aw);
 }

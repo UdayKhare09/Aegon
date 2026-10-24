@@ -13,8 +13,7 @@ using namespace aegon::http::middleware;
 static Response dispatch_offline(Router& router, std::string_view raw_req) {
     Request req;
     size_t consumed = 0;
-    std::string s(raw_req);
-    v1::Http1Parser::parse(s, req, consumed);
+    v1::Http1Parser::parse(raw_req, req, consumed);
     Response res;
     auto task = router.dispatch(req, res, nullptr);
     task.resume();

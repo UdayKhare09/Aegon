@@ -45,7 +45,7 @@ FileSink::FileSink(const std::filesystem::path& path, bool append)
     : FileSink(FileSinkConfig{.path = path, .append = append}) {}
 
 FileSink::~FileSink() {
-    flush();
+    FileSink::flush();
     if (file_.is_open()) {
         file_.close();
     }

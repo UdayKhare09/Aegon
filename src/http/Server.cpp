@@ -260,6 +260,12 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, core::os_socket_t li
         auto stream = loop.engine().accept_multishot(listen_fd);
         while (running_) {
             auto accept_res = co_await stream.next();
+            if (!running_) {
+                if (accept_res.fd != core::INVALID_OS_SOCKET && accept_res.fd >= 0) {
+                    core::close_socket(accept_res.fd);
+                }
+                break;
+            }
             if (accept_res.fd == core::INVALID_OS_SOCKET || accept_res.fd < 0) {
                 // Multishot accept stream disarmed (e.g. transient ECONNABORTED).
                 // Break inner loop to re-arm multishot accept stream.
@@ -465,6 +471,23 @@ void Server::run(size_t threads) {
 void Server::stop() {
     running_ = false;
     log::info("Aegon server stopping");
+
+    // Unblock any pending accept loops by pulsing listeners
+    std::vector<ListenerConfig> active_listeners = listeners_;
+    if (active_listeners.empty()) {
+        active_listeners.push_back(ListenerConfig{port_, host_, tls_enabled_});
+    }
+    for (const auto& l : active_listeners) {
+        auto fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd >= 0) {
+            sockaddr_in a{};
+            a.sin_family = AF_INET;
+            a.sin_port = htons(l.port);
+            ::inet_pton(AF_INET, (l.host.empty() || l.host == "0.0.0.0") ? "127.0.0.1" : l.host.c_str(), &a.sin_addr);
+            (void)::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a));
+            core::close_socket(fd);
+        }
+    }
 
     {
         std::lock_guard lock(loops_mutex_);

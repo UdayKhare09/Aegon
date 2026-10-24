@@ -230,11 +230,12 @@ core::Task<void> run_tests() {
 int main() {
     core::EventLoop loop(64);
     bool completed = false;
-    loop.spawn([&]() -> core::Task<void> {
+    auto task_fn = [&]() -> core::Task<void> {
         co_await run_tests();
         completed = true;
         loop.stop();
-    }());
+    };
+    loop.spawn(task_fn());
     loop.run();
     assert(completed);
     std::cout << "All Transaction feature parity & cache sync tests PASSED!\n";

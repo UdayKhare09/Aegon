@@ -484,11 +484,12 @@ int main() {
         core::EventLoop loop(512);
 
         bool completed = false;
-        loop.spawn([&]() -> core::Task<void> {
+        auto task_fn = [&]() -> core::Task<void> {
             co_await run_postgres_orm_cache_all_topologies(loop.engine());
             completed = true;
             loop.stop();
-        }());
+        };
+        loop.spawn(task_fn());
 
         loop.run();
         assert(completed);

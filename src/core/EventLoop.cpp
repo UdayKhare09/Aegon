@@ -41,7 +41,13 @@ EventLoop::EventLoop(uint32_t entries, uint16_t pbuf_entries, size_t buffer_size
                engine_->name(), entries, pbuf_entries, buffer_size);
 }
 
-EventLoop::~EventLoop() = default;
+EventLoop::~EventLoop() {
+    stop();
+    if (engine_) {
+        engine_->process_completions();
+    }
+    tasks_.clear();
+}
 
 void EventLoop::pin_to_core(int core_id) {
 #if defined(__linux__)
@@ -125,6 +131,10 @@ void EventLoop::run() {
         if (tasks_.empty()) {
             break;
         }
+    }
+
+    if (engine_) {
+        engine_->process_completions();
     }
 
     running_.store(false, std::memory_order_release);

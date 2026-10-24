@@ -47,7 +47,7 @@ void test_sse_stream_unit() {
     };
 
     aegon::core::EventLoop loop;
-    loop.spawn([&]() -> aegon::core::Task<void> {
+    auto task_fn = [&]() -> aegon::core::Task<void> {
         SseStream stream(mock_writer);
         assert(stream.is_open());
 
@@ -89,7 +89,8 @@ void test_sse_stream_unit() {
         co_await stream.data("should not be sent");
         assert(written_frames.size() == 5);
         loop.stop();
-    }());
+    };
+    loop.spawn(task_fn());
 
     loop.run();
     std::cout << "PASSED\n";

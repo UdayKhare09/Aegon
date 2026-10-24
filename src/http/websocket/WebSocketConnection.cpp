@@ -104,6 +104,7 @@ core::Task<void> WebSocketConnection::run(core::MultishotRecvStream stream, std:
     }
 
     is_open_ = false;
+    stream.cancel();
     if (core::is_valid_socket(client_fd_)) {
         (void)(co_await loop_.engine().close(client_fd_));
         client_fd_ = core::INVALID_OS_SOCKET;

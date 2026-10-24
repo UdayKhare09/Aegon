@@ -29,7 +29,9 @@ endif()
 # Compiler Options & Third-Party Dependencies
 # ==============================================================================
 include(cmake/CompilerOptions.cmake)
+include(cmake/Sanitizers.cmake)
 include(cmake/Dependencies.cmake)
+include(cmake/ClangTidy.cmake)
 
 # ==============================================================================
 # Core Framework Libraries

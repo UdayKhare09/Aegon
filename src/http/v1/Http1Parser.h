@@ -547,7 +547,7 @@ public:
                 value.remove_suffix(1);
             }
 
-            res.header(name, value);
+            res.set_header_owned(std::string(name), std::string(value));
 
             // Check Content-Length & Transfer-Encoding
             if (name.size() == 14) {

@@ -226,17 +226,20 @@ void EpollEngine::process_epoll_event(int fd, uint32_t events) noexcept {
             }
             case InterestType::MultishotAccept: {
                 auto* st = static_cast<MultishotAcceptStream::StreamState*>(aw);
-                while (st->armed && !st->cancelled && !st->finished) {
+                while (slot.in_awaiter == st && st->armed && !st->cancelled && !st->finished) {
                     sockaddr_storage addr{};
                     socklen_t addrlen = sizeof(addr);
                     int client_fd = ::accept4(st->listen_fd, reinterpret_cast<sockaddr*>(&addr), &addrlen, SOCK_NONBLOCK | SOCK_CLOEXEC);
                     if (client_fd >= 0) {
                         st->on_completion(client_fd, 0x02 /* IORING_CQE_F_MORE */);
+                        if (slot.in_awaiter != st) {
+                            break;
+                        }
                     } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
                         break;
                     } else {
-                        st->on_completion(-errno, 0);
                         remove_interest(fd, EPOLLIN);
+                        st->on_completion(-errno, 0);
                         break;
                     }
                 }
@@ -276,16 +279,16 @@ void EpollEngine::process_epoll_event(int fd, uint32_t events) noexcept {
             }
             case InterestType::MultishotRecv: {
                 auto* st = static_cast<MultishotRecvStream::StreamState*>(aw);
-                while (st->armed && !st->cancelled && !st->finished) {
+                while (slot.in_awaiter == st && st->armed && !st->cancelled && !st->finished) {
                     if (!buffer_pool_) {
-                        st->on_completion(-ENOBUFS, 0);
                         remove_interest(fd, EPOLLIN);
+                        st->on_completion(-ENOBUFS, 0);
                         break;
                     }
                     int bid = buffer_pool_->alloc_buffer();
                     if (bid < 0) {
-                        st->on_completion(-ENOBUFS, 0);
                         remove_interest(fd, EPOLLIN);
+                        st->on_completion(-ENOBUFS, 0);
                         break;
                     }
                     auto span = buffer_pool_->get_buffer(static_cast<uint16_t>(bid), buffer_pool_->buffer_size());
@@ -293,6 +296,9 @@ void EpollEngine::process_epoll_event(int fd, uint32_t events) noexcept {
                     if (n > 0) {
                         uint32_t flags = (static_cast<uint32_t>(bid) << 16) | 0x01 | 0x02;
                         st->on_completion(static_cast<int>(n), flags);
+                        if (slot.in_awaiter != st) {
+                            break;
+                        }
                     } else if (n == 0) {
                         buffer_pool_->return_buffer(static_cast<uint16_t>(bid));
                         remove_interest(fd, EPOLLIN);

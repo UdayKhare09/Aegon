@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Fast compiler caching (ccache)
 find_program(CCACHE_PROGRAM ccache)
@@ -32,6 +33,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(
         -O3
         -march=native
+        -fPIC
         -Wall
         -Wextra
         -Wpedantic

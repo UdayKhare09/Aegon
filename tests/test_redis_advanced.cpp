@@ -299,7 +299,7 @@ int main() {
     core::EventLoop loop(256);
 
     bool completed = false;
-    loop.spawn([&]() -> core::Task<void> {
+    auto task_fn = [&]() -> core::Task<void> {
         try {
             co_await run_all_tests(loop.engine());
             completed = true;
@@ -308,7 +308,8 @@ int main() {
             std::abort();
         }
         loop.stop();
-    }());
+    };
+    loop.spawn(task_fn());
 
     loop.run();
     assert(completed);

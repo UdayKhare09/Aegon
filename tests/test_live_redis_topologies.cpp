@@ -266,7 +266,7 @@ int main() {
     core::EventLoop loop(128);
 
     bool completed = false;
-    loop.spawn([&]() -> core::Task<void> {
+    auto task_fn = [&]() -> core::Task<void> {
         // Probe if Redis server is reachable
         RedisNodeConfig probe_cfg{.host = "127.0.0.1", .port = 6379};
         RedisConnection probe(loop.engine(), probe_cfg);
@@ -284,7 +284,8 @@ int main() {
         co_await test_cluster(loop.engine());
         completed = true;
         loop.stop();
-    }());
+    };
+    loop.spawn(task_fn());
 
     loop.run();
     assert(completed);

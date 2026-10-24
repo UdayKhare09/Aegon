@@ -453,7 +453,7 @@ public:
      * Database errors propagate; no entity cache operations are recorded.
      */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
-    core::Task<void> link(const ParentID& parent_id, const ChildID& child_id,
+    core::Task<void> link(ParentID parent_id, ChildID child_id,
                           std::string_view parent_col = "", std::string_view child_col = "") {
         auto schema = JunctionEntity::schema();
         std::string p_col(parent_col);
@@ -514,7 +514,7 @@ public:
      * Database errors propagate; no entity cache operations are recorded.
      */
     template <typename JunctionEntity, typename ParentID, typename ChildID>
-    core::Task<bool> unlink(const ParentID& parent_id, const ChildID& child_id,
+    core::Task<bool> unlink(ParentID parent_id, ChildID child_id,
                             std::string_view parent_col = "", std::string_view child_col = "") {
         auto schema = JunctionEntity::schema();
         std::string p_col(parent_col);

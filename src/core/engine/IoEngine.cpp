@@ -178,7 +178,7 @@ void MultishotAcceptStream::StreamState::on_completion(int res, uint32_t cqe_fla
         armed = r.has_more;
     }
 
-    if (res < 0) {
+    if (!r.has_more || res < 0) {
         finished = true;
         armed    = false;
     }
@@ -194,9 +194,7 @@ void MultishotAcceptStream::StreamState::on_completion(int res, uint32_t cqe_fla
 }
 
 MultishotAcceptStream::MultishotAcceptStream(IoEngine& engine, os_socket_t listen_fd, bool use_direct)
-    : state_(std::make_shared<StreamState>(engine, listen_fd, use_direct)) {
-    state_->self_ = state_;
-}
+    : state_(std::make_shared<StreamState>(engine, listen_fd, use_direct)) {}
 
 MultishotAcceptStream::~MultishotAcceptStream() {
     cancel();
@@ -248,7 +246,7 @@ void MultishotRecvStream::StreamState::on_completion(int res, uint32_t cqe_flags
         armed = r.has_more;
     }
 
-    if (res <= 0) {
+    if (!r.has_more || res <= 0) {
         finished = true;
         armed    = false;
     }
@@ -264,9 +262,7 @@ void MultishotRecvStream::StreamState::on_completion(int res, uint32_t cqe_flags
 }
 
 MultishotRecvStream::MultishotRecvStream(IoEngine& engine, os_socket_t socket_fd, uint16_t bgid)
-    : state_(std::make_shared<StreamState>(engine, socket_fd, bgid)) {
-    state_->self_ = state_;
-}
+    : state_(std::make_shared<StreamState>(engine, socket_fd, bgid)) {}
 
 MultishotRecvStream::~MultishotRecvStream() {
     cancel();

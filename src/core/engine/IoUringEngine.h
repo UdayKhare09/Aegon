@@ -2,6 +2,7 @@
 
 #include "core/engine/IoEngine.h"
 #include <liburing.h>
+#include <unordered_set>
 #include <vector>
 
 namespace aegon::core {
@@ -81,6 +82,7 @@ private:
     bool files_registered_{false};
     unsigned direct_fd_slots_{0};
     int wakeup_fd_{-1};
+    std::unordered_set<uint64_t> cancelled_user_data_{};
 };
 
 } // namespace aegon::core

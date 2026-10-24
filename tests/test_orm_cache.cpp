@@ -185,11 +185,12 @@ int main() {
     core::EventLoop loop(64);
 
     bool completed = false;
-    loop.spawn([&]() -> core::Task<void> {
+    auto task_fn = [&]() -> core::Task<void> {
         co_await run_orm_cache_tests();
         completed = true;
         loop.stop();
-    }());
+    };
+    loop.spawn(task_fn());
 
     loop.run();
     assert(completed);

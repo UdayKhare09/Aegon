@@ -2,6 +2,7 @@
 #include "http/client/RequestBuilder.h"
 #include "http/client/HttpClient.h"
 #include <chrono>
+#include <deque>
 #include <cstring>
 #include <iostream>
 #if !defined(_WIN32)
@@ -448,7 +449,7 @@ Response Http2ClientSession::execute_sync(std::shared_ptr<RequestState> state) {
     nva.push_back(make_nv(":authority", authority_str));
     nva.push_back(make_nv(":path", path_str));
 
-    std::vector<std::string> lnames;
+    std::deque<std::string> lnames;
     for (const auto& h : state->headers) {
         std::string ln = h.name;
         for (char& c : ln) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -572,7 +573,7 @@ core::Task<Response> Http2ClientSession::execute(std::shared_ptr<RequestState> s
     nva.push_back(make_nv(":authority", authority_str));
     nva.push_back(make_nv(":path", path_str));
 
-    std::vector<std::string> lnames;
+    std::deque<std::string> lnames;
     for (const auto& h : state->headers) {
         std::string ln = h.name;
         for (char& c : ln) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
