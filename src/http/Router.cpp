@@ -99,6 +99,7 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                 return;
             }
         }
+        rel = decoded_rel;
 
         // 1. Lexical checks on both raw and URL-decoded path segments
         if (rel.find("..") != std::string_view::npos ||
@@ -147,9 +148,6 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
 #if defined(__linux__)
             time_t current_mtime = st.st_mtime;
             long current_nsec = st.st_mtim.tv_nsec;
-#elif defined(__APPLE__)
-            time_t current_mtime = st.st_mtime;
-            long current_nsec = st.st_mtimespec.tv_nsec;
 #elif defined(_WIN32)
             time_t current_mtime = st.st_mtime;
             long current_nsec = 0;
