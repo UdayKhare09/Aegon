@@ -9,6 +9,14 @@ set(AEGON_VERSION_MINOR 2)
 set(AEGON_VERSION_PATCH 1)
 set(AEGON_VERSION_STRING "${AEGON_VERSION_MAJOR}.${AEGON_VERSION_MINOR}.${AEGON_VERSION_PATCH}")
 
+# Disallow in-source builds to prevent root directory pollution
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
+    message(FATAL_ERROR
+        "In-source builds are forbidden.\n"
+        "Please use an out-of-source build directory (e.g. 'cmake -B build' or 'cmake -B build-asan')."
+    )
+endif()
+
 project(Aegon
     VERSION ${AEGON_VERSION_MAJOR}.${AEGON_VERSION_MINOR}.${AEGON_VERSION_PATCH}
     LANGUAGES CXX
@@ -30,6 +38,7 @@ endif()
 # ==============================================================================
 include(cmake/CompilerOptions.cmake)
 include(cmake/Sanitizers.cmake)
+include(cmake/Hardening.cmake)
 include(cmake/Dependencies.cmake)
 include(cmake/ClangTidy.cmake)
 
