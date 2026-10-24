@@ -23,3 +23,12 @@ scratch
 packaging/arch/pkg/
 packaging/arch/src/
 old_docs
+
+# Fuzzing runtime artifacts & dynamic corpora
+crash-*
+leak-*
+timeout-*
+oom-*
+tests/fuzz/corpora/**
+!tests/fuzz/corpora/**/
+!tests/fuzz/corpora/**/*.raw

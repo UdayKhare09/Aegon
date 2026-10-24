@@ -41,6 +41,7 @@ include(cmake/Sanitizers.cmake)
 include(cmake/Hardening.cmake)
 include(cmake/Dependencies.cmake)
 include(cmake/ClangTidy.cmake)
+include(cmake/Fuzzing.cmake)
 
 # ==============================================================================
 # Core Framework Libraries

@@ -41,100 +41,139 @@ public:
         } else {
             return std::nullopt; // Unsupported protocol
         }
-        u.scheme_ = scheme_sv;
+        u.scheme_offset_ = 0;
+        u.scheme_len_ = scheme_end;
 
         // Skip "://"
-        sv.remove_prefix(scheme_end + 3);
+        size_t authority_start = scheme_end + 3;
+        if (authority_start >= u.raw_.size()) {
+            return std::nullopt;
+        }
+        std::string_view auth_sv = std::string_view(u.raw_).substr(authority_start);
 
         // 2. Authority (host[:port])
-        size_t path_start = sv.find_first_of("/?#");
-        std::string_view authority = (path_start == std::string_view::npos) ? sv : sv.substr(0, path_start);
+        size_t rel_path_start = auth_sv.find_first_of("/?#");
+        std::string_view authority = (rel_path_start == std::string_view::npos) ? auth_sv : auth_sv.substr(0, rel_path_start);
 
         if (authority.empty()) return std::nullopt;
 
         size_t colon_pos = authority.rfind(':');
         if (colon_pos != std::string_view::npos) {
-            u.host_ = authority.substr(0, colon_pos);
+            std::string_view host_sv = authority.substr(0, colon_pos);
+            if (host_sv.empty()) return std::nullopt;
+            u.host_offset_ = authority_start;
+            u.host_len_ = colon_pos;
+
             std::string_view port_sv = authority.substr(colon_pos + 1);
+            if (port_sv.empty()) return std::nullopt;
             uint16_t parsed_port = 0;
             auto [ptr, ec] = std::from_chars(port_sv.data(), port_sv.data() + port_sv.size(), parsed_port);
-            if (ec != std::errc{} || parsed_port == 0) {
+            if (ec != std::errc{} || ptr != port_sv.data() + port_sv.size() || parsed_port == 0) {
                 return std::nullopt;
             }
             u.port_ = parsed_port;
             u.has_explicit_port_ = true;
         } else {
-            u.host_ = authority;
+            u.host_offset_ = authority_start;
+            u.host_len_ = authority.size();
             u.port_ = u.default_port_;
             u.has_explicit_port_ = false;
         }
 
-        if (u.host_.empty()) return std::nullopt;
-
-        if (path_start == std::string_view::npos) {
-            u.path_ = "/";
-            u.query_ = "";
-            u.fragment_ = "";
+        if (rel_path_start == std::string_view::npos) {
+            u.has_custom_path_ = false;
+            u.query_len_ = 0;
+            u.fragment_len_ = 0;
             return u;
         }
 
-        sv.remove_prefix(path_start);
+        size_t path_start = authority_start + rel_path_start;
+        std::string_view rem = std::string_view(u.raw_).substr(path_start);
 
         // 3. Path, Query, Fragment
-        size_t fragment_pos = sv.find('#');
+        size_t fragment_pos = rem.find('#');
         if (fragment_pos != std::string_view::npos) {
-            u.fragment_ = sv.substr(fragment_pos + 1);
-            sv = sv.substr(0, fragment_pos);
-        }
-
-        size_t query_pos = sv.find('?');
-        if (query_pos != std::string_view::npos) {
-            u.query_ = sv.substr(query_pos + 1);
-            u.path_ = sv.substr(0, query_pos);
+            u.fragment_offset_ = path_start + fragment_pos + 1;
+            u.fragment_len_ = rem.size() - (fragment_pos + 1);
+            rem = rem.substr(0, fragment_pos);
         } else {
-            u.path_ = sv;
-            u.query_ = "";
+            u.fragment_len_ = 0;
         }
 
-        if (u.path_.empty()) {
-            u.path_ = "/";
+        size_t query_pos = rem.find('?');
+        if (query_pos != std::string_view::npos) {
+            u.query_offset_ = path_start + query_pos + 1;
+            u.query_len_ = rem.size() - (query_pos + 1);
+            rem = rem.substr(0, query_pos);
+        } else {
+            u.query_len_ = 0;
+        }
+
+        if (rem.empty()) {
+            u.has_custom_path_ = false;
+        } else {
+            u.has_custom_path_ = true;
+            u.path_offset_ = path_start;
+            u.path_len_ = rem.size();
         }
 
         return u;
     }
 
-    [[nodiscard]] std::string_view scheme() const noexcept { return scheme_; }
-    [[nodiscard]] std::string_view host() const noexcept { return host_; }
+    [[nodiscard]] std::string_view scheme() const noexcept {
+        return std::string_view(raw_.data() + scheme_offset_, scheme_len_);
+    }
+
+    [[nodiscard]] std::string_view host() const noexcept {
+        return std::string_view(raw_.data() + host_offset_, host_len_);
+    }
+
     [[nodiscard]] uint16_t port() const noexcept { return port_; }
     [[nodiscard]] bool is_https() const noexcept { return is_https_; }
     [[nodiscard]] bool has_explicit_port() const noexcept { return has_explicit_port_; }
-    [[nodiscard]] std::string_view path() const noexcept { return path_; }
-    [[nodiscard]] std::string_view query() const noexcept { return query_; }
-    [[nodiscard]] std::string_view fragment() const noexcept { return fragment_; }
+
+    [[nodiscard]] std::string_view path() const noexcept {
+        if (!has_custom_path_) return "/";
+        return std::string_view(raw_.data() + path_offset_, path_len_);
+    }
+
+    [[nodiscard]] std::string_view query() const noexcept {
+        if (query_len_ == 0) return {};
+        return std::string_view(raw_.data() + query_offset_, query_len_);
+    }
+
+    [[nodiscard]] std::string_view fragment() const noexcept {
+        if (fragment_len_ == 0) return {};
+        return std::string_view(raw_.data() + fragment_offset_, fragment_len_);
+    }
 
     /**
      * @brief Formats the HTTP request-target (e.g. "/path?foo=bar").
      */
     [[nodiscard]] std::string target() const {
-        if (query_.empty()) return std::string(path_);
-        return std::string(path_) + "?" + std::string(query_);
+        auto q = query();
+        auto p = path();
+        if (q.empty()) return std::string(p);
+        return std::string(p) + "?" + std::string(q);
     }
 
     /**
      * @brief Host header format (e.g. "api.example.com" or "localhost:8080" if non-standard port).
      */
     [[nodiscard]] std::string host_header() const {
+        auto h = host();
         if (port_ == default_port_) {
-            return std::string(host_);
+            return std::string(h);
         }
-        return std::string(host_) + ":" + std::to_string(port_);
+        return std::string(h) + ":" + std::to_string(port_);
     }
 
     /**
      * @brief Unique cache key for connection pool (e.g. "https://api.example.com:443").
      */
     [[nodiscard]] std::string origin() const {
-        return (is_https_ ? "https://" : "http://") + std::string(host_) + ":" + std::to_string(port_);
+        auto h = host();
+        return (is_https_ ? "https://" : "http://") + std::string(h) + ":" + std::to_string(port_);
     }
 
     /**
@@ -147,13 +186,13 @@ public:
             return std::string(location);
         }
         if (location.starts_with("//")) {
-            return std::string(scheme_) + ":" + std::string(location);
+            return std::string(scheme()) + ":" + std::string(location);
         }
         if (location.front() == '/') {
             return origin() + std::string(location);
         }
         // Relative path
-        std::string p(path_);
+        std::string p(path());
         size_t last_slash = p.rfind('/');
         if (last_slash != std::string::npos) {
             p = p.substr(0, last_slash + 1);
@@ -165,15 +204,21 @@ public:
 
 private:
     std::string raw_{};
-    std::string_view scheme_{};
-    std::string_view host_{};
+    size_t scheme_offset_{0};
+    size_t scheme_len_{0};
+    size_t host_offset_{0};
+    size_t host_len_{0};
     uint16_t port_{80};
     uint16_t default_port_{80};
     bool is_https_{false};
     bool has_explicit_port_{false};
-    std::string_view path_{"/"};
-    std::string_view query_{};
-    std::string_view fragment_{};
+    size_t path_offset_{0};
+    size_t path_len_{0};
+    bool has_custom_path_{false};
+    size_t query_offset_{0};
+    size_t query_len_{0};
+    size_t fragment_offset_{0};
+    size_t fragment_len_{0};
 };
 
 } // namespace aegon::http::client

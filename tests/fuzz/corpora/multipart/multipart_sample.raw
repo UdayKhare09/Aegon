@@ -1,0 +1,11 @@
+multipart/form-data; boundary=---------------------------974767299852498929531610575
+-----------------------------974767299852498929531610575
+Content-Disposition: form-data; name="username"
+
+johndoe
+-----------------------------974767299852498929531610575
+Content-Disposition: form-data; name="avatar"; filename="avatar.png"
+Content-Type: image/png
+
+fake-binary-image-data
+-----------------------------974767299852498929531610575--
