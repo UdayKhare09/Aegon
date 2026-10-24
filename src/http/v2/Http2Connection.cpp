@@ -133,7 +133,9 @@ int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, 
     std::string_view v(reinterpret_cast<const char*>(value), valuelen);
 
     stream->headers_total_size += namelen + valuelen;
-    if (stream->headers_total_size > config_.limits.max_headers_size && stream->error_status == StatusCode::Ok) {
+    if ((stream->headers_total_size > config_.limits.max_headers_size ||
+         stream->req.headers().size() >= config_.limits.max_header_count) &&
+        stream->error_status == StatusCode::Ok) {
         stream->error_status = StatusCode::RequestHeaderFieldsTooLarge;
     }
 

@@ -383,7 +383,9 @@ int Http3Connection::on_stream_header(int64_t stream_id, int32_t, nghttp3_rcbuf*
     }
 
     stream->headers_total_size += name_buf.len + val_buf.len;
-    if (stream->headers_total_size > config_.limits.max_headers_size && stream->error_status == StatusCode::Ok) {
+    if ((stream->headers_total_size > config_.limits.max_headers_size ||
+         stream->req.headers().size() >= config_.limits.max_header_count) &&
+        stream->error_status == StatusCode::Ok) {
         stream->error_status = StatusCode::RequestHeaderFieldsTooLarge;
     }
 

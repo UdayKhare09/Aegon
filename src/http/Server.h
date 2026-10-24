@@ -201,6 +201,7 @@ public:
     // Protocol Limits across H1, H2, and H3
     Server& max_body_size(size_t bytes) noexcept { config_.limits.max_body_size = bytes; return *this; }
     Server& max_headers_size(size_t bytes) noexcept { config_.limits.max_headers_size = bytes; return *this; }
+    Server& max_header_count(size_t count) noexcept { config_.limits.max_header_count = count; return *this; }
     Server& max_uri_length(size_t bytes) noexcept { config_.limits.max_uri_length = bytes; return *this; }
     Server& limits(const ProtocolLimits& l) noexcept { config_.limits = l; return *this; }
     [[nodiscard]] const ProtocolLimits& limits() const noexcept { return config_.limits; }

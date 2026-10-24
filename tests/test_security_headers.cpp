@@ -6,6 +6,8 @@
 #include <cassert>
 #include <string>
 #include <vector>
+#include <filesystem>
+#include <fstream>
 
 using namespace aegon;
 using namespace aegon::http;
@@ -236,6 +238,98 @@ void test_10_combined_security_and_cors() {
     std::cout << "  -> PASS\n";
 }
 
+// 11. DoS Header count limit verification (max_header_count)
+void test_11_max_header_count_limit() {
+    std::cout << "[TEST 11] Testing max_header_count DoS mitigation...\n";
+    ProtocolLimits limits;
+    limits.max_header_count = 3;
+
+    // 1. Request with 4 headers (exceeds limit of 3) -> should fail
+    {
+        std::string raw =
+            "GET /test HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "X-Header-1: value1\r\n"
+            "X-Header-2: value2\r\n"
+            "X-Header-3: value3\r\n\r\n";
+        Request req;
+        size_t consumed = 0;
+        auto st = v1::Http1Parser::parse(raw, req, consumed, limits);
+        assert(st == v1::ParseStatus::HeadersTooLarge);
+    }
+
+    // 2. Request with 2 headers (within limit of 3) -> should pass
+    {
+        std::string raw =
+            "GET /test HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "X-Header-1: value1\r\n\r\n";
+        Request req;
+        size_t consumed = 0;
+        auto st = v1::Http1Parser::parse(raw, req, consumed, limits);
+        assert(st == v1::ParseStatus::Complete);
+    }
+    std::cout << "  -> PASS\n";
+}
+
+// 12. Path Traversal & Canonicalization defense verification
+void test_12_path_traversal_guards() {
+    std::cout << "[TEST 12] Testing path traversal & canonicalization defense...\n";
+    namespace fs = std::filesystem;
+    fs::path temp_root = fs::temp_directory_path() / "aegon_security_test_dir";
+    fs::create_directories(temp_root / "subdir");
+
+    // Create safe file inside root
+    std::ofstream(temp_root / "safe.txt") << "safe content";
+    // Create secret outside root
+    std::ofstream(temp_root.parent_path() / "outside_secret.txt") << "secret!";
+
+    Router router;
+    router.static_files("/static", temp_root.string());
+
+    // 1. Safe access
+    {
+        Response res = dispatch_offline(router, "GET /static/safe.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert(res.status() == StatusCode::Ok);
+    }
+
+    // 2. Standard dot-dot breakout
+    {
+        Response res = dispatch_offline(router, "GET /static/../outside_secret.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert(res.status() == StatusCode::NotFound);
+    }
+
+    // 3. Subdirectory dot-dot breakout
+    {
+        Response res = dispatch_offline(router, "GET /static/subdir/../../outside_secret.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert(res.status() == StatusCode::NotFound);
+    }
+
+    // 4. URL-encoded dot-dot breakout (%2e%2e)
+    {
+        Response res = dispatch_offline(router, "GET /static/%2e%2e/outside_secret.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert(res.status() == StatusCode::NotFound);
+    }
+
+    // 5. Mixed URL-encoded breakout (%2e%2e%2f)
+    {
+        Response res = dispatch_offline(router, "GET /static/%2e%2e%2foutside_secret.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert(res.status() == StatusCode::NotFound);
+    }
+
+    // 6. Backslash traversal
+    {
+        Response res = dispatch_offline(router, "GET /static/..\\outside_secret.txt HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        assert(res.status() == StatusCode::NotFound);
+    }
+
+    // Clean up test files
+    fs::remove_all(temp_root);
+    fs::remove(temp_root.parent_path() / "outside_secret.txt");
+
+    std::cout << "  -> PASS\n";
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "   RUNNING SECURITY HEADERS TEST SUITE  \n";
@@ -251,9 +345,11 @@ int main() {
     test_8_csp_report_only();
     test_9_sensitive_cache_prevention();
     test_10_combined_security_and_cors();
+    test_11_max_header_count_limit();
+    test_12_path_traversal_guards();
 
     std::cout << "========================================\n";
-    std::cout << " ALL 10 SECURITY HEADERS TESTS PASSED!  \n";
+    std::cout << " ALL 12 SECURITY TESTS PASSED!          \n";
     std::cout << "========================================\n";
     return 0;
 }

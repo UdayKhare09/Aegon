@@ -11,6 +11,7 @@ namespace aegon::http {
 struct ProtocolLimits {
     size_t max_uri_length{8192};            // 8 KB limit -> 414 URI Too Long
     size_t max_headers_size{65536};         // 64 KB total header section limit -> 431 Request Header Fields Too Large
+    size_t max_header_count{100};           // Maximum number of headers -> 431 Request Header Fields Too Large
     size_t max_body_size{16 * 1024 * 1024}; // 16 MB maximum payload size -> 413 Payload Too Large
 };
 

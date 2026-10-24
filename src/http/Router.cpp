@@ -22,6 +22,7 @@
 #include <memory>
 #include <format>
 #include <ctime>
+#include <filesystem>
 
 namespace aegon::http {
 
@@ -85,27 +86,53 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
         if (auto p = ctx.req().param("filepath")) {
             rel = *p;
         }
-        while (!rel.empty() && rel.front() == '/') {
-            rel.remove_prefix(1);
+
+        std::string decoded_rel = Request::url_decode(rel);
+        while (!decoded_rel.empty() && decoded_rel.front() == '/') {
+            decoded_rel.erase(0, 1);
         }
-        if (rel.empty()) {
+        if (decoded_rel.empty()) {
             if (!options.index_file.empty()) {
-                rel = options.index_file;
+                decoded_rel = options.index_file;
             } else {
                 ctx.res().status(StatusCode::NotFound).text("Not Found");
                 return;
             }
         }
 
-        // Path traversal guard
-        if (rel.find("..") != std::string_view::npos || 
+        // 1. Lexical checks on both raw and URL-decoded path segments
+        if (rel.find("..") != std::string_view::npos ||
             rel.find('\\') != std::string_view::npos ||
-            rel.find('\0') != std::string_view::npos) {
+            rel.find('\0') != std::string_view::npos ||
+            decoded_rel.find("..") != std::string::npos ||
+            decoded_rel.find('\\') != std::string::npos ||
+            decoded_rel.find('\0') != std::string::npos) {
             ctx.res().status(StatusCode::NotFound).text("Not Found");
             return;
         }
 
-        std::string full_path = base_dir + "/" + std::string(rel);
+        // 2. Canonical filesystem boundaries: resolve symlinks and prevent directory breakouts
+        std::error_code ec;
+        std::filesystem::path base_path = std::filesystem::weakly_canonical(base_dir, ec);
+        if (ec) {
+            ctx.res().status(StatusCode::NotFound).text("Not Found");
+            return;
+        }
+
+        std::filesystem::path target_path = std::filesystem::weakly_canonical(base_path / decoded_rel, ec);
+        if (ec) {
+            ctx.res().status(StatusCode::NotFound).text("Not Found");
+            return;
+        }
+
+        auto base_native = base_path.lexically_normal().native();
+        auto target_native = target_path.lexically_normal().native();
+        if (!target_native.starts_with(base_native)) {
+            ctx.res().status(StatusCode::NotFound).text("Not Found");
+            return;
+        }
+
+        std::string full_path = target_path.string();
 
         auto accept_enc = ctx.req().header("accept-encoding");
         bool accept_br = options.precompressed && accept_enc && accept_enc->find("br") != std::string_view::npos;

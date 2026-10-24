@@ -161,7 +161,8 @@ public:
         bool headers_complete = false;
 
         while (cursor < buffer.size()) {
-            if (cursor - req_line_end > limits.max_headers_size) {
+            if (cursor - req_line_end > limits.max_headers_size ||
+                req.headers().size() >= limits.max_header_count) {
                 return ParseStatus::HeadersTooLarge;
             }
             // Check for end of headers (\r\n)
