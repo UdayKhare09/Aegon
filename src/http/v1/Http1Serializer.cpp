@@ -4,7 +4,9 @@
 namespace aegon::http::v1 {
 
 void Http1Serializer::append_headers(const Response& res, std::string& out) {
-    out.reserve(out.size() + 256);
+    if (out.capacity() - out.size() < 256) [[unlikely]] {
+        out.reserve(std::max(out.capacity() * 2, out.size() + 512));
+    }
 
     // Fast status line lookup
     switch (res.status()) {

@@ -30,6 +30,21 @@ public:
 
     Request() = default;
 
+    void reset() noexcept {
+        version_ = HttpVersion::Http1_1;
+        method_ = Method::GET;
+        path_ = "/";
+        query_ = {};
+        body_ = {};
+        decoded_body_storage_.clear();
+        headers_.clear();
+        expect_continue_ = false;
+        is_upgrade_h2c_ = false;
+        is_websocket_upgrade_ = false;
+        sec_websocket_key_ = {};
+        param_count_ = 0;
+    }
+
     // Setters
     void set_version(HttpVersion v) noexcept { version_ = v; }
     void set_method(Method m) noexcept { method_ = m; }

@@ -16,6 +16,20 @@ class Response {
 public:
     Response() = default;
 
+    void reset() noexcept {
+        version_ = HttpVersion::Http1_1;
+        status_ = StatusCode::Ok;
+        headers_.clear();
+        body_.clear();
+        body_view_ = {};
+        is_chunked_ = false;
+        is_sse_ = false;
+        is_file_ = false;
+        file_path_.clear();
+        file_size_ = 0;
+        owned_strings_.clear();
+    }
+
     // Fluent setters
     Response& status(StatusCode code) noexcept {
         status_ = code;
@@ -74,6 +88,13 @@ public:
 
     Response& body(std::string b) {
         body_ = std::move(b);
+        body_view_ = {};
+        return *this;
+    }
+
+    Response& body_view(std::string_view bv) noexcept {
+        body_view_ = bv;
+        body_.clear();
         return *this;
     }
 
@@ -189,12 +210,14 @@ public:
     }
     [[nodiscard]] const HeaderMap& headers() const noexcept { return headers_; }
     [[nodiscard]] HeaderMap& headers() noexcept { return headers_; }
-    [[nodiscard]] std::string_view body() const noexcept { return body_; }
+    [[nodiscard]] std::string_view body() const noexcept {
+        return !body_view_.empty() ? body_view_ : std::string_view(body_);
+    }
 
     template <typename T>
     [[nodiscard]] std::expected<T, glz::error_ctx> json() const {
         T val{};
-        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(val, body_);
+        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(val, body());
         if (ec) {
             return std::unexpected(ec);
         }
@@ -206,6 +229,7 @@ private:
     StatusCode status_{StatusCode::Ok};
     HeaderMap headers_{};
     std::string body_{};
+    std::string_view body_view_{};
     bool is_chunked_{false};
     bool is_sse_{false};
     bool is_file_{false};

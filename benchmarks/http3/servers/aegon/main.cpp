@@ -38,6 +38,15 @@ int main(int argc, char* argv[]) {
         ctx.res().text("Hello, World!");
     });
 
+    server.router().get("/pipeline", [](Context& ctx) {
+        ctx.res().text("ok");
+    });
+
+    server.router().post("/echo", [](Context& ctx) {
+        ctx.res().header("Content-Type", "application/octet-stream");
+        ctx.res().body_view(ctx.req().body());
+    });
+
     // 2. JSON Serialization benchmark with dynamic UUID & timestamp
     server.router().get("/json", [](Context& ctx) {
         JsonMessage msg{

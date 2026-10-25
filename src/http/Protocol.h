@@ -220,18 +220,21 @@ inline std::string_view get_http_date_header() noexcept {
     static thread_local time_t last_time = 0;
     static thread_local char date_hdr_buf[64];
     static thread_local size_t date_hdr_len = 0;
-    time_t now = time(nullptr);
-    if (now != last_time) {
-        last_time = now;
-        struct tm gmt;
+    static thread_local uint32_t req_counter = 0;
+    if ((++req_counter & 127) == 1 || date_hdr_len == 0) [[unlikely]] {
+        time_t now = time(nullptr);
+        if (now != last_time || date_hdr_len == 0) {
+            last_time = now;
+            struct tm gmt;
 #if defined(_WIN32)
-        gmtime_s(&gmt, &now);
+            gmtime_s(&gmt, &now);
 #else
-        gmtime_r(&now, &gmt);
+            gmtime_r(&now, &gmt);
 #endif
-        std::memcpy(date_hdr_buf, "Date: ", 6);
-        size_t dlen = strftime(date_hdr_buf + 6, sizeof(date_hdr_buf) - 8, "%a, %d %b %Y %H:%M:%S GMT\r\n", &gmt);
-        date_hdr_len = 6 + dlen;
+            std::memcpy(date_hdr_buf, "Date: ", 6);
+            size_t dlen = strftime(date_hdr_buf + 6, sizeof(date_hdr_buf) - 8, "%a, %d %b %Y %H:%M:%S GMT\r\n", &gmt);
+            date_hdr_len = 6 + dlen;
+        }
     }
     return {date_hdr_buf, date_hdr_len};
 }

@@ -1,8 +1,10 @@
 #include "http/tls/TlsContext.h"
+#include "http/tls/TlsStream.h"
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/rsa.h>
 #include <openssl/evp.h>
+#include <cstring>
 #include <iostream>
 
 namespace aegon::http::tls {
@@ -22,6 +24,18 @@ int alpn_select_cb(SSL*, const unsigned char** out, unsigned char* outlen,
     return SSL_TLSEXT_ERR_OK;
 }
 
+void keylog_callback(const SSL* ssl, const char* line) {
+    if (!ssl || !line) return;
+    auto* stream = static_cast<TlsStream*>(SSL_get_ex_data(ssl, get_tls_stream_ex_index()));
+    if (!stream) return;
+    if (std::strncmp(line, "SERVER_TRAFFIC_SECRET_0 ", 24) == 0) {
+        const char* secret_hex = std::strrchr(line, ' ');
+        if (secret_hex && *(secret_hex + 1)) {
+            stream->set_server_traffic_secret(secret_hex + 1);
+        }
+    }
+}
+
 } // anonymous namespace
 
 TlsContext::TlsContext() {
@@ -30,9 +44,17 @@ TlsContext::TlsContext() {
     if (ctx_) {
         // Enforce modern TLS 1.2 minimum
         SSL_CTX_set_min_proto_version(ctx_, TLS1_2_VERSION);
-        // Enable standard secure options
+        // Enable standard secure options + kTLS TX acceleration
         SSL_CTX_set_options(ctx_, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1 |
-                                  SSL_OP_CIPHER_SERVER_PREFERENCE | SSL_OP_SINGLE_DH_USE | SSL_OP_SINGLE_ECDH_USE);
+                                  SSL_OP_CIPHER_SERVER_PREFERENCE | SSL_OP_SINGLE_DH_USE | SSL_OP_SINGLE_ECDH_USE |
+                                  SSL_OP_NO_TICKET
+#if defined(SSL_OP_ENABLE_KTLS)
+                                  | SSL_OP_ENABLE_KTLS
+#endif
+        );
+        SSL_CTX_set_num_tickets(ctx_, 0);
+        SSL_CTX_set_ciphersuites(ctx_, "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256");
+        SSL_CTX_set_keylog_callback(ctx_, keylog_callback);
         setup_alpn();
     }
 }

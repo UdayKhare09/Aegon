@@ -154,10 +154,12 @@ core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, c
 core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                                       H2UpgradeCallback on_h2_upgrade) {
     std::string req_accum;
-    req_accum.reserve(4096);
+    req_accum.reserve(16384);
     std::string resp_batch;
-    resp_batch.reserve(4096);
+    resp_batch.reserve(65536);
     bool first_packet = true;
+    Request req;
+    Response res;
 
     while (true) {
         auto recv_res = co_await loop_.engine().recv_provided(client_fd_, loop_.buffer_pool().bgid());
@@ -192,7 +194,7 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                 first_packet = false;
             }
 
-            Request req;
+            req.reset();
             size_t bytes_consumed = 0;
             auto status = Http1Parser::parse(unparsed, req, bytes_consumed, config_.limits);
 
@@ -303,7 +305,7 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                 co_return;
             }
 
-            Response res;
+            res.reset();
             bool sse_headers_sent = false;
 
             struct SseContext {
@@ -424,10 +426,12 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
 
 core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::string_view alt_svc_hdr) {
     std::string req_accum;
-    req_accum.reserve(4096);
+    req_accum.reserve(16384);
     std::string resp_batch;
-    resp_batch.reserve(4096);
+    resp_batch.reserve(65536);
     char read_buf[8192];
+    Request req;
+    Response res;
 
     while (true) {
         int n = co_await tls_stream.read_plaintext(read_buf, sizeof(read_buf));
@@ -439,7 +443,7 @@ core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::strin
 
         while (req_offset < req_accum.size()) {
             std::string_view unparsed(req_accum.data() + req_offset, req_accum.size() - req_offset);
-            Request req;
+            req.reset();
             size_t bytes_consumed = 0;
             auto status = Http1Parser::parse(unparsed, req, bytes_consumed, config_.limits);
 
@@ -470,7 +474,7 @@ core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::strin
                 }
             }
 
-            Response res;
+            res.reset();
             bool sse_headers_sent = false;
 
             struct SseTlsContext {
