@@ -88,6 +88,19 @@ ctx.res()
    .body(binary_payload);
 ```
 
+### Zero-Copy String View Body (`.body_view()`)
+
+When streaming or echoing an existing memory buffer (such as `ctx.req().body()` or an in-memory buffer) without allocating an intermediate `std::string` or copying bytes, use `ctx.res().body_view(view)`. The underlying HTTP/1.1, HTTP/2, and HTTP/3 serializers write directly from the referenced buffer:
+
+```cpp
+// Zero-copy body streaming (e.g. high-throughput /echo)
+router.post("/echo", [](http::Context& ctx) {
+    ctx.res()
+       .header("Content-Type", "application/octet-stream")
+       .body_view(ctx.req().body());
+});
+```
+
 ---
 
 ## Custom Response Headers

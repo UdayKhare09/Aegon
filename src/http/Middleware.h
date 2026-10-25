@@ -8,12 +8,12 @@
 #include <type_traits>
 #include <concepts>
 #include <utility>
+#include "http/RouteHandler.h"
 
 namespace aegon::http {
 
 using Next = std::function<core::Task<void>(Context&)>;
 using MiddlewareFn = std::function<core::Task<void>(Context&, Next)>;
-using Handler = Next;
 
 /**
  * @brief Factory converting various callable forms into standard MiddlewareFn.

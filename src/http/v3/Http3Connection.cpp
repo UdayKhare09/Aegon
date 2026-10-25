@@ -722,23 +722,28 @@ core::Task<void> Http3Connection::dispatch_pending_requests() {
             stream->req.set_body(stream->body_accum);
         }
 
-        struct H3SseContext {
-            Http3Connection* conn;
-            Http3Stream* stream;
-        } h3_sse_ctx{this, stream};
+        Context ctx(stream->req, stream->res, services_);
+        if (router_.dispatch_sync(stream->req, stream->res, services_, ctx)) [[likely]] {
+            // Handled synchronously inline with 0 coroutines
+        } else {
+            struct H3SseContext {
+                Http3Connection* conn;
+                Http3Stream* stream;
+            } h3_sse_ctx{this, stream};
 
-        SseProvider sse_provider{
-            .user_data = &h3_sse_ctx,
-            .build = [](void* ud) -> SseWriteFn {
-                auto* c = static_cast<H3SseContext*>(ud);
-                return [conn = c->conn, stream = c->stream](std::string frame) -> core::Task<void> {
-                    conn->push_sse_frame(stream, std::move(frame));
-                    co_return;
-                };
-            }
-        };
+            SseProvider sse_provider{
+                .user_data = &h3_sse_ctx,
+                .build = [](void* ud) -> SseWriteFn {
+                    auto* c = static_cast<H3SseContext*>(ud);
+                    return [conn = c->conn, stream = c->stream](std::string frame) -> core::Task<void> {
+                        conn->push_sse_frame(stream, std::move(frame));
+                        co_return;
+                    };
+                }
+            };
 
-        co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider);
+            co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider);
+        }
 
         if (stream->res.is_sse()) {
             if (!stream->response_submitted) {

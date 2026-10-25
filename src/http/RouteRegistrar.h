@@ -14,13 +14,12 @@ namespace detail {
 
 template <typename F>
 Handler make_handler(F&& f) {
-    if constexpr (std::is_invocable_r_v<core::Task<void>, F, Context&>) {
+    if constexpr (std::is_same_v<std::decay_t<F>, Handler> || std::is_same_v<std::decay_t<F>, RouteHandler>) {
         return std::forward<F>(f);
+    } else if constexpr (std::is_invocable_r_v<core::Task<void>, F, Context&>) {
+        return Handler(AsyncHandler(std::forward<F>(f)));
     } else if constexpr (std::is_invocable_r_v<void, F, Context&>) {
-        return [func = std::forward<F>(f)](Context& ctx) -> core::Task<void> {
-            func(ctx);
-            co_return;
-        };
+        return Handler(SyncHandler(std::forward<F>(f)));
     } else {
         static_assert(sizeof(F) == 0, "Handler must be callable as (Context&) returning void or Task<void>");
     }

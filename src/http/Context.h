@@ -27,7 +27,7 @@ private:
     Request& req_;
     Response& res_;
     const ServiceRegistry* services_{nullptr};
-    std::unordered_map<std::type_index, std::shared_ptr<void>> local_store_;
+    std::unique_ptr<std::unordered_map<std::type_index, std::shared_ptr<void>>> local_store_{nullptr};
     SseWriteFn sse_writer_{nullptr};
     SseProvider sse_provider_{};
 
@@ -40,7 +40,10 @@ public:
      */
     template <typename T>
     void set(T value) {
-        local_store_[std::type_index(typeid(T))] = std::make_shared<T>(std::move(value));
+        if (!local_store_) {
+            local_store_ = std::make_unique<std::unordered_map<std::type_index, std::shared_ptr<void>>>();
+        }
+        (*local_store_)[std::type_index(typeid(T))] = std::make_shared<T>(std::move(value));
     }
 
     /**
@@ -48,8 +51,9 @@ public:
      */
     template <typename T>
     [[nodiscard]] T* get() noexcept {
-        auto it = local_store_.find(std::type_index(typeid(T)));
-        if (it == local_store_.end()) {
+        if (!local_store_) return nullptr;
+        auto it = local_store_->find(std::type_index(typeid(T)));
+        if (it == local_store_->end()) {
             return nullptr;
         }
         return static_cast<T*>(it->second.get());
@@ -57,8 +61,9 @@ public:
 
     template <typename T>
     [[nodiscard]] const T* get() const noexcept {
-        auto it = local_store_.find(std::type_index(typeid(T)));
-        if (it == local_store_.end()) {
+        if (!local_store_) return nullptr;
+        auto it = local_store_->find(std::type_index(typeid(T)));
+        if (it == local_store_->end()) {
             return nullptr;
         }
         return static_cast<const T*>(it->second.get());
@@ -90,7 +95,8 @@ public:
      */
     template <typename T>
     [[nodiscard]] bool has() const noexcept {
-        return local_store_.find(std::type_index(typeid(T))) != local_store_.end();
+        if (!local_store_) return false;
+        return local_store_->find(std::type_index(typeid(T))) != local_store_->end();
     }
 
     // Core accessors

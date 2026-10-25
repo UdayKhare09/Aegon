@@ -15,7 +15,7 @@
 [![HTTP Arena WebSocket](https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/ws.json)](https://http-arena.com/#type=emerging,flagship&tuned=0)
 [![HTTP Arena H/3](https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h3.json)](https://http-arena.com/#type=emerging,flagship&tuned=0)
 
-Aegon is a modern, unified, thread-per-core C++23 application framework engineered for extreme throughput, low latency, and ergonomic developer experience. Designed from the ground up around standard C++ coroutines (`co_await`), Aegon eliminates callback spaghetti while providing native support for modern networking protocols, an integrated reflection-free SQL ORM with multi-tier L2 caching, a high-throughput Redis client, and an asynchronous HTTP/1.1, HTTP/2, and HTTP/3 client.
+Aegon is a modern, unified, thread-per-core C++23 application framework engineered for extreme throughput, low latency, and ergonomic developer experience. Featuring a compile-time **dual-mode routing engine** (seamlessly uniting zero-allocation synchronous handlers with standard C++23 `co_await` coroutines), Kernel TLS (`kTLS`) hardware offload, and native HTTP/1.1, HTTP/2, and HTTP/3 support, Aegon eliminates callback spaghetti while providing an integrated reflection-free SQL ORM with multi-tier L2 caching, a high-throughput Redis client, and an asynchronous multi-protocol HTTP client.
 
 ---
 
@@ -47,10 +47,9 @@ struct UserResponse {
 int main() {
     http::Router router;
 
-    // Plaintext Health Check
-    router.get("/health", [](http::Context& ctx) -> core::Task<void> {
+    // Ultra-Fast Synchronous Endpoint (0 coroutine frames, 0 heap allocations)
+    router.get("/health", [](http::Context& ctx) {
         ctx.res().status(http::StatusCode::Ok).text("OK");
-        co_return;
     });
 
     // Coroutine-based JSON endpoint

@@ -258,7 +258,7 @@ router.get("/logo.png", [](http::Context& ctx) {
 
 Middlewares often produce request-scoped data (such as authenticated user identities, decoded JWT tokens, or distributed tracing contexts) that must be safely accessed by downstream handlers.
 
-The `Context` object provides a type-safe per-request store with zero overhead:
+The `Context` object provides a type-safe per-request store with zero overhead. To keep standard request handling completely zero-allocation, the data bag uses lazy initialization: requests that do not store state incur zero heap allocations on `Context` construction.
 
 | Method | Return Type | Behavior |
 | :--- | :--- | :--- |

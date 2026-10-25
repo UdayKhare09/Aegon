@@ -35,8 +35,12 @@ using namespace aegon::http;
 using aegon::data::UUID;
 
 inline void invoke_handler(const Handler& handler, Context& ctx) {
-    auto task = handler(ctx);
-    task.resume();
+    if (handler.is_sync()) {
+        handler.invoke_sync(ctx);
+    } else {
+        auto task = handler(ctx);
+        task.resume();
+    }
 }
 
 void test_radix_tree_static_routes() {
@@ -341,9 +345,14 @@ void test_async_and_sync_handlers() {
         req.set_path("/sync");
         auto res = router.match(req);
         TEST_CHECK(res.route_found);
+        TEST_CHECK(res.handler != nullptr);
+        TEST_CHECK(res.handler->is_sync());
+        TEST_CHECK(!res.handler->is_async());
+
         Response resp;
         Context ctx(req, resp);
-        invoke_handler(*res.handler, ctx);
+        bool handled_sync = router.dispatch_sync(req, resp, nullptr, ctx);
+        TEST_CHECK(handled_sync);
         TEST_CHECK(resp.body() == "sync_response");
     }
 
@@ -354,14 +363,21 @@ void test_async_and_sync_handlers() {
         req.set_path("/async");
         auto res = router.match(req);
         TEST_CHECK(res.route_found);
+        TEST_CHECK(res.handler != nullptr);
+        TEST_CHECK(res.handler->is_async());
+        TEST_CHECK(!res.handler->is_sync());
+
         Response resp;
         Context ctx(req, resp);
+        bool handled_sync = router.dispatch_sync(req, resp, nullptr, ctx);
+        TEST_CHECK(!handled_sync); // Async route must NOT be dispatched synchronously
+
         auto task = (*res.handler)(ctx);
         task.resume();
         TEST_CHECK(resp.body() == "async_response");
     }
 
-    std::cout << "  -> PASS: Both sync and async handlers work seamlessly.\n";
+    std::cout << "  -> PASS: Both sync and async handlers work seamlessly with dispatch_sync.\n";
 }
 
 void test_static_files() {

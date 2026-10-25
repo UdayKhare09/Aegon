@@ -107,9 +107,10 @@ public:
             chain.insert(chain.end(), group_mw.begin(), group_mw.end());
             chain.insert(chain.end(), route_mw.begin(), route_mw.end());
 
-            h = [local_chain = std::move(chain), target = std::move(raw)](Context& ctx) -> core::Task<void> {
+            AsyncHandler async_chain = [local_chain = std::move(chain), target = std::move(raw)](Context& ctx) -> core::Task<void> {
                 co_await run_chain({}, local_chain, 0, target, ctx);
             };
+            h = Handler(std::move(async_chain));
         }
 
         // Fast-path Tier 1: Check if pattern is purely static (no :param or *wildcard)
@@ -286,6 +287,54 @@ public:
     [[nodiscard]] const FallbackHandler& method_not_allowed_handler() const noexcept { return method_not_allowed_handler_; }
 
     /**
+     * @brief High-performance synchronous dispatch fast-path.
+     *
+     * Dispatches requests mapped to synchronous handlers directly on the current thread
+     * with ZERO coroutine allocations, ZERO task frames, and ZERO suspension transitions.
+     *
+     * Returns true if the request was handled synchronously (response is ready).
+     * Returns false if the route requires asynchronous coroutine dispatch (e.g. async handler,
+     * middleware chain, SSE, or route not found/fallback).
+     */
+    [[nodiscard]] bool dispatch_sync(Request& req, Response& res, const ServiceRegistry* services, Context& ctx) const {
+        (void)services;
+        if (req.method() == Method::OPTIONS && req.path() == "*") [[unlikely]] {
+            res.status(StatusCode::Ok).header("Allow", "GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH").text("");
+            return true;
+        }
+
+        if (!global_middleware_.empty()) [[unlikely]] {
+            return false;
+        }
+
+        auto match_res = match(req);
+        if (!match_res.route_found || match_res.handler == nullptr) [[unlikely]] {
+            return false;
+        }
+
+        if (!match_res.handler->is_sync()) [[unlikely]] {
+            return false;
+        }
+
+        try {
+            match_res.handler->invoke_sync(ctx);
+            return true;
+        } catch (...) {
+            if (!error_handler_) {
+                std::string detail = "An internal server error occurred.";
+                try {
+                    std::rethrow_exception(std::current_exception());
+                } catch (const std::exception& e) {
+                    detail = e.what();
+                } catch (...) {}
+                ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    /**
      * @brief Dispatches an inbound request to its matched route handler within a global exception boundary.
      *
      * Catches unhandled exceptions and invokes error_handler or returns standard RFC 7807 500 JSON.
@@ -314,7 +363,11 @@ public:
         if (match_res.route_found && match_res.handler != nullptr && global_middleware_.empty()) [[likely]] {
             std::exception_ptr ex{nullptr};
             try {
-                co_await (*match_res.handler)(ctx);
+                if (match_res.handler->is_sync()) {
+                    match_res.handler->invoke_sync(ctx);
+                } else {
+                    co_await (*match_res.handler)(ctx);
+                }
             } catch (...) {
                 ex = std::current_exception();
             }
@@ -341,7 +394,11 @@ public:
 
         auto execute_route = [&]() -> core::Task<void> {
             if (match_res.route_found && match_res.handler) {
-                co_await (*match_res.handler)(ctx);
+                if (match_res.handler->is_sync()) {
+                    match_res.handler->invoke_sync(ctx);
+                } else {
+                    co_await (*match_res.handler)(ctx);
+                }
             } else if (match_res.method_not_allowed) {
                 // RFC 9110 §15.5.6: Server generating a 405 MUST generate an Allow header field
                 std::string allow_str;
@@ -358,7 +415,11 @@ public:
                 if (method_not_allowed_handler_) {
                     std::exception_ptr fallback_ex{nullptr};
                     try {
-                        co_await method_not_allowed_handler_(ctx);
+                        if (method_not_allowed_handler_.is_sync()) {
+                            method_not_allowed_handler_.invoke_sync(ctx);
+                        } else {
+                            co_await method_not_allowed_handler_(ctx);
+                        }
                     } catch (...) {
                         fallback_ex = std::current_exception();
                     }
@@ -372,7 +433,11 @@ public:
                 if (not_found_handler_) {
                     std::exception_ptr fallback_ex{nullptr};
                     try {
-                        co_await not_found_handler_(ctx);
+                        if (not_found_handler_.is_sync()) {
+                            not_found_handler_.invoke_sync(ctx);
+                        } else {
+                            co_await not_found_handler_(ctx);
+                        }
                     } catch (...) {
                         fallback_ex = std::current_exception();
                     }
@@ -390,9 +455,9 @@ public:
             if (global_middleware_.empty()) {
                 co_await execute_route();
             } else {
-                Handler terminal = [&](Context&) -> core::Task<void> {
+                Handler terminal = AsyncHandler([&](Context&) -> core::Task<void> {
                     co_await execute_route();
-                };
+                });
                 co_await run_chain(global_middleware_, {}, 0, terminal, ctx);
             }
         } catch (...) {

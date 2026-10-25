@@ -12,30 +12,42 @@ It combines an **O(1) static route map** (zero heap allocation lookup) with a ca
 
 ---
 
-## Handler Signatures
+## Handler Signatures: Dual-Mode Routing Engine
 
-Every route handler in Aegon accepts a reference to [`http::Context&`](/docs/http/context). Handlers can be written either asynchronously as C++23 coroutines returning `core::Task<void>` or synchronously returning `void`.
+Aegon features a compile-time **Dual-Mode Routing Engine** via `RouteHandler`. Every route handler receives a reference to [`http::Context&`](/docs/http/context), and Aegon automatically detects the handler's execution model at compile time:
 
-<Tabs items={["Asynchronous Coroutine (Recommended)", "Synchronous In-Memory"]}>
-  <Tab value="Asynchronous Coroutine (Recommended)">
+1. **Native Synchronous Handlers (`void(Context&)`)**: Executed directly inline on the reactor thread with **0 coroutine allocations, 0 task state machine frames, and 0 suspension/resumption transitions**. Synchronous routes bypass `co_await` completely, achieving millions of requests/sec for compute-bound, in-memory, or serialized JSON endpoints.
+2. **Asynchronous Coroutine Handlers (`core::Task<void>(Context&)`)**: Executed as C++23 coroutines when asynchronous non-blocking I/O (database queries, Redis calls, timers, HTTP client calls) is required.
+
+<Tabs items={["Synchronous Fast-Path (Zero Coroutine Overhead)", "Asynchronous Coroutine (Non-Blocking I/O)"]}>
+  <Tab value="Synchronous Fast-Path (Zero Coroutine Overhead)">
+```cpp
+// Pure synchronous function: 0 coroutine allocations, 0 suspension overhead
+server.router().get("/health", [](http::Context& ctx) {
+    ctx.res().status(http::StatusCode::Ok).text("OK");
+});
+
+// Fast JSON serialization with Glaze reflection
+server.router().get("/pipeline", [](http::Context& ctx) {
+    ctx.res().text("ok");
+});
+```
+<Callout type="info">
+Synchronous handlers are executed via the `dispatch_sync` fast path. In high-concurrency HTTP/1.1 pipelining and HTTP/2 stream multiplexing, this completely eliminates coroutine promise allocation and symmetric transfer overhead.
+</Callout>
+  </Tab>
+  <Tab value="Asynchronous Coroutine (Non-Blocking I/O)">
 ```cpp
 // Returns core::Task<void> and uses co_await / co_return for async I/O
 server.router().get("/users/:id", [](http::Context& ctx) -> core::Task<void> {
     auto user_id = ctx.req().param("id");
 
     // Perform asynchronous non-blocking queries
-    // auto user = co_await db.find_by_id(user_id.value_or(""));
+    auto db = ctx.service<DatabaseService>();
+    auto user = co_await db->find_user(user_id.value_or(""));
 
-    ctx.res().text("User ID: " + std::string(user_id.value_or("unknown")));
+    ctx.res().json(user);
     co_return;
-});
-```
-  </Tab>
-  <Tab value="Synchronous In-Memory">
-```cpp
-// If a handler only performs synchronous in-memory work, Aegon lifts void(Context&) automatically
-server.router().get("/health", [](http::Context& ctx) {
-    ctx.res().json(R"({"status":"healthy"})");
 });
 ```
   </Tab>

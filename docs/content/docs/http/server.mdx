@@ -52,6 +52,18 @@ server.enable_tls("/etc/ssl/certs/server.crt", "/etc/ssl/private/server.key");
 
 `enable_tls` verifies file existence and cryptographic format at startup, throwing descriptive configuration errors if keys or certificates are missing or unreadable (`access(R_OK)`).
 
+### Kernel TLS (kTLS) TX Offload
+
+On Linux kernels ≥ 4.17 with the `tls` kernel module loaded, Aegon supports hardware and kernel encryption offload via Kernel TLS (`kTLS` TX). When enabled:
+- Symmetric encryption (AES-128-GCM and AES-256-GCM) is offloaded directly to the Linux kernel or hardware NIC.
+- Outbound encrypted records are written directly via `send()` or `sendfile()` without user-space encryption overhead.
+- User-space OpenSSL `ex_data` handles key material extraction, and session tickets are automatically suppressed to avoid post-handshake synchronization conflicts.
+
+To enable kTLS:
+```cpp
+server.enable_ktls(true);
+```
+
 ---
 
 ## HTTP/3 over QUIC & Progressive Alt-Svc Ladder

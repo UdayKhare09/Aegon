@@ -579,7 +579,10 @@ core::Task<bool> Http2Connection::upgrade_request(Request req, std::string_view 
     auto* stream = get_or_create_stream(1);
     stream->req = std::move(req);
 
-    co_await router_.dispatch(stream->req, stream->res, services_);
+    Context ctx(stream->req, stream->res, services_);
+    if (!router_.dispatch_sync(stream->req, stream->res, services_, ctx)) {
+        co_await router_.dispatch(stream->req, stream->res, services_);
+    }
 
     submit_response(stream);
     co_return co_await flush_outbound();
@@ -608,23 +611,28 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
             stream->req.set_body(stream->body_accum);
         }
 
-        // Build SSE write-back: pushes each frame into the stream queue and flushes.
-        struct H2SseContext {
-            Http2Connection* conn;
-            Http2Stream* stream;
-        } h2_sse_ctx{this, stream};
+        Context ctx(stream->req, stream->res, services_);
+        if (router_.dispatch_sync(stream->req, stream->res, services_, ctx)) [[likely]] {
+            // Handled synchronously inline with 0 coroutines
+        } else {
+            // Build SSE write-back: pushes each frame into the stream queue and flushes.
+            struct H2SseContext {
+                Http2Connection* conn;
+                Http2Stream* stream;
+            } h2_sse_ctx{this, stream};
 
-        SseProvider sse_provider{
-            .user_data = &h2_sse_ctx,
-            .build = [](void* ud) -> SseWriteFn {
-                auto* c = static_cast<H2SseContext*>(ud);
-                return [conn = c->conn, stream = c->stream](std::string frame) -> core::Task<void> {
-                    co_await conn->push_sse_frame(stream, std::move(frame));
-                };
-            }
-        };
+            SseProvider sse_provider{
+                .user_data = &h2_sse_ctx,
+                .build = [](void* ud) -> SseWriteFn {
+                    auto* c = static_cast<H2SseContext*>(ud);
+                    return [conn = c->conn, stream = c->stream](std::string frame) -> core::Task<void> {
+                        co_await conn->push_sse_frame(stream, std::move(frame));
+                    };
+                }
+            };
 
-        co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider);
+            co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider);
+        }
 
         if (stream->res.is_sse()) {
             // Headers were marked by ctx.sse(); submit HEADERS frame if not yet done.

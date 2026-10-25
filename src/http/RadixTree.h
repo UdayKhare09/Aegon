@@ -2,6 +2,7 @@
 
 #include "http/Protocol.h"
 #include "http/Context.h"
+#include "http/RouteHandler.h"
 #include "core/Task.h"
 #include <functional>
 #include <string>
@@ -12,8 +13,6 @@
 #include <optional>
 
 namespace aegon::http {
-
-using Handler = std::function<core::Task<void>(Context&)>;
 
 enum class RadixNodeType : uint8_t {
     Static,
