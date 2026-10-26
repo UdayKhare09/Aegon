@@ -9,6 +9,8 @@ docs/.vitepress/cache
 **/target
 **/build
 **/bench_fiber
+**/bench_aegon
+**/bench_viltrum
 **/upstream
 **/.zig-cache
 **__pycache__

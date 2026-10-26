@@ -26,8 +26,7 @@ include(GNUInstallDirs)
 
 # User-configurable Build Options
 option(AEGON_BUILD_TESTS "Build Aegon test suite and benchmarks harness" ON)
-option(AEGON_BUILD_SAMPLES "Build Aegon sample applications" ON)
-option(AEGON_BUILD_BENCHMARKS "Build Aegon unified benchmark server" ON)
+option(AEGON_BUILD_BENCHMARKS "Build Aegon benchmark servers" OFF)
 
 if(AEGON_BUILD_TESTS)
     enable_testing()
@@ -271,13 +270,6 @@ if(AEGON_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
 endif()
 
-# ==============================================================================
-# Samples
-# ==============================================================================
-if(AEGON_BUILD_SAMPLES AND TARGET aegon_http AND TARGET aegon_orm AND TARGET aegon_redis)
-    add_subdirectory(samples/adv)
-    add_subdirectory(samples/sse)
-endif()
 
 # ==============================================================================
 # CPack Packaging
