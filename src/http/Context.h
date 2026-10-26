@@ -30,6 +30,7 @@ private:
     std::unique_ptr<std::unordered_map<std::type_index, std::shared_ptr<void>>> local_store_{nullptr};
     SseWriteFn sse_writer_{nullptr};
     SseProvider sse_provider_{};
+    std::function<core::Task<void>(std::string)> grpc_writer_{nullptr};
 
 public:
     Context(Request& req, Response& res, const ServiceRegistry* services = nullptr) noexcept
@@ -105,6 +106,8 @@ public:
 
     [[nodiscard]] Response& res() noexcept { return res_; }
     [[nodiscard]] const Response& res() const noexcept { return res_; }
+
+    [[nodiscard]] bool is_grpc() const noexcept { return req_.is_grpc(); }
 
     /**
      * @brief Access the ServiceRegistry pointer.
@@ -221,6 +224,14 @@ public:
 
     void set_sse_provider(SseProvider provider) noexcept {
         sse_provider_ = provider;
+    }
+
+    void set_grpc_writer(std::function<core::Task<void>(std::string)> fn) noexcept {
+        grpc_writer_ = std::move(fn);
+    }
+
+    [[nodiscard]] const std::function<core::Task<void>(std::string)>& grpc_writer() const noexcept {
+        return grpc_writer_;
     }
 
     /**

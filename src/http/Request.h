@@ -63,6 +63,11 @@ public:
     [[nodiscard]] std::string_view query() const noexcept { return query_; }
     [[nodiscard]] std::string_view body() const noexcept { return body_; }
 
+    [[nodiscard]] bool is_grpc() const noexcept {
+        auto ct = headers_.get("content-type");
+        return ct && ct->starts_with("application/grpc");
+    }
+
     template <typename T>
     [[nodiscard]] std::expected<T, glz::error_ctx> json() const {
         T val{};
