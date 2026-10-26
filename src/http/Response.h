@@ -100,6 +100,11 @@ public:
         return *this;
     }
 
+    [[nodiscard]] std::string& body_storage() noexcept {
+        body_view_ = {};
+        return body_;
+    }
+
     Response& text(std::string_view t) {
         headers_.set("Content-Type", "text/plain");
         body_ = std::string(t);

@@ -90,12 +90,12 @@ public:
      * @brief Emits a successful gRPC response with 5-byte HTTP/2 framing and grpc-status: 0 trailer.
      */
     void reply(const Res& res) {
-        std::string body;
+        auto& body = http_ctx_.res().body_storage();
+        body.clear();
         GrpcCodec<Res>::encode(res, body);
 
         http_ctx_.res().status(http::StatusCode::Ok);
         http_ctx_.res().header("content-type", "application/grpc");
-        http_ctx_.res().body(std::move(body));
         http_ctx_.res().trailer("grpc-status", "0");
         replied_ = true;
     }

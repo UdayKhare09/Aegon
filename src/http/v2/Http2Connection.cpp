@@ -60,6 +60,7 @@ Http2Connection::Http2Connection(core::EventLoop& loop, core::os_socket_t client
                                  const ServerConfig& config)
     : loop_(loop), client_fd_(client_fd), router_(router), services_(services), sender_(std::move(sender)),
       rst_burst_limit_(config.rst_burst_limit), config_(config) {
+    outbound_buf_.reserve(65536);
     nghttp2_session_callbacks* callbacks;
     nghttp2_session_callbacks_new(&callbacks);
 
@@ -543,7 +544,7 @@ void Http2Connection::submit_response(Http2Stream* stream) {
                 reinterpret_cast<const uint8_t*>(cl_buf), cl_len);
     }
 
-    if (!stream->res.headers().contains("date") && static_cast<uint16_t>(stream->res.status()) >= 200) {
+    if (!stream->res.headers().contains("date") && !stream->res.has_trailers() && static_cast<uint16_t>(stream->res.status()) >= 200) {
         auto d = get_http_date();
         push_nv(reinterpret_cast<const uint8_t*>("date"), 4,
                 reinterpret_cast<const uint8_t*>(d.data()), d.size());
@@ -878,7 +879,6 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
             if (!stream->response_submitted) {
                 submit_response(stream);
             }
-            co_await flush_outbound();
         } else if (stream->is_grpc_stream) {
             if (!stream->response_submitted) {
                 submit_grpc_headers(stream);
@@ -888,7 +888,6 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
                 stream->res.trailer("grpc-status", "0");
             }
             nghttp2_session_resume_data(session_, stream->stream_id);
-            co_await flush_outbound();
         } else if (stream->res.is_sse()) {
             // Headers were marked by ctx.sse(); submit HEADERS frame if not yet done.
             // Data was already streamed event-by-event via push_sse_frame.
@@ -898,7 +897,6 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
             }
             stream->sse_eof = true;  // handler finished; next data_source_read -> EOF
             nghttp2_session_resume_data(session_, stream->stream_id);
-            co_await flush_outbound();
         } else {
             submit_response(stream);
         }
