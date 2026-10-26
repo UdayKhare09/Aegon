@@ -52,6 +52,11 @@ core::Task<bool> TlsStream::flush_outbound() {
 bool TlsStream::try_enable_ktls_tx() {
     if (server_traffic_secret_.empty() || client_fd_ < 0) return false;
 
+    const char* env_disable = std::getenv("AEGON_DISABLE_KTLS");
+    if (env_disable && (std::strcmp(env_disable, "1") == 0 || std::strcmp(env_disable, "true") == 0)) {
+        return false;
+    }
+
 #if defined(__linux__)
     const SSL_CIPHER* cipher = SSL_get_current_cipher(ssl_);
     if (!cipher) return false;
