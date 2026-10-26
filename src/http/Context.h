@@ -41,6 +41,14 @@ public:
     Context(Request& req, Response& res, const ServiceRegistry* services = nullptr) noexcept
         : req_(req), res_(res), services_(services) {}
 
+    void reset() noexcept {
+        if (local_store_) local_store_->clear();
+        sse_writer_ = nullptr;
+        sse_provider_ = {};
+        grpc_writer_ = nullptr;
+        grpc_inbound_ = nullptr;
+    }
+
     /**
      * @brief Stores a typed value in the per-request data bag.
      */

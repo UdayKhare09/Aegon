@@ -107,13 +107,15 @@ public:
 
     Response& text(std::string_view t) {
         headers_.set("Content-Type", "text/plain");
-        body_ = std::string(t);
+        body_view_ = {};
+        body_.assign(t);
         return *this;
     }
 
     Response& json(std::string_view j) {
         headers_.set("Content-Type", "application/json");
-        body_ = std::string(j);
+        body_view_ = {};
+        body_.assign(j);
         return *this;
     }
 
@@ -121,6 +123,7 @@ public:
         requires (!std::is_convertible_v<T, std::string_view>)
     Response& json(const T& val) {
         headers_.set("Content-Type", "application/json");
+        body_view_ = {};
         body_.clear();
         (void)glz::write_json(val, body_);
         return *this;
@@ -128,7 +131,8 @@ public:
 
     Response& html(std::string_view h) {
         headers_.set("Content-Type", "text/html; charset=utf-8");
-        body_ = std::string(h);
+        body_view_ = {};
+        body_.assign(h);
         return *this;
     }
 

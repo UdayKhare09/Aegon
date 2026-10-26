@@ -112,6 +112,9 @@ core::os_socket_t Server::create_listen_socket(uint16_t port, const std::string&
     if (config_.tcp.nodelay) {
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&opt), sizeof(opt));
     }
+    if (config_.tcp.keepalive) {
+        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&opt), sizeof(opt));
+    }
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -125,7 +128,7 @@ core::os_socket_t Server::create_listen_socket(uint16_t port, const std::string&
         throw std::runtime_error("Failed to bind socket to port " + std::to_string(port));
     }
 
-    if (::listen(fd, 4096) < 0) {
+    if (::listen(fd, 32768) < 0) {
         core::close_socket(fd);
         throw std::runtime_error("Failed to listen on socket");
     }
@@ -162,7 +165,6 @@ core::Task<void> Server::run_h2_loop(core::EventLoop& loop, core::os_socket_t cl
         }
     }
 
-    (void)(co_await loop.engine().shutdown(client_fd, SHUT_WR));
     (void)(co_await loop.engine().close(client_fd));
 }
 
@@ -271,6 +273,7 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, core::os_socket_t li
                 // Break inner loop to re-arm multishot accept stream.
                 break;
             }
+#if !defined(__linux__)
             if (config_.tcp.nodelay) {
                 int nodelay = 1;
                 ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
@@ -297,6 +300,7 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, core::os_socket_t li
                 }
 #endif
             }
+#endif
             if (is_tls && tls_ctx_) {
                 loop.spawn(handle_tls_connection(loop, accept_res.fd, port));
             } else {

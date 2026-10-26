@@ -160,6 +160,7 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
     bool first_packet = true;
     Request req;
     Response res;
+    Context ctx(req, res, services_);
 
     while (true) {
         auto recv_res = co_await loop_.engine().recv_provided(client_fd_, loop_.buffer_pool().bgid());
@@ -306,9 +307,8 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
             }
 
             res.reset();
+            ctx.reset();
             bool sse_headers_sent = false;
-
-            Context ctx(req, res, services_);
 
             if (router_.dispatch_sync(req, res, services_, ctx)) [[likely]] {
                 // Executed synchronously inline with 0 coroutines
@@ -426,7 +426,6 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
         }
     }
 
-    (void)(co_await loop_.engine().shutdown(client_fd_, SHUT_WR));
     (void)(co_await loop_.engine().close(client_fd_));
 }
 
@@ -438,6 +437,7 @@ core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::strin
     char read_buf[8192];
     Request req;
     Response res;
+    Context ctx(req, res, services_);
 
     while (true) {
         int n = co_await tls_stream.read_plaintext(read_buf, sizeof(read_buf));
@@ -481,9 +481,8 @@ core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::strin
             }
 
             res.reset();
+            ctx.reset();
             bool sse_headers_sent = false;
-
-            Context ctx(req, res, services_);
 
             if (router_.dispatch_sync(req, res, services_, ctx)) [[likely]] {
                 // Executed synchronously inline with 0 coroutines
@@ -572,7 +571,6 @@ core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::strin
         }
     }
 
-    (void)(co_await loop_.engine().shutdown(client_fd_, SHUT_WR));
     (void)(co_await loop_.engine().close(client_fd_));
 }
 

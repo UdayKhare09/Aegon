@@ -144,8 +144,7 @@ void IoUringEngine::wakeup() noexcept {
 struct io_uring_sqe* IoUringEngine::acquire_sqe() noexcept {
     struct io_uring_sqe* sqe = io_uring_get_sqe(&ring_);
     if (!sqe) [[unlikely]] {
-        int submitted = io_uring_submit(&ring_);
-        log::debug("[IoUringEngine] SQ full: flushed {} pending SQEs", submitted);
+        (void)io_uring_submit(&ring_);
         sqe = io_uring_get_sqe(&ring_);
     }
     return sqe;
