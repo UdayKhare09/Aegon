@@ -1,6 +1,7 @@
 #include "http/v2/Http2Connection.h"
 #include "http/v2/Http2Frame.h"
 #include "http/SseStream.h"
+#include "http/grpc/GrpcStreamChannel.h"
 #include "core/simd/SimdString.h"
 #include <algorithm>
 #include <array>
@@ -59,6 +60,7 @@ Http2Connection::Http2Connection(core::EventLoop& loop, core::os_socket_t client
                                  const ServerConfig& config)
     : loop_(loop), client_fd_(client_fd), router_(router), services_(services), sender_(std::move(sender)),
       rst_burst_limit_(config.rst_burst_limit), config_(config) {
+    outbound_buf_.reserve(65536);
     nghttp2_session_callbacks* callbacks;
     nghttp2_session_callbacks_new(&callbacks);
 
@@ -177,9 +179,13 @@ int Http2Connection::on_data_chunk_recv(uint8_t, int32_t stream_id, const uint8_
         return 0;
     }
     auto* stream = get_or_create_stream(stream_id);
-    if (stream->request_complete) {
+    if (stream->request_complete && !stream->grpc_inbound) {
         stream->reset = true;
         nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_STREAM_CLOSED);
+        return 0;
+    }
+    if (stream->grpc_inbound) {
+        stream->grpc_inbound->push_data(data, len);
         return 0;
     }
     if (stream->body_accum.size() + len > config_.limits.max_body_size) {
@@ -202,16 +208,37 @@ int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
                 it->second->reset = true;
             }
         }
+        auto* stream = get_or_create_stream(frame->hd.stream_id);
         if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
-            auto* stream = get_or_create_stream(frame->hd.stream_id);
-            stream->request_complete = true;
-            pending_dispatch_.push_back(frame->hd.stream_id);
+            if (stream->grpc_inbound) {
+                stream->grpc_inbound->set_eof();
+            } else {
+                auto match_res = router_.match(stream->req);
+                if (match_res.handler && match_res.handler->is_streaming()) {
+                    stream->grpc_inbound = std::make_shared<grpc::GrpcInboundChannel>();
+                    stream->grpc_inbound->set_eof();
+                    stream->is_grpc_stream = true;
+                }
+                stream->request_complete = true;
+                pending_dispatch_.push_back(frame->hd.stream_id);
+            }
+        } else {
+            auto match_res = router_.match(stream->req);
+            if (match_res.handler && match_res.handler->is_streaming()) {
+                stream->grpc_inbound = std::make_shared<grpc::GrpcInboundChannel>();
+                stream->is_grpc_stream = true;
+                pending_dispatch_.push_back(frame->hd.stream_id);
+            }
         }
     } else if (frame->hd.type == NGHTTP2_DATA) {
         if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
             auto* stream = get_or_create_stream(frame->hd.stream_id);
-            stream->request_complete = true;
-            pending_dispatch_.push_back(frame->hd.stream_id);
+            if (stream->grpc_inbound) {
+                stream->grpc_inbound->set_eof();
+            } else {
+                stream->request_complete = true;
+                pending_dispatch_.push_back(frame->hd.stream_id);
+            }
         }
     } else if (frame->hd.type == NGHTTP2_PRIORITY) {
         if (frame->hd.stream_id == 0) {
@@ -325,6 +352,39 @@ ssize_t Http2Connection::on_data_source_read(int32_t stream_id, uint8_t* buf, si
         return static_cast<ssize_t>(to_copy);
     }
 
+    // gRPC streaming path: drain from queued frames
+    if (stream->is_grpc_stream) {
+        if (stream->grpc_frames.empty()) {
+            if (stream->grpc_eof) {
+                if (stream->res.has_trailers() && !stream->trailers_submitted) {
+                    *data_flags |= (NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM);
+                    submit_trailers(stream);
+                } else {
+                    *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+                }
+                return 0;
+            }
+            return NGHTTP2_ERR_DEFERRED;
+        }
+        auto& frame = stream->grpc_frames.front();
+        size_t to_copy = std::min(frame.size(), length);
+        std::memcpy(buf, frame.data(), to_copy);
+        if (to_copy == frame.size()) {
+            stream->grpc_frames.pop_front();
+        } else {
+            frame.erase(0, to_copy);
+        }
+        if (stream->grpc_frames.empty() && stream->grpc_eof) {
+            if (stream->res.has_trailers() && !stream->trailers_submitted) {
+                *data_flags |= (NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM);
+                submit_trailers(stream);
+            } else {
+                *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+            }
+        }
+        return static_cast<ssize_t>(to_copy);
+    }
+
     // Normal (non-SSE) path: read from buffered response body
     if (stream->req.method() == Method::HEAD) {
         *data_flags |= NGHTTP2_DATA_FLAG_EOF;
@@ -341,10 +401,68 @@ ssize_t Http2Connection::on_data_source_read(int32_t stream_id, uint8_t* buf, si
     }
 
     if (stream->body_offset >= body.size()) {
-        *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+        if (stream->res.has_trailers() && !stream->trailers_submitted) {
+            *data_flags |= (NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM);
+            submit_trailers(stream);
+        } else {
+            *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+        }
     }
 
     return static_cast<ssize_t>(to_copy);
+}
+
+void Http2Connection::submit_trailers(Http2Stream* stream) {
+    if (stream->trailers_submitted) return;
+    stream->trailers_submitted = true;
+
+    std::array<nghttp2_nv, 16> nva_stack;
+    std::vector<nghttp2_nv> nva_heap;
+    nghttp2_nv* nva_ptr = nva_stack.data();
+    size_t nva_count = 0;
+
+    auto push_nv = [&](const uint8_t* name, size_t namelen, const uint8_t* val, size_t vallen) {
+        nghttp2_nv nv{
+            .name = const_cast<uint8_t*>(name),
+            .value = const_cast<uint8_t*>(val),
+            .namelen = namelen,
+            .valuelen = vallen,
+            .flags = NGHTTP2_NV_FLAG_NONE
+        };
+        if (nva_count < nva_stack.size() && nva_heap.empty()) {
+            nva_stack[nva_count++] = nv;
+        } else {
+            if (nva_heap.empty()) {
+                nva_heap.reserve(16 + stream->res.trailers().size());
+                for (size_t i = 0; i < nva_count; ++i) {
+                    nva_heap.push_back(nva_stack[i]);
+                }
+            }
+            nva_heap.push_back(nv);
+            nva_count = nva_heap.size();
+            nva_ptr = nva_heap.data();
+        }
+    };
+
+    std::vector<std::string> lower_names;
+    for (const auto& t : stream->res.trailers()) {
+        if (is_all_lower_ascii(t.name)) {
+            push_nv(reinterpret_cast<const uint8_t*>(t.name.data()), t.name.size(),
+                    reinterpret_cast<const uint8_t*>(t.value.data()), t.value.size());
+        } else {
+            if (lower_names.capacity() == 0) {
+                lower_names.reserve(stream->res.trailers().size());
+            }
+            lower_names.push_back(to_lower_ascii(t.name));
+            const auto& ln = lower_names.back();
+            push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                    reinterpret_cast<const uint8_t*>(t.value.data()), t.value.size());
+        }
+    }
+
+    if (nva_count > 0) {
+        nghttp2_submit_trailer(session_, stream->stream_id, nva_ptr, nva_count);
+    }
 }
 
 void Http2Connection::submit_response(Http2Stream* stream) {
@@ -373,7 +491,7 @@ void Http2Connection::submit_response(Http2Stream* stream) {
             nva_stack[nva_count++] = nv;
         } else {
             if (nva_heap.empty()) {
-                nva_heap.reserve(16 + stream->res.headers().size());
+                nva_heap.reserve(16 + stream->res.headers().size() + stream->res.trailers().size());
                 for (size_t i = 0; i < nva_count; ++i) {
                     nva_heap.push_back(nva_stack[i]);
                 }
@@ -387,12 +505,46 @@ void Http2Connection::submit_response(Http2Stream* stream) {
     push_nv(reinterpret_cast<const uint8_t*>(":status"), 7,
             reinterpret_cast<const uint8_t*>(status_buf), status_len);
 
-    if (!should_suppress_content_length(stream->res.status()) && !stream->res.headers().contains("content-length")) {
+    // Trailers-only response (e.g. gRPC immediate error / rejection)
+    if (stream->res.is_trailers_only()) {
+        std::vector<std::string> lower_names;
+        for (const auto& h : stream->res.headers()) {
+            if (is_hop_by_hop_header(h.name)) continue;
+            if (is_all_lower_ascii(h.name)) {
+                push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+                        reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+            } else {
+                if (lower_names.capacity() == 0) lower_names.reserve(stream->res.headers().size() + stream->res.trailers().size());
+                lower_names.push_back(to_lower_ascii(h.name));
+                const auto& ln = lower_names.back();
+                push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                        reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+            }
+        }
+        for (const auto& t : stream->res.trailers()) {
+            if (is_all_lower_ascii(t.name)) {
+                push_nv(reinterpret_cast<const uint8_t*>(t.name.data()), t.name.size(),
+                        reinterpret_cast<const uint8_t*>(t.value.data()), t.value.size());
+            } else {
+                if (lower_names.capacity() == 0) lower_names.reserve(stream->res.trailers().size());
+                lower_names.push_back(to_lower_ascii(t.name));
+                const auto& ln = lower_names.back();
+                push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                        reinterpret_cast<const uint8_t*>(t.value.data()), t.value.size());
+            }
+        }
+        nghttp2_submit_response(session_, stream->stream_id, nva_ptr, nva_count, nullptr);
+        stream->response_submitted = true;
+        stream->trailers_submitted = true;
+        return;
+    }
+
+    if (!stream->res.has_trailers() && !should_suppress_content_length(stream->res.status()) && !stream->res.headers().contains("content-length")) {
         push_nv(reinterpret_cast<const uint8_t*>("content-length"), 14,
                 reinterpret_cast<const uint8_t*>(cl_buf), cl_len);
     }
 
-    if (!stream->res.headers().contains("date") && static_cast<uint16_t>(stream->res.status()) >= 200) {
+    if (!stream->res.headers().contains("date") && !stream->res.has_trailers() && static_cast<uint16_t>(stream->res.status()) >= 200) {
         auto d = get_http_date();
         push_nv(reinterpret_cast<const uint8_t*>("date"), 4,
                 reinterpret_cast<const uint8_t*>(d.data()), d.size());
@@ -518,6 +670,90 @@ core::Task<void> Http2Connection::push_sse_frame(Http2Stream* stream, std::strin
     co_await flush_outbound();
 }
 
+void Http2Connection::submit_grpc_headers(Http2Stream* stream) {
+    char status_buf[16];
+    auto [p_status, _s] = std::to_chars(status_buf, status_buf + sizeof(status_buf),
+                                         static_cast<uint16_t>(stream->res.status()));
+    size_t status_len = static_cast<size_t>(p_status - status_buf);
+
+    std::array<nghttp2_nv, 16> nva_stack;
+    std::vector<nghttp2_nv> nva_heap;
+    nghttp2_nv* nva_ptr = nva_stack.data();
+    size_t nva_count = 0;
+
+    auto push_nv = [&](const uint8_t* name, size_t namelen, const uint8_t* val, size_t vallen) {
+        nghttp2_nv nv{
+            .name = const_cast<uint8_t*>(name),
+            .value = const_cast<uint8_t*>(val),
+            .namelen = namelen,
+            .valuelen = vallen,
+            .flags = NGHTTP2_NV_FLAG_NONE
+        };
+        if (nva_count < nva_stack.size() && nva_heap.empty()) {
+            nva_stack[nva_count++] = nv;
+        } else {
+            if (nva_heap.empty()) {
+                nva_heap.reserve(16 + stream->res.headers().size());
+                for (size_t i = 0; i < nva_count; ++i) {
+                    nva_heap.push_back(nva_stack[i]);
+                }
+            }
+            nva_heap.push_back(nv);
+            nva_count = nva_heap.size();
+            nva_ptr = nva_heap.data();
+        }
+    };
+
+    push_nv(reinterpret_cast<const uint8_t*>(":status"), 7,
+            reinterpret_cast<const uint8_t*>(status_buf), status_len);
+
+    if (!stream->res.headers().contains("date") && static_cast<uint16_t>(stream->res.status()) >= 200) {
+        auto d = get_http_date();
+        push_nv(reinterpret_cast<const uint8_t*>("date"), 4,
+                reinterpret_cast<const uint8_t*>(d.data()), d.size());
+    }
+
+    std::vector<std::string> lower_names;
+    for (const auto& h : stream->res.headers()) {
+        if (is_hop_by_hop_header(h.name)) continue;
+        if (is_all_lower_ascii(h.name)) {
+            push_nv(reinterpret_cast<const uint8_t*>(h.name.data()), h.name.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        } else {
+            if (lower_names.capacity() == 0) {
+                lower_names.reserve(stream->res.headers().size());
+            }
+            lower_names.push_back(to_lower_ascii(h.name));
+            const auto& ln = lower_names.back();
+            push_nv(reinterpret_cast<const uint8_t*>(ln.data()), ln.size(),
+                    reinterpret_cast<const uint8_t*>(h.value.data()), h.value.size());
+        }
+    }
+
+    if (!alt_svc_.empty() && !stream->res.headers().contains("alt-svc")) {
+        push_nv(reinterpret_cast<const uint8_t*>("alt-svc"), 7,
+                reinterpret_cast<const uint8_t*>(alt_svc_.data()), alt_svc_.size());
+    }
+
+    nghttp2_data_provider prd;
+    prd.source.ptr = stream;
+    prd.read_callback = data_source_read_cb;
+
+    nghttp2_submit_response(session_, stream->stream_id, nva_ptr, nva_count, &prd);
+    stream->response_submitted = true;
+}
+
+core::Task<void> Http2Connection::push_grpc_frame(Http2Stream* stream, std::string frame) {
+    if (stream->reset || closed_stream_ids_.contains(stream->stream_id)) co_return;
+    if (!stream->response_submitted) {
+        stream->is_grpc_stream = true;
+        submit_grpc_headers(stream);
+    }
+    stream->grpc_frames.push_back(std::move(frame));
+    nghttp2_session_resume_data(session_, stream->stream_id);
+    co_await flush_outbound();
+}
+
 core::Task<bool> Http2Connection::init() {
     nghttp2_settings_entry iv[] = {
         {NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS, config_.h2_max_concurrent_streams},
@@ -599,7 +835,8 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
         auto it = streams_.find(sid);
         if (it == streams_.end()) continue;
         auto* stream = it->second.get();
-        if (stream->reset || stream->response_submitted) continue;
+        if (stream->reset || stream->response_submitted || stream->dispatched) continue;
+        stream->dispatched = true;
 
         if (stream->error_status != StatusCode::Ok) {
             stream->res.status(stream->error_status).text(status_phrase(stream->error_status));
@@ -631,10 +868,27 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
                 }
             };
 
-            co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider);
+            auto grpc_writer = [conn = this, stream](std::string frame) -> core::Task<void> {
+                co_await conn->push_grpc_frame(stream, std::move(frame));
+            };
+
+            co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider, std::move(grpc_writer), stream->grpc_inbound);
         }
 
-        if (stream->res.is_sse()) {
+        if (stream->res.is_trailers_only()) {
+            if (!stream->response_submitted) {
+                submit_response(stream);
+            }
+        } else if (stream->is_grpc_stream) {
+            if (!stream->response_submitted) {
+                submit_grpc_headers(stream);
+            }
+            stream->grpc_eof = true;
+            if (!stream->res.trailers().contains("grpc-status")) {
+                stream->res.trailer("grpc-status", "0");
+            }
+            nghttp2_session_resume_data(session_, stream->stream_id);
+        } else if (stream->res.is_sse()) {
             // Headers were marked by ctx.sse(); submit HEADERS frame if not yet done.
             // Data was already streamed event-by-event via push_sse_frame.
             if (!stream->response_submitted) {
@@ -643,7 +897,6 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
             }
             stream->sse_eof = true;  // handler finished; next data_source_read -> EOF
             nghttp2_session_resume_data(session_, stream->stream_id);
-            co_await flush_outbound();
         } else {
             submit_response(stream);
         }

@@ -19,6 +19,10 @@
 
 namespace aegon::http {
 
+namespace grpc {
+class GrpcServiceGroup;
+}
+
 struct StringHash {
     using is_transparent = void;
     size_t operator()(std::string_view sv) const noexcept {
@@ -71,6 +75,11 @@ public:
     }
 
     /**
+     * @brief Creates a hierarchical gRPC Service Group.
+     */
+    [[nodiscard]] grpc::GrpcServiceGroup grpc_service(std::string_view prefix);
+
+    /**
      * @brief Wraps both synchronous void(Context&) and asynchronous Task<void>(Context&) callables.
      */
     template <typename F>
@@ -95,7 +104,8 @@ public:
     Router& add_route(Method method, std::string_view pattern,
                       const std::vector<MiddlewareFn>& group_mw,
                       const std::vector<MiddlewareFn>& route_mw,
-                      F&& handler) {
+                      F&& handler,
+                      bool is_streaming = false) {
         Handler raw = detail::make_handler(std::forward<F>(handler));
         Handler h;
 
@@ -112,6 +122,8 @@ public:
             };
             h = Handler(std::move(async_chain));
         }
+
+        h.set_streaming(is_streaming);
 
         // Fast-path Tier 1: Check if pattern is purely static (no :param or *wildcard)
         if (pattern.find_first_of(":*") == std::string_view::npos) {
@@ -327,7 +339,13 @@ public:
                 } catch (const std::exception& e) {
                     detail = e.what();
                 } catch (...) {}
-                ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                if (ctx.is_grpc()) {
+                    ctx.res().status(StatusCode::Ok).header("content-type", "application/grpc").trailers_only(true);
+                    ctx.res().trailer("grpc-status", "13");
+                    ctx.res().set_trailer_owned("grpc-message", std::move(detail));
+                } else {
+                    ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                }
                 return true;
             }
             return false;
@@ -345,7 +363,9 @@ public:
      */
     core::Task<void> dispatch(Request& req, Response& res, const ServiceRegistry* services,
                               SseWriteFn sse_writer = nullptr,
-                              SseProvider sse_provider = {}) const {
+                              SseProvider sse_provider = {},
+                              std::function<core::Task<void>(std::string)> grpc_writer = nullptr,
+                              std::shared_ptr<grpc::GrpcInboundChannel> grpc_inbound = nullptr) const {
         if (req.method() == Method::OPTIONS && req.path() == "*") {
             res.status(StatusCode::Ok).header("Allow", "GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH").text("");
             co_return;
@@ -357,6 +377,12 @@ public:
             ctx.set_sse_writer(std::move(sse_writer));
         } else if (sse_provider.build) {
             ctx.set_sse_provider(sse_provider);
+        }
+        if (grpc_writer) {
+            ctx.set_grpc_writer(std::move(grpc_writer));
+        }
+        if (grpc_inbound) {
+            ctx.set_grpc_inbound(std::move(grpc_inbound));
         }
 
         // Fast-path hot path: Exact route found, no global middleware
@@ -378,7 +404,13 @@ public:
                 try {
                     co_await error_handler_(ctx, ex);
                 } catch (...) {
-                    ctx.problem(StatusCode::InternalServerError, "Internal Server Error", "Unknown error in custom error handler");
+                    if (ctx.is_grpc()) {
+                        ctx.res().status(StatusCode::Ok).header("content-type", "application/grpc").trailers_only(true);
+                        ctx.res().trailer("grpc-status", "13");
+                        ctx.res().set_trailer_owned("grpc-message", "Unknown error in custom error handler");
+                    } else {
+                        ctx.problem(StatusCode::InternalServerError, "Internal Server Error", "Unknown error in custom error handler");
+                    }
                 }
             } else {
                 std::string detail = "An internal server error occurred.";
@@ -387,7 +419,13 @@ public:
                 } catch (const std::exception& e) {
                     detail = e.what();
                 } catch (...) {}
-                ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                if (ctx.is_grpc()) {
+                    ctx.res().status(StatusCode::Ok).header("content-type", "application/grpc").trailers_only(true);
+                    ctx.res().trailer("grpc-status", "13");
+                    ctx.res().set_trailer_owned("grpc-message", std::move(detail));
+                } else {
+                    ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                }
             }
             co_return;
         }
@@ -480,7 +518,13 @@ public:
                     } catch (const std::exception& inner) {
                         detail = inner.what();
                     } catch (...) {}
-                    ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                    if (ctx.is_grpc()) {
+                        ctx.res().status(StatusCode::Ok).header("content-type", "application/grpc").trailers_only(true);
+                        ctx.res().trailer("grpc-status", "13");
+                        ctx.res().set_trailer_owned("grpc-message", std::move(detail));
+                    } else {
+                        ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                    }
                 }
             } else {
                 std::string detail = "An internal server error occurred.";
@@ -491,7 +535,13 @@ public:
                 } catch (...) {
                     detail = "Unknown exception occurred.";
                 }
-                ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                if (ctx.is_grpc()) {
+                    ctx.res().status(StatusCode::Ok).header("content-type", "application/grpc").trailers_only(true);
+                    ctx.res().trailer("grpc-status", "13");
+                    ctx.res().set_trailer_owned("grpc-message", std::move(detail));
+                } else {
+                    ctx.problem(StatusCode::InternalServerError, "Internal Server Error", detail);
+                }
             }
         }
     }
@@ -520,6 +570,16 @@ inline RouteGroup RouteGroup::group(std::string_view sub_prefix) {
 inline RouteGroup& RouteGroup::static_files(std::string_view path, std::string_view directory, StaticFilesOptions options) {
     router_.static_files(join_paths(prefix_, path), directory, std::move(options));
     return *this;
+}
+
+} // namespace aegon::http
+
+#include "http/grpc/GrpcService.h"
+
+namespace aegon::http {
+
+inline grpc::GrpcServiceGroup Router::grpc_service(std::string_view prefix) {
+    return grpc::GrpcServiceGroup(*this, std::string(prefix));
 }
 
 } // namespace aegon::http

@@ -20,6 +20,8 @@ public:
         version_ = HttpVersion::Http1_1;
         status_ = StatusCode::Ok;
         headers_.clear();
+        trailers_.clear();
+        is_trailers_only_ = false;
         body_.clear();
         body_view_ = {};
         is_chunked_ = false;
@@ -96,6 +98,11 @@ public:
         body_view_ = bv;
         body_.clear();
         return *this;
+    }
+
+    [[nodiscard]] std::string& body_storage() noexcept {
+        body_view_ = {};
+        return body_;
     }
 
     Response& text(std::string_view t) {
@@ -210,6 +217,31 @@ public:
     }
     [[nodiscard]] const HeaderMap& headers() const noexcept { return headers_; }
     [[nodiscard]] HeaderMap& headers() noexcept { return headers_; }
+
+    Response& trailer(std::string_view name, std::string_view value) {
+        trailers_.set(name, value);
+        return *this;
+    }
+
+    Response& set_trailer_owned(std::string name, std::string value) {
+        owned_strings_.push_back(std::move(name));
+        std::string_view n = owned_strings_.back();
+        owned_strings_.push_back(std::move(value));
+        std::string_view v = owned_strings_.back();
+        trailers_.set(n, v);
+        return *this;
+    }
+
+    [[nodiscard]] const HeaderMap& trailers() const noexcept { return trailers_; }
+    [[nodiscard]] HeaderMap& trailers() noexcept { return trailers_; }
+    [[nodiscard]] bool has_trailers() const noexcept { return !trailers_.empty(); }
+
+    Response& trailers_only(bool val = true) noexcept {
+        is_trailers_only_ = val;
+        return *this;
+    }
+    [[nodiscard]] bool is_trailers_only() const noexcept { return is_trailers_only_; }
+
     [[nodiscard]] std::string_view body() const noexcept {
         return !body_view_.empty() ? body_view_ : std::string_view(body_);
     }
@@ -228,10 +260,12 @@ private:
     HttpVersion version_{HttpVersion::Http1_1};
     StatusCode status_{StatusCode::Ok};
     HeaderMap headers_{};
+    HeaderMap trailers_{};
     std::string body_{};
     std::string_view body_view_{};
     bool is_chunked_{false};
     bool is_sse_{false};
+    bool is_trailers_only_{false};
     bool is_file_{false};
     std::string file_path_{};
     size_t file_size_{0};

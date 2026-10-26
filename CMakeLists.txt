@@ -201,7 +201,11 @@ target_link_libraries(aegon_http PUBLIC
     ${AEGON_NGHTTP3_LIB}
     ${AEGON_SSL_LIB}
     ${AEGON_CRYPTO_LIB}
+    ${AEGON_PROTOBUF_LIB}
 )
+if(Protobuf_INCLUDE_DIRS)
+    target_include_directories(aegon_http PUBLIC ${Protobuf_INCLUDE_DIRS})
+endif()
 if(WIN32)
     target_link_libraries(aegon_http PUBLIC ws2_32)
 endif()

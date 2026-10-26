@@ -52,11 +52,19 @@ struct Http2Stream {
     bool request_complete{false};
     bool response_submitted{false};
     bool reset{false};
+    bool trailers_submitted{false};
 
     // SSE streaming state
     std::deque<std::string> sse_frames;    // frames queued by SseWriteFn
     bool is_sse{false};                    // true after ctx.sse() is called
     bool sse_eof{false};                   // true after SseStream::close()
+
+    // gRPC streaming state
+    std::deque<std::string> grpc_frames;   // frames queued by GrpcSendFn
+    bool is_grpc_stream{false};            // true after ctx.send() is called
+    bool grpc_eof{false};                  // true when streaming handler completes
+    std::shared_ptr<grpc::GrpcInboundChannel> grpc_inbound{nullptr};
+    bool dispatched{false};
 };
 
 using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
@@ -115,15 +123,21 @@ public:
 private:
     Http2Stream* get_or_create_stream(int32_t stream_id);
     void submit_response(Http2Stream* stream);
+    void submit_trailers(Http2Stream* stream);
     /**
      * @brief Submit HEADERS frame only (no body) for SSE — must be called before dispatch.
      */
     void submit_sse_headers(Http2Stream* stream);
+    void submit_grpc_headers(Http2Stream* stream);
     /**
      * @brief Push a pre-formatted SSE frame into the stream's outbound queue.
      * Resumes nghttp2 data sending and flushes to wire.
      */
     core::Task<void> push_sse_frame(Http2Stream* stream, std::string frame);
+    /**
+     * @brief Push a 5-byte framed gRPC response into the stream's outbound queue.
+     */
+    core::Task<void> push_grpc_frame(Http2Stream* stream, std::string frame);
 
     core::EventLoop& loop_;
     core::os_socket_t client_fd_;

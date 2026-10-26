@@ -223,7 +223,7 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, core::os_s
             co_return;
         }
 
-        char read_buf[4096];
+        char read_buf[16384];
         while (running_ && !h2.is_closed() && h2.wants_read()) {
             int n = co_await tls_stream.read_plaintext(read_buf, sizeof(read_buf));
             if (n <= 0) break;

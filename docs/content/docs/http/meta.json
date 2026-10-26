@@ -13,6 +13,7 @@
     "jwt",
     "http-client",
     "websocket",
-    "sse"
+    "sse",
+    "grpc"
   ]
 }

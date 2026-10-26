@@ -1,6 +1,6 @@
-#include <aegon/http/Server.h>
-#include <aegon/core/Task.h>
-#include <aegon/data/types/UUID.h>
+#include "http/Server.h"
+#include "core/Task.h"
+#include "data/types/UUID.h"
 #include <glaze/glaze.hpp>
 #include <iostream>
 #include <cstdlib>

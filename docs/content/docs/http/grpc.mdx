@@ -1,0 +1,211 @@
+---
+title: Native gRPC Integration
+description: Zero-overhead, native HTTP/2 gRPC support in Aegon with Service Group DSL, Unary, Server Streaming, Client Streaming, and Bidirectional Streaming.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+Aegon provides native, high-performance **gRPC** support built directly on its HTTP/2 engine. It eliminates the need for heavy external gRPC C++ library runtimes while maintaining 100% wire-protocol compatibility with standard gRPC clients (Go, Python, Java, Rust, `grpcurl`, etc.).
+
+---
+
+## Supported RPC Modalities
+
+| Modality | Signature | Description |
+| :--- | :--- | :--- |
+| **Sync Unary** | `Req -> Res` | Zero-allocation fast path; runs synchronously with 0 coroutines. |
+| **Async Unary** | `Req -> Res` | Coroutine-based (`core::Task<void>`) for async DB, Redis, or I/O. |
+| **Server Streaming** | `Req -> stream Res` | Multiple responses sent via `co_await ctx.send(res)`. |
+| **Client Streaming** | `stream Req -> Res` | Asynchronously read requests via `co_await ctx.read()`, single reply via `co_await ctx.reply(res)`. |
+| **Bidirectional Streaming** | `stream Req -> stream Res` | Full-duplex streaming with interleaved `ctx.read()` and `ctx.send(res)`. |
+
+---
+
+## Defining a Service (.proto)
+
+Create your protobuf schema (e.g. `benchmark.proto`):
+
+```protobuf
+syntax = "proto3";
+
+package benchmark;
+
+message SumRequest {
+    int32 a = 1;
+    int32 b = 2;
+}
+
+message SumReply {
+    int32 result = 1;
+}
+
+message StreamRequest {
+    int32 a = 1;
+    int32 b = 2;
+    int32 count = 3;
+}
+
+service BenchmarkService {
+    rpc GetSum (SumRequest) returns (SumReply);
+    rpc GetSumAsync (SumRequest) returns (SumReply);
+    rpc StreamSum (StreamRequest) returns (stream SumReply);
+    rpc AccumulateSum (stream StreamRequest) returns (SumReply);
+    rpc ChatSum (stream SumRequest) returns (stream SumReply);
+}
+```
+
+Compile with `protoc`:
+```bash
+protoc --cpp_out=. benchmark.proto
+```
+
+---
+
+## Server Implementation Example
+
+```cpp
+#include <http/Server.h>
+#include <http/grpc/GrpcService.h>
+#include "benchmark.pb.h"
+
+using namespace aegon;
+using namespace aegon::http;
+
+int main() {
+    Router router;
+
+    // 1. Create a gRPC Service Group matching the package and service name
+    auto benchmark_svc = router.grpc_service("/benchmark.BenchmarkService");
+
+    // 2. Add gRPC Interceptor (Middleware)
+    benchmark_svc.use([](Context& ctx, auto next) -> core::Task<void> {
+        auto auth = ctx.req().headers().get("authorization");
+        if (!auth || !auth->starts_with("Bearer ")) {
+            ctx.res().status(StatusCode::Ok).header("content-type", "application/grpc").trailers_only(true);
+            ctx.res().trailer("grpc-status", grpc::status_code_to_string(grpc::StatusCode::Unauthenticated));
+            ctx.res().set_trailer_owned("grpc-message", "Missing or invalid bearer token");
+            co_return;
+        }
+        co_await next(ctx);
+    });
+
+    // 3. Synchronous Unary RPC (Zero-Allocation Hot Path)
+    benchmark_svc.unary<benchmark::SumRequest, benchmark::SumReply>(
+        "GetSum",
+        [](grpc::UnaryContext<benchmark::SumRequest, benchmark::SumReply>& ctx) {
+            int32_t a = ctx.req().a();
+            int32_t b = ctx.req().b();
+
+            if (a < 0) {
+                ctx.error(grpc::StatusCode::InvalidArgument, "'a' cannot be negative");
+                return;
+            }
+
+            benchmark::SumReply reply;
+            reply.set_result(a + b);
+            ctx.reply(reply); // Automatically emits 5-byte frame + grpc-status: 0 trailer
+        }
+    );
+
+    // 4. Asynchronous Coroutine Unary RPC
+    benchmark_svc.unary<benchmark::SumRequest, benchmark::SumReply>(
+        "GetSumAsync",
+        [](grpc::UnaryContext<benchmark::SumRequest, benchmark::SumReply>& ctx) -> core::Task<void> {
+            auto& redis = ctx.service<RedisClient>();
+            auto cached = co_await redis.get("sum_key");
+            
+            benchmark::SumReply reply;
+            reply.set_result(ctx.req().a() + ctx.req().b());
+            ctx.reply(reply);
+            co_return;
+        }
+    );
+
+    // 5. Server Streaming RPC (1 Request -> Stream of Responses)
+    benchmark_svc.server_streaming<benchmark::StreamRequest, benchmark::SumReply>(
+        "StreamSum",
+        [](grpc::ServerStreamingContext<benchmark::StreamRequest, benchmark::SumReply>& ctx) -> core::Task<void> {
+            int32_t count = ctx.req().count();
+            int32_t base = ctx.req().a() + ctx.req().b();
+
+            for (int32_t i = 1; i <= count; ++i) {
+                benchmark::SumReply reply;
+                reply.set_result(base * i);
+                co_await ctx.send(reply); // Pushes individual 5-byte framed message
+            }
+            co_return; // Automatically finishes with grpc-status: 0 trailer
+        }
+    );
+
+    // 6. Client Streaming RPC (Stream of Requests -> 1 Response)
+    benchmark_svc.client_streaming<benchmark::StreamRequest, benchmark::SumReply>(
+        "AccumulateSum",
+        [](grpc::ClientStreamingContext<benchmark::StreamRequest, benchmark::SumReply>& ctx) -> core::Task<void> {
+            int32_t total = 0;
+            while (auto req = co_await ctx.read()) {
+                total += req->a() + req->b();
+            }
+
+            benchmark::SumReply reply;
+            reply.set_result(total);
+            co_await ctx.reply(reply);
+        }
+    );
+
+    // 7. Bidirectional Streaming RPC (Stream of Requests <-> Stream of Responses)
+    benchmark_svc.bidi_streaming<benchmark::SumRequest, benchmark::SumReply>(
+        "ChatSum",
+        [](grpc::BidiStreamingContext<benchmark::SumRequest, benchmark::SumReply>& ctx) -> core::Task<void> {
+            while (auto req = co_await ctx.read()) {
+                if (req->a() < 0) {
+                    ctx.error(grpc::StatusCode::InvalidArgument, "Negative numbers rejected");
+                    co_return;
+                }
+
+                benchmark::SumReply reply;
+                reply.set_result(req->a() + req->b());
+                co_await ctx.send(reply);
+            }
+        }
+    );
+
+    Server server(std::move(router));
+    server.listen(50051, "127.0.0.1");
+    server.run();
+
+    return 0;
+}
+```
+
+---
+
+## Wire Protocol & HTTP/2 Architecture
+
+Aegon implements standard gRPC framing over HTTP/2:
+
+1. **5-Byte Framing**:
+   - `[Byte 0]`: Compression flag (`0x00` uncompressed).
+   - `[Bytes 1..4]`: 32-bit big-endian payload length.
+   - `[Bytes 5..N]`: Protobuf serialized message.
+
+2. **Trailers-Only Fast Path**:
+   When an error occurs before response data is written (e.g. unauthenticated token, invalid arguments), Aegon emits an immediate HTTP/2 HEADERS frame with `END_STREAM` containing `:status 200`, `grpc-status`, and `grpc-message`, without allocating empty DATA frames.
+
+3. **Asynchronous Stream Dispatch**:
+   For Client Streaming and Bidirectional Streaming routes, Aegon begins handler execution as soon as the initial `HEADERS` frame arrives, without blocking on client `END_STREAM`. Incoming HTTP/2 `DATA` chunks are parsed directly into typed messages and resumed into `co_await ctx.read()`.
+
+4. **Global Middleware Isolation**:
+   If serving REST and gRPC on the same router, use `ctx.is_grpc()` in web middlewares (CORS, session cookies) to bypass REST-specific logic:
+
+   ```cpp
+   router.use([](Context& ctx, auto next) -> core::Task<void> {
+       if (ctx.is_grpc()) {
+           co_await next(ctx);
+           co_return;
+       }
+       ctx.res().header("Access-Control-Allow-Origin", "*");
+       co_await next(ctx);
+   });
+   ```
+

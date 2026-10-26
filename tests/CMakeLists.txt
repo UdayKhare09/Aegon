@@ -137,4 +137,31 @@ if(TARGET aegon_http)
     add_executable(test_sse test_sse.cpp)
     target_link_libraries(test_sse PRIVATE aegon_http aegon_core)
     add_test(NAME sse COMMAND test_sse)
+
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/proto/benchmark.pb.cc ${CMAKE_CURRENT_SOURCE_DIR}/proto/benchmark.pb.h
+        COMMAND protoc --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto --cpp_out=${CMAKE_CURRENT_SOURCE_DIR}/proto ${CMAKE_CURRENT_SOURCE_DIR}/proto/benchmark.proto
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/proto/benchmark.proto
+        COMMENT "Compiling benchmark.proto with protoc"
+    )
+
+    add_executable(test_grpc_unary test_grpc_unary.cpp proto/benchmark.pb.cc)
+    target_include_directories(test_grpc_unary PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/proto)
+    target_link_libraries(test_grpc_unary PRIVATE aegon_http aegon_core ${AEGON_PROTOBUF_LIB})
+    add_test(NAME grpc_unary COMMAND test_grpc_unary)
+
+    add_executable(test_grpc_streaming test_grpc_streaming.cpp proto/benchmark.pb.cc)
+    target_include_directories(test_grpc_streaming PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/proto)
+    target_link_libraries(test_grpc_streaming PRIVATE aegon_http aegon_core ${AEGON_PROTOBUF_LIB})
+    add_test(NAME grpc_streaming COMMAND test_grpc_streaming)
+
+    add_executable(test_grpc_client_streaming test_grpc_client_streaming.cpp proto/benchmark.pb.cc)
+    target_include_directories(test_grpc_client_streaming PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/proto)
+    target_link_libraries(test_grpc_client_streaming PRIVATE aegon_http aegon_core ${AEGON_PROTOBUF_LIB})
+    add_test(NAME grpc_client_streaming COMMAND test_grpc_client_streaming)
+
+    add_executable(test_grpc_bidi_streaming test_grpc_bidi_streaming.cpp proto/benchmark.pb.cc)
+    target_include_directories(test_grpc_bidi_streaming PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/proto)
+    target_link_libraries(test_grpc_bidi_streaming PRIVATE aegon_http aegon_core ${AEGON_PROTOBUF_LIB})
+    add_test(NAME grpc_bidi_streaming COMMAND test_grpc_bidi_streaming)
 endif()
