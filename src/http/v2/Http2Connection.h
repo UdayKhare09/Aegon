@@ -65,12 +65,49 @@ struct Http2Stream {
     bool grpc_eof{false};                  // true when streaming handler completes
     std::shared_ptr<grpc::GrpcInboundChannel> grpc_inbound{nullptr};
     bool dispatched{false};
+    bool async_running{false};
+
+    void reset_state() noexcept {
+        stream_id = -1;
+        req.reset();
+        res.reset();
+        path_storage.clear();
+        query_storage.clear();
+        inline_arena_used = 0;
+        header_storage.clear();
+        body_accum.clear();
+        body_offset = 0;
+        headers_total_size = 0;
+        error_status = StatusCode::Ok;
+        request_complete = false;
+        response_submitted = false;
+        reset = false;
+        trailers_submitted = false;
+        sse_frames.clear();
+        is_sse = false;
+        sse_eof = false;
+        grpc_frames.clear();
+        is_grpc_stream = false;
+        grpc_eof = false;
+        grpc_inbound.reset();
+        dispatched = false;
+        async_running = false;
+    }
 };
 
 using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
 
 class Http2Connection {
 public:
+    struct DetachedTask {
+        struct promise_type {
+            std::suspend_never initial_suspend() noexcept { return {}; }
+            std::suspend_never final_suspend() noexcept { return {}; }
+            void return_void() noexcept {}
+            void unhandled_exception() noexcept {}
+            DetachedTask get_return_object() noexcept { return {}; }
+        };
+    };
     Http2Connection(core::EventLoop& loop, core::os_socket_t client_fd, const Router& router, 
                     const ServiceRegistry* services = nullptr, OutputSender sender = nullptr,
                     const ServerConfig& config = {});
@@ -138,6 +175,7 @@ private:
      * @brief Push a 5-byte framed gRPC response into the stream's outbound queue.
      */
     core::Task<void> push_grpc_frame(Http2Stream* stream, std::string frame);
+    DetachedTask dispatch_async_stream(Http2Stream* stream);
 
     core::EventLoop& loop_;
     core::os_socket_t client_fd_;
@@ -146,6 +184,7 @@ private:
 
     nghttp2_session* session_{nullptr};
     std::unordered_map<int32_t, std::unique_ptr<Http2Stream>> streams_;
+    std::vector<std::unique_ptr<Http2Stream>> stream_pool_;
     std::vector<int32_t> pending_dispatch_;
     OutputSender sender_{nullptr};
     std::string outbound_buf_;
@@ -156,6 +195,7 @@ private:
     int32_t max_remote_stream_id_{0};
     uint32_t last_error_code_{0};
     std::unordered_set<int32_t> closed_stream_ids_;
+    std::shared_ptr<bool> alive_{std::make_shared<bool>(true)};
     ServerConfig config_{};
 };
 

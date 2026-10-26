@@ -228,8 +228,8 @@ int main(int argc, char* argv[]) {
 
     // 5. HttpArena Echo (/echo POST)
     server.router().post("/echo", [](Context& ctx) {
-        ctx.res().header("Content-Type", "application/octet-stream");
-        ctx.res().body(std::string(ctx.req().body()));
+        ctx.res().header("content-type", "application/octet-stream");
+        ctx.res().body_view(ctx.req().body());
     });
 
     // 6. HttpArena WebSocket Echo (/ws)
