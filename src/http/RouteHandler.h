@@ -28,6 +28,7 @@ public:
 
 private:
     Kind kind_{Kind::None};
+    bool is_streaming_{false};
     SyncHandler sync_fn_{nullptr};
     AsyncHandler async_fn_{nullptr};
 
@@ -44,6 +45,8 @@ public:
     [[nodiscard]] Kind kind() const noexcept { return kind_; }
     [[nodiscard]] bool is_sync() const noexcept { return kind_ == Kind::Sync; }
     [[nodiscard]] bool is_async() const noexcept { return kind_ == Kind::Async; }
+    [[nodiscard]] bool is_streaming() const noexcept { return is_streaming_; }
+    void set_streaming(bool s) noexcept { is_streaming_ = s; }
     [[nodiscard]] explicit operator bool() const noexcept { return kind_ != Kind::None; }
 
     [[nodiscard]] const SyncHandler& sync_handler() const noexcept { return sync_fn_; }

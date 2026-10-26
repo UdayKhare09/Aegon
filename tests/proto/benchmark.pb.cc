@@ -529,18 +529,21 @@ const char descriptor_table_protodef_benchmark_2eproto[] ABSL_ATTRIBUTE_SECTION_
     "\n\017benchmark.proto\022\tbenchmark\"\"\n\nSumReque"
     "st\022\t\n\001a\030\001 \001(\005\022\t\n\001b\030\002 \001(\005\"\032\n\010SumReply\022\016\n\006"
     "result\030\001 \001(\005\"4\n\rStreamRequest\022\t\n\001a\030\001 \001(\005"
-    "\022\t\n\001b\030\002 \001(\005\022\r\n\005count\030\003 \001(\0052\301\001\n\020Benchmark"
+    "\022\t\n\001b\030\002 \001(\005\022\r\n\005count\030\003 \001(\0052\276\002\n\020Benchmark"
     "Service\0224\n\006GetSum\022\025.benchmark.SumRequest"
     "\032\023.benchmark.SumReply\0229\n\013GetSumAsync\022\025.b"
     "enchmark.SumRequest\032\023.benchmark.SumReply"
     "\022<\n\tStreamSum\022\030.benchmark.StreamRequest\032"
-    "\023.benchmark.SumReply0\001b\006proto3"
+    "\023.benchmark.SumReply0\001\022@\n\rAccumulateSum\022"
+    "\030.benchmark.StreamRequest\032\023.benchmark.Su"
+    "mReply(\001\0229\n\007ChatSum\022\025.benchmark.SumReque"
+    "st\032\023.benchmark.SumReply(\0010\001b\006proto3"
 };
 static ::absl::once_flag descriptor_table_benchmark_2eproto_once;
 PROTOBUF_CONSTINIT const ::_pbi::DescriptorTable descriptor_table_benchmark_2eproto = {
     false,
     false,
-    350,
+    475,
     descriptor_table_protodef_benchmark_2eproto,
     "benchmark.proto",
     &descriptor_table_benchmark_2eproto_once,

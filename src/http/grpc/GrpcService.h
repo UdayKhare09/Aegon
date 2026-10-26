@@ -179,6 +179,83 @@ public:
         );
         return *this;
     }
+
+    /**
+     * @brief Registers a Client Streaming RPC endpoint (stream of requests -> 1 response).
+     */
+    template <typename Req, typename Res, typename F>
+        requires std::is_invocable_r_v<core::Task<void>, F, ClientStreamingContext<Req, Res>&>
+    GrpcServiceGroup& client_streaming(std::string_view method_name, F&& handler) {
+        std::string path = join_paths(prefix_, method_name);
+
+        router_.add_route(Method::POST, path, interceptors_, {},
+            [fn = std::forward<F>(handler)](Context& ctx) -> core::Task<void> {
+                if (!ctx.req().is_grpc()) [[unlikely]] {
+                    ctx.res().status(http::StatusCode::Ok);
+                    ctx.res().header("content-type", "application/grpc");
+                    ctx.res().trailers_only(true);
+                    ctx.res().trailer("grpc-status", status_code_to_string(StatusCode::InvalidArgument));
+                    ctx.res().set_trailer_owned("grpc-message", "Content-Type must be application/grpc");
+                    co_return;
+                }
+
+                ctx.res().status(http::StatusCode::Ok);
+                ctx.res().header("content-type", "application/grpc");
+
+                ClientStreamingContext<Req, Res> cctx(ctx, ctx.grpc_inbound(), ctx.grpc_writer());
+                co_await fn(cctx);
+
+                if (!cctx.has_replied() && !cctx.has_error()) [[unlikely]] {
+                    if (!ctx.res().trailers().contains("grpc-status")) {
+                        ctx.res().trailer("grpc-status", status_code_to_string(StatusCode::Internal));
+                        ctx.res().set_trailer_owned("grpc-message", "Handler completed without sending reply");
+                    }
+                } else if (cctx.has_replied() && !cctx.has_error()) {
+                    if (!ctx.res().trailers().contains("grpc-status")) {
+                        ctx.res().trailer("grpc-status", "0");
+                    }
+                }
+            },
+            true // is_streaming = true
+        );
+        return *this;
+    }
+
+    /**
+     * @brief Registers a Bidirectional Streaming RPC endpoint (stream of requests <-> stream of responses).
+     */
+    template <typename Req, typename Res, typename F>
+        requires std::is_invocable_r_v<core::Task<void>, F, BidiStreamingContext<Req, Res>&>
+    GrpcServiceGroup& bidi_streaming(std::string_view method_name, F&& handler) {
+        std::string path = join_paths(prefix_, method_name);
+
+        router_.add_route(Method::POST, path, interceptors_, {},
+            [fn = std::forward<F>(handler)](Context& ctx) -> core::Task<void> {
+                if (!ctx.req().is_grpc()) [[unlikely]] {
+                    ctx.res().status(http::StatusCode::Ok);
+                    ctx.res().header("content-type", "application/grpc");
+                    ctx.res().trailers_only(true);
+                    ctx.res().trailer("grpc-status", status_code_to_string(StatusCode::InvalidArgument));
+                    ctx.res().set_trailer_owned("grpc-message", "Content-Type must be application/grpc");
+                    co_return;
+                }
+
+                ctx.res().status(http::StatusCode::Ok);
+                ctx.res().header("content-type", "application/grpc");
+
+                BidiStreamingContext<Req, Res> bctx(ctx, ctx.grpc_inbound(), ctx.grpc_writer());
+                co_await fn(bctx);
+
+                if (!bctx.has_error()) {
+                    if (!ctx.res().trailers().contains("grpc-status")) {
+                        ctx.res().trailer("grpc-status", "0");
+                    }
+                }
+            },
+            true // is_streaming = true
+        );
+        return *this;
+    }
 };
 
 } // namespace aegon::http::grpc

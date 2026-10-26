@@ -1,6 +1,7 @@
 #include "http/v2/Http2Connection.h"
 #include "http/v2/Http2Frame.h"
 #include "http/SseStream.h"
+#include "http/grpc/GrpcStreamChannel.h"
 #include "core/simd/SimdString.h"
 #include <algorithm>
 #include <array>
@@ -177,9 +178,13 @@ int Http2Connection::on_data_chunk_recv(uint8_t, int32_t stream_id, const uint8_
         return 0;
     }
     auto* stream = get_or_create_stream(stream_id);
-    if (stream->request_complete) {
+    if (stream->request_complete && !stream->grpc_inbound) {
         stream->reset = true;
         nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_STREAM_CLOSED);
+        return 0;
+    }
+    if (stream->grpc_inbound) {
+        stream->grpc_inbound->push_data(data, len);
         return 0;
     }
     if (stream->body_accum.size() + len > config_.limits.max_body_size) {
@@ -202,16 +207,37 @@ int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
                 it->second->reset = true;
             }
         }
+        auto* stream = get_or_create_stream(frame->hd.stream_id);
         if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
-            auto* stream = get_or_create_stream(frame->hd.stream_id);
-            stream->request_complete = true;
-            pending_dispatch_.push_back(frame->hd.stream_id);
+            if (stream->grpc_inbound) {
+                stream->grpc_inbound->set_eof();
+            } else {
+                auto match_res = router_.match(stream->req);
+                if (match_res.handler && match_res.handler->is_streaming()) {
+                    stream->grpc_inbound = std::make_shared<grpc::GrpcInboundChannel>();
+                    stream->grpc_inbound->set_eof();
+                    stream->is_grpc_stream = true;
+                }
+                stream->request_complete = true;
+                pending_dispatch_.push_back(frame->hd.stream_id);
+            }
+        } else {
+            auto match_res = router_.match(stream->req);
+            if (match_res.handler && match_res.handler->is_streaming()) {
+                stream->grpc_inbound = std::make_shared<grpc::GrpcInboundChannel>();
+                stream->is_grpc_stream = true;
+                pending_dispatch_.push_back(frame->hd.stream_id);
+            }
         }
     } else if (frame->hd.type == NGHTTP2_DATA) {
         if (frame->hd.flags & NGHTTP2_FLAG_END_STREAM) {
             auto* stream = get_or_create_stream(frame->hd.stream_id);
-            stream->request_complete = true;
-            pending_dispatch_.push_back(frame->hd.stream_id);
+            if (stream->grpc_inbound) {
+                stream->grpc_inbound->set_eof();
+            } else {
+                stream->request_complete = true;
+                pending_dispatch_.push_back(frame->hd.stream_id);
+            }
         }
     } else if (frame->hd.type == NGHTTP2_PRIORITY) {
         if (frame->hd.stream_id == 0) {
@@ -808,7 +834,8 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
         auto it = streams_.find(sid);
         if (it == streams_.end()) continue;
         auto* stream = it->second.get();
-        if (stream->reset || stream->response_submitted) continue;
+        if (stream->reset || stream->response_submitted || stream->dispatched) continue;
+        stream->dispatched = true;
 
         if (stream->error_status != StatusCode::Ok) {
             stream->res.status(stream->error_status).text(status_phrase(stream->error_status));
@@ -844,10 +871,15 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
                 co_await conn->push_grpc_frame(stream, std::move(frame));
             };
 
-            co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider, std::move(grpc_writer));
+            co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider, std::move(grpc_writer), stream->grpc_inbound);
         }
 
-        if (stream->is_grpc_stream) {
+        if (stream->res.is_trailers_only()) {
+            if (!stream->response_submitted) {
+                submit_response(stream);
+            }
+            co_await flush_outbound();
+        } else if (stream->is_grpc_stream) {
             if (!stream->response_submitted) {
                 submit_grpc_headers(stream);
             }

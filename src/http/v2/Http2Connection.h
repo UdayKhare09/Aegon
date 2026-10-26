@@ -63,6 +63,8 @@ struct Http2Stream {
     std::deque<std::string> grpc_frames;   // frames queued by GrpcSendFn
     bool is_grpc_stream{false};            // true after ctx.send() is called
     bool grpc_eof{false};                  // true when streaming handler completes
+    std::shared_ptr<grpc::GrpcInboundChannel> grpc_inbound{nullptr};
+    bool dispatched{false};
 };
 
 using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;

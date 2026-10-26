@@ -13,6 +13,10 @@
 #include <unordered_map>
 #include <memory>
 
+namespace aegon::http::grpc {
+class GrpcInboundChannel;
+}
+
 namespace aegon::http {
 
 /**
@@ -31,6 +35,7 @@ private:
     SseWriteFn sse_writer_{nullptr};
     SseProvider sse_provider_{};
     std::function<core::Task<void>(std::string)> grpc_writer_{nullptr};
+    std::shared_ptr<grpc::GrpcInboundChannel> grpc_inbound_{nullptr};
 
 public:
     Context(Request& req, Response& res, const ServiceRegistry* services = nullptr) noexcept
@@ -232,6 +237,14 @@ public:
 
     [[nodiscard]] const std::function<core::Task<void>(std::string)>& grpc_writer() const noexcept {
         return grpc_writer_;
+    }
+
+    void set_grpc_inbound(std::shared_ptr<grpc::GrpcInboundChannel> inbound) noexcept {
+        grpc_inbound_ = std::move(inbound);
+    }
+
+    [[nodiscard]] const std::shared_ptr<grpc::GrpcInboundChannel>& grpc_inbound() const noexcept {
+        return grpc_inbound_;
     }
 
     /**

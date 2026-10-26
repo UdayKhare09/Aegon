@@ -3,6 +3,7 @@
 #include "http/Context.h"
 #include "http/grpc/GrpcStatus.h"
 #include "http/grpc/GrpcCodec.h"
+#include "http/grpc/GrpcStreamChannel.h"
 #include "core/Task.h"
 #include <string>
 #include <string_view>
@@ -193,4 +194,194 @@ public:
     [[nodiscard]] bool has_error() const noexcept { return error_emitted_; }
 };
 
+/**
+ * @brief Stack-allocated Context wrapper passed to gRPC Client Streaming RPC handlers.
+ *
+ * Allows asynchronously reading multiple request messages via co_await ctx.read()
+ * and sending a single response via co_await ctx.reply(res).
+ */
+template <typename Req, typename Res>
+class ClientStreamingContext {
+private:
+    Context& http_ctx_;
+    std::shared_ptr<GrpcInboundChannel> inbound_{nullptr};
+    GrpcWriteFn writer_{nullptr};
+    bool replied_{false};
+    bool error_emitted_{false};
+
+public:
+    ClientStreamingContext(Context& http_ctx, std::shared_ptr<GrpcInboundChannel> inbound, GrpcWriteFn writer) noexcept
+        : http_ctx_(http_ctx), inbound_(std::move(inbound)), writer_(std::move(writer)) {}
+
+    [[nodiscard]] Context& http() noexcept { return http_ctx_; }
+    [[nodiscard]] const Context& http() const noexcept { return http_ctx_; }
+    [[nodiscard]] Request& raw_req() noexcept { return http_ctx_.req(); }
+    [[nodiscard]] Response& raw_res() noexcept { return http_ctx_.res(); }
+
+    template <typename T>
+    [[nodiscard]] T& service(std::string_view name = "") const {
+        return http_ctx_.service<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] bool has_service(std::string_view name = "") const noexcept {
+        return http_ctx_.has_service<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] T* try_service(std::string_view name = "") const noexcept {
+        return http_ctx_.try_service<T>(name);
+    }
+
+    template <typename T>
+    void set(T val) {
+        http_ctx_.set<T>(std::move(val));
+    }
+
+    template <typename T>
+    [[nodiscard]] T* get() noexcept {
+        return http_ctx_.get<T>();
+    }
+
+    /**
+     * @brief Asynchronously reads the next typed Protobuf request message from the inbound HTTP/2 stream.
+     * Returns std::nullopt when the client half-closes the stream (END_STREAM).
+     */
+    core::Task<std::optional<Req>> read() {
+        if (!inbound_) co_return std::nullopt;
+        auto raw = co_await inbound_->read_raw();
+        if (!raw) co_return std::nullopt;
+        Req msg;
+        if (!GrpcCodec<Req>::decode(*raw, msg)) {
+            co_return std::nullopt;
+        }
+        co_return msg;
+    }
+
+    /**
+     * @brief Emits a single final response message to the client.
+     */
+    core::Task<void> reply(const Res& res) {
+        if (replied_ || error_emitted_) co_return;
+        replied_ = true;
+
+        std::string frame;
+        GrpcCodec<Res>::encode(res, frame);
+        if (writer_) {
+            co_await writer_(std::move(frame));
+        }
+    }
+
+    /**
+     * @brief Emits an RFC-compliant gRPC Trailers-Only error response.
+     */
+    void error(StatusCode code, std::string_view message = "") {
+        error_emitted_ = true;
+        http_ctx_.res().status(http::StatusCode::Ok);
+        http_ctx_.res().header("content-type", "application/grpc");
+        http_ctx_.res().trailers_only(true);
+        http_ctx_.res().trailer("grpc-status", status_code_to_string(code));
+        if (!message.empty()) {
+            http_ctx_.res().set_trailer_owned("grpc-message", std::string(message));
+        }
+    }
+
+    [[nodiscard]] bool has_replied() const noexcept { return replied_; }
+    [[nodiscard]] bool has_error() const noexcept { return error_emitted_; }
+};
+
+/**
+ * @brief Stack-allocated Context wrapper passed to gRPC Bidirectional Streaming RPC handlers.
+ *
+ * Allows full-duplex asynchronous streaming: reading incoming messages via co_await ctx.read()
+ * and sending outgoing messages via co_await ctx.send(res).
+ */
+template <typename Req, typename Res>
+class BidiStreamingContext {
+private:
+    Context& http_ctx_;
+    std::shared_ptr<GrpcInboundChannel> inbound_{nullptr};
+    GrpcWriteFn writer_{nullptr};
+    bool error_emitted_{false};
+
+public:
+    BidiStreamingContext(Context& http_ctx, std::shared_ptr<GrpcInboundChannel> inbound, GrpcWriteFn writer) noexcept
+        : http_ctx_(http_ctx), inbound_(std::move(inbound)), writer_(std::move(writer)) {}
+
+    [[nodiscard]] Context& http() noexcept { return http_ctx_; }
+    [[nodiscard]] const Context& http() const noexcept { return http_ctx_; }
+    [[nodiscard]] Request& raw_req() noexcept { return http_ctx_.req(); }
+    [[nodiscard]] Response& raw_res() noexcept { return http_ctx_.res(); }
+
+    template <typename T>
+    [[nodiscard]] T& service(std::string_view name = "") const {
+        return http_ctx_.service<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] bool has_service(std::string_view name = "") const noexcept {
+        return http_ctx_.has_service<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] T* try_service(std::string_view name = "") const noexcept {
+        return http_ctx_.try_service<T>(name);
+    }
+
+    template <typename T>
+    void set(T val) {
+        http_ctx_.set<T>(std::move(val));
+    }
+
+    template <typename T>
+    [[nodiscard]] T* get() noexcept {
+        return http_ctx_.get<T>();
+    }
+
+    /**
+     * @brief Asynchronously reads the next typed Protobuf request message from the inbound HTTP/2 stream.
+     * Returns std::nullopt when the client closes the write side of the stream (END_STREAM).
+     */
+    core::Task<std::optional<Req>> read() {
+        if (!inbound_) co_return std::nullopt;
+        auto raw = co_await inbound_->read_raw();
+        if (!raw) co_return std::nullopt;
+        Req msg;
+        if (!GrpcCodec<Req>::decode(*raw, msg)) {
+            co_return std::nullopt;
+        }
+        co_return msg;
+    }
+
+    /**
+     * @brief Flushes a single 5-byte framed gRPC response message to the client.
+     */
+    core::Task<void> send(const Res& res) {
+        if (error_emitted_) co_return;
+
+        std::string frame;
+        GrpcCodec<Res>::encode(res, frame);
+        if (writer_) {
+            co_await writer_(std::move(frame));
+        }
+    }
+
+    /**
+     * @brief Emits a gRPC error status trailer.
+     */
+    void error(StatusCode code, std::string_view message = "") {
+        error_emitted_ = true;
+        http_ctx_.res().status(http::StatusCode::Ok);
+        http_ctx_.res().header("content-type", "application/grpc");
+        http_ctx_.res().trailers_only(true);
+        http_ctx_.res().trailer("grpc-status", status_code_to_string(code));
+        if (!message.empty()) {
+            http_ctx_.res().set_trailer_owned("grpc-message", std::string(message));
+        }
+    }
+
+    [[nodiscard]] bool has_error() const noexcept { return error_emitted_; }
+};
+
 } // namespace aegon::http::grpc
+

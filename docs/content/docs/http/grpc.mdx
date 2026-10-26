@@ -1,6 +1,6 @@
 ---
 title: Native gRPC Integration
-description: Zero-overhead, native HTTP/2 gRPC support in Aegon with Service Group DSL, dual-mode Unary and Server Streaming, and stack-allocated GrpcContext.
+description: Zero-overhead, native HTTP/2 gRPC support in Aegon with Service Group DSL, Unary, Server Streaming, Client Streaming, and Bidirectional Streaming.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
@@ -10,14 +10,15 @@ Aegon provides native, high-performance **gRPC** support built directly on its H
 
 ---
 
-## Key Features
+## Supported RPC Modalities
 
-- **Zero-Allocation Synchronous Unary RPC**: Direct execution path with 0 coroutines and 0 task allocations for compute-heavy microservices and benchmark suites.
-- **Asynchronous Coroutine RPC**: Seamlessly `co_await` async database queries, Redis calls, or external HTTP clients using C++23 coroutines (`core::Task<void>`).
-- **Server Streaming**: Push sequential gRPC messages asynchronously to clients via `co_await ctx.send(reply)`.
-- **Idiomatic Service Group DSL**: Register services with familiar `router.grpc_service("/package.Service")` syntax.
-- **Dedicated Stack-Allocated Context**: `grpc::UnaryContext<Req, Res>` and `grpc::ServerStreamingContext<Req, Res>` separate gRPC error codes and replies from HTTP/REST while preserving full access to Aegon's thread-per-core `ServiceRegistry` (`ctx.service<T>()`).
-- **Isolated Interceptors**: Register middlewares directly on service groups to handle authentication, logging, and metadata without HTTP middleware pollution.
+| Modality | Signature | Description |
+| :--- | :--- | :--- |
+| **Sync Unary** | `Req -> Res` | Zero-allocation fast path; runs synchronously with 0 coroutines. |
+| **Async Unary** | `Req -> Res` | Coroutine-based (`core::Task<void>`) for async DB, Redis, or I/O. |
+| **Server Streaming** | `Req -> stream Res` | Multiple responses sent via `co_await ctx.send(res)`. |
+| **Client Streaming** | `stream Req -> Res` | Asynchronously read requests via `co_await ctx.read()`, single reply via `co_await ctx.reply(res)`. |
+| **Bidirectional Streaming** | `stream Req -> stream Res` | Full-duplex streaming with interleaved `ctx.read()` and `ctx.send(res)`. |
 
 ---
 
@@ -49,6 +50,8 @@ service BenchmarkService {
     rpc GetSum (SumRequest) returns (SumReply);
     rpc GetSumAsync (SumRequest) returns (SumReply);
     rpc StreamSum (StreamRequest) returns (stream SumReply);
+    rpc AccumulateSum (stream StreamRequest) returns (SumReply);
+    rpc ChatSum (stream SumRequest) returns (stream SumReply);
 }
 ```
 
@@ -135,6 +138,38 @@ int main() {
         }
     );
 
+    // 6. Client Streaming RPC (Stream of Requests -> 1 Response)
+    benchmark_svc.client_streaming<benchmark::StreamRequest, benchmark::SumReply>(
+        "AccumulateSum",
+        [](grpc::ClientStreamingContext<benchmark::StreamRequest, benchmark::SumReply>& ctx) -> core::Task<void> {
+            int32_t total = 0;
+            while (auto req = co_await ctx.read()) {
+                total += req->a() + req->b();
+            }
+
+            benchmark::SumReply reply;
+            reply.set_result(total);
+            co_await ctx.reply(reply);
+        }
+    );
+
+    // 7. Bidirectional Streaming RPC (Stream of Requests <-> Stream of Responses)
+    benchmark_svc.bidi_streaming<benchmark::SumRequest, benchmark::SumReply>(
+        "ChatSum",
+        [](grpc::BidiStreamingContext<benchmark::SumRequest, benchmark::SumReply>& ctx) -> core::Task<void> {
+            while (auto req = co_await ctx.read()) {
+                if (req->a() < 0) {
+                    ctx.error(grpc::StatusCode::InvalidArgument, "Negative numbers rejected");
+                    co_return;
+                }
+
+                benchmark::SumReply reply;
+                reply.set_result(req->a() + req->b());
+                co_await ctx.send(reply);
+            }
+        }
+    );
+
     Server server(std::move(router));
     server.listen(50051, "127.0.0.1");
     server.run();
@@ -154,10 +189,13 @@ Aegon implements standard gRPC framing over HTTP/2:
    - `[Bytes 1..4]`: 32-bit big-endian payload length.
    - `[Bytes 5..N]`: Protobuf serialized message.
 
-2. **Trailers-Only Path**:
+2. **Trailers-Only Fast Path**:
    When an error occurs before response data is written (e.g. unauthenticated token, invalid arguments), Aegon emits an immediate HTTP/2 HEADERS frame with `END_STREAM` containing `:status 200`, `grpc-status`, and `grpc-message`, without allocating empty DATA frames.
 
-3. **Global Middleware Isolation**:
+3. **Asynchronous Stream Dispatch**:
+   For Client Streaming and Bidirectional Streaming routes, Aegon begins handler execution as soon as the initial `HEADERS` frame arrives, without blocking on client `END_STREAM`. Incoming HTTP/2 `DATA` chunks are parsed directly into typed messages and resumed into `co_await ctx.read()`.
+
+4. **Global Middleware Isolation**:
    If serving REST and gRPC on the same router, use `ctx.is_grpc()` in web middlewares (CORS, session cookies) to bypass REST-specific logic:
 
    ```cpp
@@ -170,3 +208,4 @@ Aegon implements standard gRPC framing over HTTP/2:
        co_await next(ctx);
    });
    ```
+

@@ -104,7 +104,8 @@ public:
     Router& add_route(Method method, std::string_view pattern,
                       const std::vector<MiddlewareFn>& group_mw,
                       const std::vector<MiddlewareFn>& route_mw,
-                      F&& handler) {
+                      F&& handler,
+                      bool is_streaming = false) {
         Handler raw = detail::make_handler(std::forward<F>(handler));
         Handler h;
 
@@ -121,6 +122,8 @@ public:
             };
             h = Handler(std::move(async_chain));
         }
+
+        h.set_streaming(is_streaming);
 
         // Fast-path Tier 1: Check if pattern is purely static (no :param or *wildcard)
         if (pattern.find_first_of(":*") == std::string_view::npos) {
@@ -361,7 +364,8 @@ public:
     core::Task<void> dispatch(Request& req, Response& res, const ServiceRegistry* services,
                               SseWriteFn sse_writer = nullptr,
                               SseProvider sse_provider = {},
-                              std::function<core::Task<void>(std::string)> grpc_writer = nullptr) const {
+                              std::function<core::Task<void>(std::string)> grpc_writer = nullptr,
+                              std::shared_ptr<grpc::GrpcInboundChannel> grpc_inbound = nullptr) const {
         if (req.method() == Method::OPTIONS && req.path() == "*") {
             res.status(StatusCode::Ok).header("Allow", "GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH").text("");
             co_return;
@@ -376,6 +380,9 @@ public:
         }
         if (grpc_writer) {
             ctx.set_grpc_writer(std::move(grpc_writer));
+        }
+        if (grpc_inbound) {
+            ctx.set_grpc_inbound(std::move(grpc_inbound));
         }
 
         // Fast-path hot path: Exact route found, no global middleware

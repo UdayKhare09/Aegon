@@ -21,4 +21,7 @@ service BenchmarkService {
     rpc GetSum (SumRequest) returns (SumReply);
     rpc GetSumAsync (SumRequest) returns (SumReply);
     rpc StreamSum (StreamRequest) returns (stream SumReply);
+    rpc AccumulateSum (stream StreamRequest) returns (SumReply);
+    rpc ChatSum (stream SumRequest) returns (stream SumReply);
 }
+
