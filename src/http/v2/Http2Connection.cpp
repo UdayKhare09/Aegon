@@ -84,9 +84,6 @@ Http2Connection::Http2Connection(core::EventLoop& loop, core::os_socket_t client
 }
 
 Http2Connection::~Http2Connection() {
-    if (alive_) {
-        *alive_ = false;
-    }
     if (session_) {
         nghttp2_session_del(session_);
         session_ = nullptr;
@@ -95,23 +92,15 @@ Http2Connection::~Http2Connection() {
 
 Http2Stream* Http2Connection::get_or_create_stream(int32_t stream_id) {
     auto it = streams_.find(stream_id);
-    if (it != streams_.end()) {
-        return it->second.get();
+    if (it == streams_.end()) {
+        auto stream = std::make_unique<Http2Stream>();
+        stream->stream_id = stream_id;
+        stream->req.set_version(HttpVersion::Http2);
+        auto* ptr = stream.get();
+        streams_.emplace(stream_id, std::move(stream));
+        return ptr;
     }
-
-    std::unique_ptr<Http2Stream> stream;
-    if (!stream_pool_.empty()) {
-        stream = std::move(stream_pool_.back());
-        stream_pool_.pop_back();
-        stream->reset_state();
-    } else {
-        stream = std::make_unique<Http2Stream>();
-    }
-    stream->stream_id = stream_id;
-    stream->req.set_version(HttpVersion::Http2);
-    auto* ptr = stream.get();
-    streams_.emplace(stream_id, std::move(stream));
-    return ptr;
+    return it->second.get();
 }
 
 int Http2Connection::on_header(const nghttp2_frame* frame, const uint8_t* name, size_t namelen,
@@ -325,15 +314,7 @@ int Http2Connection::on_stream_close(int32_t stream_id, uint32_t) {
     if (closed_stream_ids_.size() > 1024) {
         closed_stream_ids_.erase(closed_stream_ids_.begin());
     }
-    auto it = streams_.find(stream_id);
-    if (it != streams_.end()) {
-        if (!it->second->async_running) {
-            if (stream_pool_.size() < 256) {
-                stream_pool_.push_back(std::move(it->second));
-            }
-        }
-        streams_.erase(it);
-    }
+    streams_.erase(stream_id);
     return 0;
 }
 
@@ -843,78 +824,6 @@ core::Task<bool> Http2Connection::upgrade_request(Request req, std::string_view 
     co_return co_await flush_outbound();
 }
 
-Http2Connection::DetachedTask Http2Connection::dispatch_async_stream(Http2Stream* stream) {
-    auto alive = alive_;
-    int32_t sid = stream->stream_id;
-    stream->async_running = true;
-
-    // Build SSE write-back: pushes each frame into the stream queue and flushes.
-    struct H2SseContext {
-        Http2Connection* conn;
-        Http2Stream* stream;
-    } h2_sse_ctx{this, stream};
-
-    SseProvider sse_provider{
-        .user_data = &h2_sse_ctx,
-        .build = [](void* ud) -> SseWriteFn {
-            auto* c = static_cast<H2SseContext*>(ud);
-            return [conn = c->conn, stream = c->stream](std::string frame) -> core::Task<void> {
-                co_await conn->push_sse_frame(stream, std::move(frame));
-            };
-        }
-    };
-
-    auto grpc_writer = [conn = this, stream](std::string frame) -> core::Task<void> {
-        co_await conn->push_grpc_frame(stream, std::move(frame));
-    };
-
-    co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider, std::move(grpc_writer), stream->grpc_inbound);
-
-    if (!*alive) {
-        co_return;
-    }
-
-    stream->async_running = false;
-
-    if (stream->reset || (!closed_stream_ids_.empty() && closed_stream_ids_.contains(sid))) {
-        auto it = streams_.find(sid);
-        if (it != streams_.end()) {
-            if (stream_pool_.size() < 256) {
-                it->second->reset_state();
-                stream_pool_.push_back(std::move(it->second));
-            }
-            streams_.erase(it);
-        }
-        co_return;
-    }
-
-    if (stream->res.is_trailers_only()) {
-        if (!stream->response_submitted) {
-            submit_response(stream);
-        }
-    } else if (stream->is_grpc_stream) {
-        if (!stream->response_submitted) {
-            submit_grpc_headers(stream);
-        }
-        stream->grpc_eof = true;
-        if (!stream->res.trailers().contains("grpc-status")) {
-            stream->res.trailer("grpc-status", "0");
-        }
-        nghttp2_session_resume_data(session_, stream->stream_id);
-    } else if (stream->res.is_sse()) {
-        if (!stream->response_submitted) {
-            stream->is_sse = true;
-            submit_sse_headers(stream);
-        }
-        stream->sse_eof = true;
-        nghttp2_session_resume_data(session_, stream->stream_id);
-    } else {
-        submit_response(stream);
-    }
-
-    (void)co_await flush_outbound();
-}
-
 core::Task<void> Http2Connection::dispatch_pending_requests() {
     if (pending_dispatch_.empty()) co_return;
 
@@ -922,7 +831,7 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
     pending_dispatch_.clear();
 
     for (int32_t sid : ready) {
-        if (!closed_stream_ids_.empty() && closed_stream_ids_.contains(sid)) continue;
+        if (closed_stream_ids_.contains(sid)) continue;
         auto it = streams_.find(sid);
         if (it == streams_.end()) continue;
         auto* stream = it->second.get();
@@ -942,32 +851,54 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
         Context ctx(stream->req, stream->res, services_);
         if (router_.dispatch_sync(stream->req, stream->res, services_, ctx)) [[likely]] {
             // Handled synchronously inline with 0 coroutines
-            if (stream->res.is_trailers_only()) {
-                if (!stream->response_submitted) {
-                    submit_response(stream);
+        } else {
+            // Build SSE write-back: pushes each frame into the stream queue and flushes.
+            struct H2SseContext {
+                Http2Connection* conn;
+                Http2Stream* stream;
+            } h2_sse_ctx{this, stream};
+
+            SseProvider sse_provider{
+                .user_data = &h2_sse_ctx,
+                .build = [](void* ud) -> SseWriteFn {
+                    auto* c = static_cast<H2SseContext*>(ud);
+                    return [conn = c->conn, stream = c->stream](std::string frame) -> core::Task<void> {
+                        co_await conn->push_sse_frame(stream, std::move(frame));
+                    };
                 }
-            } else if (stream->is_grpc_stream) {
-                if (!stream->response_submitted) {
-                    submit_grpc_headers(stream);
-                }
-                stream->grpc_eof = true;
-                if (!stream->res.trailers().contains("grpc-status")) {
-                    stream->res.trailer("grpc-status", "0");
-                }
-                nghttp2_session_resume_data(session_, stream->stream_id);
-            } else if (stream->res.is_sse()) {
-                if (!stream->response_submitted) {
-                    stream->is_sse = true;
-                    submit_sse_headers(stream);
-                }
-                stream->sse_eof = true;
-                nghttp2_session_resume_data(session_, stream->stream_id);
-            } else {
+            };
+
+            auto grpc_writer = [conn = this, stream](std::string frame) -> core::Task<void> {
+                co_await conn->push_grpc_frame(stream, std::move(frame));
+            };
+
+            co_await router_.dispatch(stream->req, stream->res, services_, nullptr, sse_provider, std::move(grpc_writer), stream->grpc_inbound);
+        }
+
+        if (stream->res.is_trailers_only()) {
+            if (!stream->response_submitted) {
                 submit_response(stream);
             }
+        } else if (stream->is_grpc_stream) {
+            if (!stream->response_submitted) {
+                submit_grpc_headers(stream);
+            }
+            stream->grpc_eof = true;
+            if (!stream->res.trailers().contains("grpc-status")) {
+                stream->res.trailer("grpc-status", "0");
+            }
+            nghttp2_session_resume_data(session_, stream->stream_id);
+        } else if (stream->res.is_sse()) {
+            // Headers were marked by ctx.sse(); submit HEADERS frame if not yet done.
+            // Data was already streamed event-by-event via push_sse_frame.
+            if (!stream->response_submitted) {
+                stream->is_sse = true;
+                submit_sse_headers(stream);
+            }
+            stream->sse_eof = true;  // handler finished; next data_source_read -> EOF
+            nghttp2_session_resume_data(session_, stream->stream_id);
         } else {
-            // Handled asynchronously in a concurrent detached task — non-blocking!
-            dispatch_async_stream(stream);
+            submit_response(stream);
         }
     }
 }
@@ -1052,9 +983,6 @@ core::Task<bool> Http2Connection::feed_data(const void* data, size_t len) {
     while (rem >= 9) {
         auto hdr = FrameHeader::decode(p);
         size_t frame_total = 9 + hdr.length;
-        if (frame_total > rem) {
-            break;
-        }
 
         if (hdr.type == FrameType::PRIORITY) {
             if (hdr.stream_id == 0) {
@@ -1081,7 +1009,7 @@ core::Task<bool> Http2Connection::feed_data(const void* data, size_t len) {
             if (hdr.stream_id % 2 == 1) {
                 auto it = streams_.find(hdr.stream_id);
                 bool is_half_closed = (it != streams_.end() && it->second->request_complete);
-                if ((!closed_stream_ids_.empty() && closed_stream_ids_.contains(hdr.stream_id)) || is_half_closed) {
+                if (closed_stream_ids_.contains(hdr.stream_id) || is_half_closed) {
                     // RFC 7540 §5.1: receipt of HEADERS on closed stream MUST be STREAM_CLOSED
                     last_error_code_ = NGHTTP2_STREAM_CLOSED;
                     auto goaway = make_goaway_frame(static_cast<uint32_t>(max_remote_stream_id_), NGHTTP2_STREAM_CLOSED);
@@ -1103,7 +1031,7 @@ core::Task<bool> Http2Connection::feed_data(const void* data, size_t len) {
         } else if (hdr.type == FrameType::DATA) {
             auto it = streams_.find(hdr.stream_id);
             bool is_half_closed = (it != streams_.end() && it->second->request_complete);
-            if ((!closed_stream_ids_.empty() && closed_stream_ids_.contains(hdr.stream_id)) || is_half_closed) {
+            if (closed_stream_ids_.contains(hdr.stream_id) || is_half_closed) {
                 // RFC 7540 §5.1 & §6.1: DATA on closed stream MUST be stream error STREAM_CLOSED
                 auto rst = make_rst_frame(hdr.stream_id, NGHTTP2_STREAM_CLOSED);
                 outbound_buf_.append(reinterpret_cast<const char*>(rst.data()), rst.size());
@@ -1111,6 +1039,9 @@ core::Task<bool> Http2Connection::feed_data(const void* data, size_t len) {
             }
         }
 
+        if (frame_total > rem) {
+            break;
+        }
         p += frame_total;
         rem -= frame_total;
     }
