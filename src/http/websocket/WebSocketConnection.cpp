@@ -73,14 +73,12 @@ core::Task<void> WebSocketConnection::run(std::string initial_data) {
 }
 
 core::Task<void> WebSocketConnection::run(core::MultishotRecvStream stream, std::string initial_data) {
-    if (!initial_data.empty()) {
-        bool ok = co_await session_.process_incoming_data(initial_data);
-        if (!ok || session_.is_closed()) {
-            is_open_ = false;
-            (void)(co_await loop_.engine().close(client_fd_));
-            client_fd_ = core::INVALID_OS_SOCKET;
-            co_return;
-        }
+    bool ok = co_await session_.process_incoming_data(initial_data);
+    if (!ok || session_.is_closed()) {
+        is_open_ = false;
+        (void)(co_await loop_.engine().close(client_fd_));
+        client_fd_ = core::INVALID_OS_SOCKET;
+        co_return;
     }
 
     while (is_open_ && !session_.is_closed()) {
