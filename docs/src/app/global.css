@@ -10,6 +10,7 @@
 
 html {
   scrollbar-gutter: stable;
+  scroll-behavior: smooth;
 }
 
 html > body[data-scroll-locked] {
@@ -23,19 +24,46 @@ html > body[data-scroll-locked] {
   background-size: 32px 32px;
 }
 
+.aegon-grid-dense {
+  background-image: radial-gradient(rgba(255, 223, 102, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
 .aegon-glow {
-  box-shadow: 0 0 60px -10px rgba(255, 223, 102, 0.15);
+  box-shadow: 0 0 50px -10px rgba(245, 158, 11, 0.18);
+}
+
+.aegon-glow-sm {
+  box-shadow: 0 0 25px -5px rgba(245, 158, 11, 0.12);
 }
 
 .aegon-card {
-  background: rgba(18, 18, 20, 0.6);
+  background: rgba(18, 18, 22, 0.7);
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .aegon-card:hover {
-  border-color: rgba(255, 223, 102, 0.35);
-  box-shadow: 0 10px 30px -10px rgba(255, 223, 102, 0.12);
+  border-color: rgba(255, 223, 102, 0.3);
+  box-shadow: 0 10px 30px -10px rgba(245, 158, 11, 0.12);
   transform: translateY(-2px);
+}
+
+.aegon-terminal-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.aegon-terminal-scrollbar::-webkit-scrollbar-track {
+  background: rgba(10, 10, 12, 0.5);
+}
+
+.aegon-terminal-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.aegon-terminal-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 223, 102, 0.3);
 }
