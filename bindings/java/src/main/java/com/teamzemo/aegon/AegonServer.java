@@ -8,9 +8,15 @@ import com.teamzemo.aegon.internal.ffi.ServerFfi;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * Top-level Aegon HTTP/1.1, HTTP/2, and HTTP/3 Web Server matching Aegon C++ {@code aegon::http::Server}.
@@ -39,6 +45,50 @@ public final class AegonServer implements AutoCloseable {
     private MemorySegment serverPtr;
     private Arena serverArena;
     private volatile boolean running;
+
+    private static final AtomicLong CB_SEQ = new AtomicLong(1);
+    private static final ConcurrentHashMap<Long, Consumer<AegonServer>> LIFECYCLE_REGISTRY = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Long, Runnable> WORKER_REGISTRY = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<Long, AegonServer> SERVER_INSTANCE_MAP = new ConcurrentHashMap<>();
+
+    private static final MemorySegment LIFECYCLE_STUB;
+    private static final MemorySegment WORKER_STUB;
+
+    static {
+        try {
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
+            MethodHandle mhLife = lookup.findStatic(AegonServer.class, "lifecycleTrampoline",
+                    MethodType.methodType(void.class, MemorySegment.class, MemorySegment.class));
+            LIFECYCLE_STUB = FfiSupport.LINKER.upcallStub(mhLife, ServerFfi.LIFECYCLE_UPCALL_DESC, Arena.global());
+
+            MethodHandle mhWork = lookup.findStatic(AegonServer.class, "workerTrampoline",
+                    MethodType.methodType(void.class, MemorySegment.class));
+            WORKER_STUB = FfiSupport.LINKER.upcallStub(mhWork, ServerFfi.WORKER_UPCALL_DESC, Arena.global());
+        } catch (Throwable t) {
+            throw new ExceptionInInitializerError("Failed to initialize AegonServer upcall stubs: " + t.getMessage());
+        }
+    }
+
+    private static void lifecycleTrampoline(MemorySegment serverPtr, MemorySegment userdataPtr) {
+        long id = userdataPtr.address();
+        Consumer<AegonServer> cb = LIFECYCLE_REGISTRY.get(id);
+        if (cb != null) {
+            try {
+                AegonServer s = SERVER_INSTANCE_MAP.get(serverPtr.address());
+                cb.accept(s);
+            } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void workerTrampoline(MemorySegment userdataPtr) {
+        long id = userdataPtr.address();
+        Runnable r = WORKER_REGISTRY.get(id);
+        if (r != null) {
+            try {
+                r.run();
+            } catch (Throwable ignored) {}
+        }
+    }
 
     private record Listener(int port, String host, boolean isTls) {}
 
@@ -179,6 +229,78 @@ public final class AegonServer implements AutoCloseable {
     }
 
     /**
+     * Registers a callback invoked when the server finishes binding and starts accepting connections.
+     *
+     * @param callback lifecycle callback
+     * @return this {@link AegonServer}
+     */
+    public AegonServer onStart(Consumer<AegonServer> callback) {
+        checkNotRunning();
+        initNativeServer();
+        long id = CB_SEQ.getAndIncrement();
+        LIFECYCLE_REGISTRY.put(id, callback);
+        try {
+            MemorySegment userdata = MemorySegment.ofAddress(id);
+            int err = (int) ServerFfi.MH_aegon_server_on_start.invokeExact(
+                    serverPtr, LIFECYCLE_STUB, userdata, Router.CLEANUP_UPCALL_STUB
+            );
+            FfiSupport.checkErr(err);
+            return this;
+        } catch (Throwable t) {
+            LIFECYCLE_REGISTRY.remove(id);
+            throw new RuntimeException("Failed to register onStart handler: " + t.getMessage(), t);
+        }
+    }
+
+    /**
+     * Registers a callback invoked when the server begins shutting down.
+     *
+     * @param callback lifecycle callback
+     * @return this {@link AegonServer}
+     */
+    public AegonServer onStop(Consumer<AegonServer> callback) {
+        checkNotRunning();
+        initNativeServer();
+        long id = CB_SEQ.getAndIncrement();
+        LIFECYCLE_REGISTRY.put(id, callback);
+        try {
+            MemorySegment userdata = MemorySegment.ofAddress(id);
+            int err = (int) ServerFfi.MH_aegon_server_on_stop.invokeExact(
+                    serverPtr, LIFECYCLE_STUB, userdata, Router.CLEANUP_UPCALL_STUB
+            );
+            FfiSupport.checkErr(err);
+            return this;
+        } catch (Throwable t) {
+            LIFECYCLE_REGISTRY.remove(id);
+            throw new RuntimeException("Failed to register onStop handler: " + t.getMessage(), t);
+        }
+    }
+
+    /**
+     * Spawns a background worker thread associated with the server's lifecycle.
+     *
+     * @param worker runnable task
+     * @return this {@link AegonServer}
+     */
+    public AegonServer spawnWorker(Runnable worker) {
+        checkNotRunning();
+        initNativeServer();
+        long id = CB_SEQ.getAndIncrement();
+        WORKER_REGISTRY.put(id, worker);
+        try {
+            MemorySegment userdata = MemorySegment.ofAddress(id);
+            int err = (int) ServerFfi.MH_aegon_server_spawn_worker.invokeExact(
+                    serverPtr, WORKER_STUB, userdata, Router.CLEANUP_UPCALL_STUB
+            );
+            FfiSupport.checkErr(err);
+            return this;
+        } catch (Throwable t) {
+            WORKER_REGISTRY.remove(id);
+            throw new RuntimeException("Failed to register worker: " + t.getMessage(), t);
+        }
+    }
+
+    /**
      * Starts the server blocking on all available CPU cores (hardware concurrency).
      */
     public void run() {
@@ -282,6 +404,7 @@ public final class AegonServer implements AutoCloseable {
             if (serverPtr.equals(MemorySegment.NULL)) {
                 throw new RuntimeException("Failed to allocate native AegonServer");
             }
+            SERVER_INSTANCE_MAP.put(serverPtr.address(), this);
             router.markConsumed();
 
             // Enable TLS if configured
@@ -328,6 +451,7 @@ public final class AegonServer implements AutoCloseable {
     public void close() {
         stop();
         if (serverPtr != null && !serverPtr.equals(MemorySegment.NULL)) {
+            SERVER_INSTANCE_MAP.remove(serverPtr.address());
             try {
                 ServerFfi.MH_aegon_server_destroy.invokeExact(serverPtr);
             } catch (Throwable ignored) {}

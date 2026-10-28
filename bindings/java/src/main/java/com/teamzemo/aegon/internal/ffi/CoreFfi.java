@@ -36,6 +36,15 @@ public final class CoreFfi {
     public static final MethodHandle MH_aegon_last_error = FfiSupport.downcall("aegon_last_error",
             FunctionDescriptor.of(ValueLayout.ADDRESS));
 
+    public static final MethodHandle MH_aegon_last_error_clear = FfiSupport.downcall("aegon_last_error_clear",
+            FunctionDescriptor.ofVoid());
+
+    public static final MethodHandle MH_aegon_str = FfiSupport.downcall("aegon_str",
+            FunctionDescriptor.of(FfiSupport.STR_LAYOUT, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_str_dup = FfiSupport.downcall("aegon_str_dup",
+            FunctionDescriptor.of(FfiSupport.STR_LAYOUT, FfiSupport.STR_LAYOUT));
+
     public static final MethodHandle MH_aegon_mem_free = FfiSupport.downcall("aegon_mem_free",
             FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
 

@@ -35,6 +35,27 @@ public final class RouterFfi {
     public static final MethodHandle MH_aegon_router_add_async = FfiSupport.downcall("aegon_router_add_async",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
+    public static final MethodHandle MH_aegon_router_get = FfiSupport.downcall("aegon_router_get",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_router_post = FfiSupport.downcall("aegon_router_post",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_router_put = FfiSupport.downcall("aegon_router_put",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_router_del = FfiSupport.downcall("aegon_router_del",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_router_patch = FfiSupport.downcall("aegon_router_patch",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_router_all = FfiSupport.downcall("aegon_router_all",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_router_add_mw = FfiSupport.downcall("aegon_router_add_mw",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
     public static final MethodHandle MH_aegon_router_on_error = FfiSupport.downcall("aegon_router_on_error",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
@@ -59,6 +80,27 @@ public final class RouterFfi {
 
     public static final MethodHandle MH_aegon_group_add_async = FfiSupport.downcall("aegon_group_add_async",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_group_get = FfiSupport.downcall("aegon_group_get",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_group_post = FfiSupport.downcall("aegon_group_post",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_group_put = FfiSupport.downcall("aegon_group_put",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_group_del = FfiSupport.downcall("aegon_group_del",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_group_patch = FfiSupport.downcall("aegon_group_patch",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_group_all = FfiSupport.downcall("aegon_group_all",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_group_add_mw = FfiSupport.downcall("aegon_group_add_mw",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
     private RouterFfi() {}
 }

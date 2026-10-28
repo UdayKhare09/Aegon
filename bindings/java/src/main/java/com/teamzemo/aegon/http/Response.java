@@ -365,6 +365,25 @@ public final class Response {
     }
 
     /**
+     * Sets an HTTP/2 or HTTP/3 trailing header using static literal C string pointers.
+     *
+     * @param name static trailer header name
+     * @param value static trailer header value
+     * @return {@code this} response builder
+     */
+    public Response trailerStatic(String name, String value) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment nameSeg = arena.allocateFrom(name);
+            MemorySegment valSeg = arena.allocateFrom(value);
+            int err = (int) ResponseFfi.MH_aegon_res_trailer_static.invokeExact(resPtr, nameSeg, valSeg);
+            FfiSupport.checkErr(err);
+            return this;
+        } catch (Throwable t) {
+            throw new RuntimeException("Failed to set static trailer: " + t.getMessage(), t);
+        }
+    }
+
+    /**
      * Specifies whether to send only trailers (e.g. gRPC trailers-only responses).
      *
      * @param on true for trailers-only

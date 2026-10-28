@@ -87,6 +87,9 @@ public final class ResponseFfi {
     public static final MethodHandle MH_aegon_res_trailer = FfiSupport.downcall("aegon_res_trailer",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, FfiSupport.STR_LAYOUT, FfiSupport.STR_LAYOUT));
 
+    public static final MethodHandle MH_aegon_res_trailer_static = FfiSupport.downcall("aegon_res_trailer_static",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
     public static final MethodHandle MH_aegon_res_trailers_only = FfiSupport.downcall("aegon_res_trailers_only",
             FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.JAVA_BOOLEAN));
 

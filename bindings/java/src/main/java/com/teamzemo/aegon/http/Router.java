@@ -249,6 +249,48 @@ public final class Router implements AutoCloseable {
         }
     }
 
+    /**
+     * Registers a route with route-scoped middleware slots matching {@code aegon_router_add_mw}.
+     *
+     * @param method HTTP method
+     * @param pattern URL route pattern
+     * @param middlewares list of middleware to apply before handler
+     * @param handler terminal route handler
+     * @return this {@link Router}
+     */
+    public Router addWithMiddleware(Method method, String pattern, java.util.List<Middleware> middlewares, Handler handler) {
+        checkNotClosed();
+        long handlerId = registerSyncHandler(handler);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment patternSeg = arena.allocateFrom(pattern);
+            int mwCount = middlewares != null ? middlewares.size() : 0;
+            MemorySegment slots = mwCount > 0 ? arena.allocate(MiddlewareFfi.MIDDLEWARE_SLOT_LAYOUT, mwCount) : MemorySegment.NULL;
+            for (int i = 0; i < mwCount; i++) {
+                long mwId = registerMiddleware(middlewares.get(i));
+                MemorySegment slot = slots.asSlice(i * MiddlewareFfi.MIDDLEWARE_SLOT_LAYOUT.byteSize(), MiddlewareFfi.MIDDLEWARE_SLOT_LAYOUT);
+                slot.set(java.lang.foreign.ValueLayout.ADDRESS, 0, MIDDLEWARE_UPCALL_STUB);
+                slot.set(java.lang.foreign.ValueLayout.ADDRESS, java.lang.foreign.ValueLayout.ADDRESS.byteSize(), MemorySegment.ofAddress(mwId));
+                slot.set(java.lang.foreign.ValueLayout.ADDRESS, java.lang.foreign.ValueLayout.ADDRESS.byteSize() * 2, MIDDLEWARE_CLEANUP_STUB);
+            }
+            MemorySegment handlerUserdata = MemorySegment.ofAddress(handlerId);
+            int err = (int) RouterFfi.MH_aegon_router_add_mw.invokeExact(
+                    routerPtr,
+                    method.nativeCode(),
+                    patternSeg,
+                    slots,
+                    (long) mwCount,
+                    SYNC_UPCALL_STUB,
+                    handlerUserdata,
+                    CLEANUP_UPCALL_STUB
+            );
+            FfiSupport.checkErr(err);
+            return this;
+        } catch (Throwable t) {
+            unregisterSyncHandler(handlerId);
+            throw new RuntimeException("Failed to add route with middleware: " + t.getMessage(), t);
+        }
+    }
+
     /* -------------------------------------------------------------------------
      * Route Groups
      * ------------------------------------------------------------------------- */

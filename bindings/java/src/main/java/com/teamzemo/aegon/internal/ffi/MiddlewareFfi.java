@@ -16,6 +16,12 @@ public final class MiddlewareFfi {
             ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS
     );
 
+    public static final java.lang.foreign.StructLayout MIDDLEWARE_SLOT_LAYOUT = java.lang.foreign.MemoryLayout.structLayout(
+            ValueLayout.ADDRESS.withName("fn"),
+            ValueLayout.ADDRESS.withName("userdata"),
+            ValueLayout.ADDRESS.withName("cleanup")
+    );
+
     public static final MethodHandle MH_aegon_next_call = FfiSupport.downcall("aegon_next_call",
             FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 

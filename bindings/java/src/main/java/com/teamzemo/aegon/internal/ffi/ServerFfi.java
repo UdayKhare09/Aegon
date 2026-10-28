@@ -51,6 +51,23 @@ public final class ServerFfi {
     public static final MethodHandle MH_aegon_server_is_running = FfiSupport.downcall("aegon_server_is_running",
             FunctionDescriptor.of(ValueLayout.JAVA_BOOLEAN, ValueLayout.ADDRESS));
 
+    public static final FunctionDescriptor LIFECYCLE_UPCALL_DESC = FunctionDescriptor.ofVoid(
+            ValueLayout.ADDRESS, ValueLayout.ADDRESS
+    );
+
+    public static final FunctionDescriptor WORKER_UPCALL_DESC = FunctionDescriptor.ofVoid(
+            ValueLayout.ADDRESS
+    );
+
+    public static final MethodHandle MH_aegon_server_on_start = FfiSupport.downcall("aegon_server_on_start",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_server_on_stop = FfiSupport.downcall("aegon_server_on_stop",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_server_spawn_worker = FfiSupport.downcall("aegon_server_spawn_worker",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
     private ServerFfi() {}
 }
 
