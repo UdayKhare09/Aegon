@@ -1,0 +1,12 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: aegon-c
+Description: C ABI for the Aegon high-performance HTTP engine
+Version: @AEGON_VERSION_STRING@
+Libs: -L${libdir} -laegon_c
+Libs.private: @AEGON_C_PRIVATE_LIBS@
+Cflags: -I${includedir}
+

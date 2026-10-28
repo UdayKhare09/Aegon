@@ -165,3 +165,56 @@ if(TARGET aegon_http)
     target_link_libraries(test_grpc_bidi_streaming PRIVATE aegon_http aegon_core ${AEGON_PROTOBUF_LIB})
     add_test(NAME grpc_bidi_streaming COMMAND test_grpc_bidi_streaming)
 endif()
+
+# ==============================================================================
+# Pure C ABI Tests
+# ==============================================================================
+if(AEGON_BUILD_C_ABI AND TARGET aegon_c)
+    function(aegon_add_c_test name source_file)
+        add_executable(c_${name} ${source_file})
+        target_link_libraries(c_${name} PRIVATE aegon_c)
+        set_target_properties(c_${name} PROPERTIES
+            C_STANDARD 11
+            C_STANDARD_REQUIRED ON
+            C_EXTENSIONS OFF
+        )
+        if(MSVC)
+            target_compile_options(c_${name} PRIVATE /W4 /WX)
+        else()
+            target_compile_options(c_${name} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+            target_compile_definitions(c_${name} PRIVATE _DEFAULT_SOURCE _POSIX_C_SOURCE=200809L)
+        endif()
+        add_test(NAME c_${name} COMMAND c_${name})
+    endfunction()
+
+    aegon_add_c_test(test_core c/test_core.c)
+    aegon_add_c_test(test_log c/test_log.c)
+    aegon_add_c_test(test_request c/test_request.c)
+    aegon_add_c_test(test_response c/test_response.c)
+    aegon_add_c_test(test_router c/test_router.c)
+    aegon_add_c_test(test_group c/test_group.c)
+    aegon_add_c_test(test_server c/test_server.c)
+    aegon_add_c_test(test_middleware c/test_middleware.c)
+    aegon_add_c_test(test_cors c/test_cors.c)
+    aegon_add_c_test(test_compress c/test_compress.c)
+    aegon_add_c_test(test_security c/test_security.c)
+    aegon_add_c_test(test_access_log c/test_access_log.c)
+    aegon_add_c_test(test_static_files c/test_static_files.c)
+    aegon_add_c_test(test_multipart c/test_multipart.c)
+    aegon_add_c_test(test_all_headers c/all_headers.c)
+
+    add_executable(c_test_core_static c/test_core.c)
+    target_link_libraries(c_test_core_static PRIVATE aegon_c_static)
+    set_target_properties(c_test_core_static PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+    )
+    if(MSVC)
+        target_compile_options(c_test_core_static PRIVATE /W4 /WX)
+    else()
+        target_compile_options(c_test_core_static PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        target_compile_definitions(c_test_core_static PRIVATE _DEFAULT_SOURCE _POSIX_C_SOURCE=200809L)
+    endif()
+    add_test(NAME c_test_core_static COMMAND c_test_core_static)
+endif()

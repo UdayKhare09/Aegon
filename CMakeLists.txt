@@ -19,7 +19,7 @@ endif()
 
 project(Aegon
     VERSION ${AEGON_VERSION_MAJOR}.${AEGON_VERSION_MINOR}.${AEGON_VERSION_PATCH}
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 include(GNUInstallDirs)
@@ -225,6 +225,82 @@ target_precompile_headers(aegon_http PRIVATE
     <openssl/crypto.h>
 )
 
+# 7. C ABI Wrapper Library (libaegon_c shared + static)
+option(AEGON_BUILD_C_ABI "Build the C ABI wrapper library (libaegon_c)" ON)
+
+if(AEGON_BUILD_C_ABI)
+    set(AEGON_C_SOURCES
+        src/c/error.cpp
+        src/c/log.cpp
+        src/c/request.cpp
+        src/c/response.cpp
+        src/c/context.cpp
+        src/c/router.cpp
+        src/c/server.cpp
+        src/c/middleware.cpp
+        src/c/cors.cpp
+        src/c/compress.cpp
+        src/c/security.cpp
+        src/c/access_log.cpp
+        src/c/static_files.cpp
+        src/c/multipart.cpp
+    )
+
+    # Static archive: libaegon_c.a (or aegon_c_static.lib on Windows)
+    add_library(aegon_c_static STATIC ${AEGON_C_SOURCES})
+    add_library(Aegon::c_static ALIAS aegon_c_static)
+    target_link_libraries(aegon_c_static PRIVATE aegon_http)
+    target_compile_definitions(aegon_c_static PRIVATE AEGON_C_BUILDING)
+    target_compile_definitions(aegon_c_static PUBLIC AEGON_C_STATIC)
+    set_target_properties(aegon_c_static PROPERTIES
+        OUTPUT_NAME aegon_c
+        EXPORT_NAME c_static
+        POSITION_INDEPENDENT_CODE ON
+    )
+    if(WIN32)
+        set_target_properties(aegon_c_static PROPERTIES OUTPUT_NAME aegon_c_static)
+    endif()
+    target_include_directories(aegon_c_static PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    )
+    target_include_directories(aegon_c_static PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    # Shared library: libaegon_c.so / aegon_c.dll (for FFIs)
+    add_library(aegon_c_shared SHARED ${AEGON_C_SOURCES})
+    add_library(Aegon::c_shared ALIAS aegon_c_shared)
+    add_library(Aegon::c ALIAS aegon_c_shared)
+    add_library(aegon_c ALIAS aegon_c_shared)
+    target_link_libraries(aegon_c_shared PRIVATE aegon_http)
+    target_compile_definitions(aegon_c_shared PRIVATE AEGON_C_BUILDING)
+    set_target_properties(aegon_c_shared PROPERTIES
+        OUTPUT_NAME aegon_c
+        EXPORT_NAME c
+        VERSION   ${AEGON_VERSION_STRING}
+        SOVERSION 1
+        C_VISIBILITY_PRESET     hidden
+        CXX_VISIBILITY_PRESET   hidden
+        VISIBILITY_INLINES_HIDDEN ON
+        POSITION_INDEPENDENT_CODE ON
+    )
+    target_include_directories(aegon_c_shared PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    )
+    target_include_directories(aegon_c_shared PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    if(UNIX AND NOT APPLE)
+        target_link_options(aegon_c_shared PRIVATE
+            "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/cmake/aegon_c.map")
+    endif()
+
+    include(cmake/CheckCHeaders.cmake)
+endif()
+
 # ==============================================================================
 # Include Directories, Aliases & Export Names
 # ==============================================================================
@@ -243,6 +319,10 @@ foreach(mod ${AEGON_MODULES})
         list(APPEND AEGON_ACTIVE_TARGETS aegon_${mod})
     endif()
 endforeach()
+
+if(AEGON_BUILD_C_ABI AND TARGET aegon_c_shared)
+    list(APPEND AEGON_ACTIVE_TARGETS aegon_c_shared aegon_c_static)
+endif()
 
 if(TARGET aegon_orm)
     target_include_directories(aegon_orm PUBLIC
@@ -268,6 +348,14 @@ endif()
 # ==============================================================================
 if(AEGON_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
+endif()
+
+# ==============================================================================
+# C ABI Examples
+# ==============================================================================
+option(AEGON_BUILD_C_EXAMPLES "Build C ABI examples" OFF)
+if(AEGON_BUILD_C_ABI AND AEGON_BUILD_C_EXAMPLES)
+    add_subdirectory(examples/c)
 endif()
 
 

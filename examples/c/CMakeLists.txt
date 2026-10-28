@@ -1,0 +1,7 @@
+add_subdirectory(hello_world)
+add_subdirectory(rest_json)
+add_subdirectory(tls_server)
+add_subdirectory(middleware_chain)
+add_subdirectory(static_site)
+add_subdirectory(upload)
+

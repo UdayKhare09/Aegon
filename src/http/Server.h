@@ -274,6 +274,7 @@ public:
     [[nodiscard]] std::string_view host() const noexcept { return host_; }
     [[nodiscard]] const std::vector<ListenerConfig>& listeners() const noexcept { return listeners_; }
     [[nodiscard]] bool is_tls_enabled() const noexcept { return tls_enabled_; }
+    [[nodiscard]] bool is_running() const noexcept { return running_.load(std::memory_order_acquire); }
 
 private:
     core::Task<void> handle_connection(core::EventLoop& loop, core::os_socket_t client_fd);

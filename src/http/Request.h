@@ -98,6 +98,11 @@ public:
         return std::nullopt;
     }
 
+    [[nodiscard]] size_t param_count() const noexcept { return param_count_; }
+    [[nodiscard]] std::span<const RouteParam> params() const noexcept {
+        return {params_.data(), param_count_};
+    }
+
 
     /**
      * @brief Parse query parameter from query string (e.g. ?foo=bar&baz=123)

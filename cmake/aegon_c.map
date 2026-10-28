@@ -1,0 +1,7 @@
+AEGON_C_1.0 {
+    global:
+        aegon_*;
+    local:
+        *;
+};
+
