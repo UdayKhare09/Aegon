@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include "core/engine/IoEngine.h"
 
 namespace aegon::http {
 
@@ -44,6 +45,9 @@ struct WebSocketConfig {
  * HTTP/2 settings, flood mitigations, and WebSocket sessions.
  */
 struct ServerConfig {
+    // I/O Engine Selection
+    core::EngineType engine_type{core::EngineType::Auto};
+
     // Protocol payload & compliance limits
     ProtocolLimits limits{};
 

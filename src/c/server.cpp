@@ -33,6 +33,17 @@ void copy_server_config(aegon::http::ServerConfig& target, const aegon_server_co
 
     #define AEGON_HAS_FIELD(m) (sz >= offsetof(aegon_server_config_t, m) + sizeof(cfg->m))
 
+    if (AEGON_HAS_FIELD(engine)) {
+        switch (cfg->engine) {
+            case AEGON_ENGINE_IOURING: target.engine_type = aegon::core::EngineType::IoUring; break;
+            case AEGON_ENGINE_EPOLL:   target.engine_type = aegon::core::EngineType::Epoll;   break;
+            case AEGON_ENGINE_KQUEUE:  target.engine_type = aegon::core::EngineType::Kqueue;  break;
+            case AEGON_ENGINE_IOCP:    target.engine_type = aegon::core::EngineType::Iocp;    break;
+            case AEGON_ENGINE_AUTO:
+            default:                   target.engine_type = aegon::core::EngineType::Auto;    break;
+        }
+    }
+
     if (AEGON_HAS_FIELD(ring_entries)) target.ring_entries = cfg->ring_entries;
     if (AEGON_HAS_FIELD(buffer_pool_entries)) target.buffer_pool_entries = cfg->buffer_pool_entries;
     if (AEGON_HAS_FIELD(buffer_size)) target.buffer_size = cfg->buffer_size;

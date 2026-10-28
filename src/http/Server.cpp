@@ -325,6 +325,7 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
     }
 
     core::EngineConfig engine_cfg;
+    engine_cfg.type = config_.engine_type;
     engine_cfg.entries = config_.ring_entries;
 
     core::EventLoop loop(engine_cfg, config_.buffer_pool_entries, config_.buffer_size);
