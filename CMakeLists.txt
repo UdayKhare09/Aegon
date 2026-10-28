@@ -244,6 +244,9 @@ if(AEGON_BUILD_C_ABI)
         src/c/access_log.cpp
         src/c/static_files.cpp
         src/c/multipart.cpp
+        src/c/async.cpp
+        src/c/websocket.cpp
+        src/c/sse.cpp
     )
 
     # Static archive: libaegon_c.a (or aegon_c_static.lib on Windows)

@@ -5,7 +5,9 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
+#include <thread>
 #include <arpa/inet.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 using namespace aegon::core;
@@ -169,6 +171,44 @@ int main() {
         }
         assert(caught);
         std::cout << "  -> PASS: Buffer clamping, OOB protection, and coroutine exceptions verified.\n";
+    }
+
+    // 6. EventLoop::post Cross-Thread Task Injection Test
+    std::cout << "[TEST 6] Testing EventLoop::post cross-thread task injection...\n";
+    {
+        EventLoop loop(1024, 64, 4096);
+        std::atomic<int> posted_counter{0};
+
+        int sv[2];
+        assert(::socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
+
+        char recv_buf[1];
+        auto loop_root = [&]() -> Task<void> {
+            (void)co_await loop.engine().recv(sv[0], recv_buf, 1);
+            co_return;
+        };
+        loop.spawn(loop_root());
+
+        // Foreign thread posts 5 lambdas, then unblocks the root task
+        std::thread foreign_thread([&]() {
+            for (int i = 0; i < 5; ++i) {
+                loop.post([&posted_counter]() {
+                    posted_counter.fetch_add(1, std::memory_order_release);
+                });
+            }
+            char c = 'x';
+            assert(::send(sv[1], &c, 1, 0) == 1);
+        });
+
+        // Run the event loop on the thread that created it
+        loop.run();
+
+        foreign_thread.join();
+        ::close(sv[0]);
+        ::close(sv[1]);
+
+        assert(posted_counter.load(std::memory_order_acquire) == 5);
+        std::cout << "  -> PASS: EventLoop::post executed 5 tasks from foreign thread.\n";
     }
 
     std::cout << "\n=======================================================\n";

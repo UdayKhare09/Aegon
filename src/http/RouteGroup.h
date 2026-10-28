@@ -79,6 +79,8 @@ public:
 
     [[nodiscard]] std::string_view prefix() const noexcept { return prefix_; }
     [[nodiscard]] const std::vector<MiddlewareFn>& middleware() const noexcept { return middleware_; }
+    [[nodiscard]] Router& router() noexcept { return router_; }
+    [[nodiscard]] const Router& router() const noexcept { return router_; }
 
 private:
     Router& router_;

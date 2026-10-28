@@ -43,6 +43,7 @@ EventLoop::EventLoop(uint32_t entries, uint16_t pbuf_entries, size_t buffer_size
 
 EventLoop::~EventLoop() {
     stop();
+    drain_post_queue();
     if (engine_) {
         engine_->process_completions();
     }
@@ -82,6 +83,35 @@ void EventLoop::spawn(Task<void> task) {
     }
 }
 
+void EventLoop::post(std::function<void()> fn) {
+    if (!fn) return;
+    {
+        std::lock_guard<std::mutex> lock(post_mutex_);
+        post_queue_.push_back(std::move(fn));
+    }
+    if (engine_) {
+        engine_->wakeup();
+    }
+}
+
+void EventLoop::drain_post_queue() {
+    std::vector<std::function<void()>> local_queue;
+    {
+        std::lock_guard<std::mutex> lock(post_mutex_);
+        if (post_queue_.empty()) return;
+        local_queue.swap(post_queue_);
+    }
+    for (auto& fn : local_queue) {
+        try {
+            fn();
+        } catch (const std::exception& e) {
+            log::error("[EventLoop] Uncaught exception in posted task: {}", e.what());
+        } catch (...) {
+            log::error("[EventLoop] Uncaught unknown exception in posted task");
+        }
+    }
+}
+
 void EventLoop::stop() noexcept {
     log::debug("[EventLoop] Stop requested");
     running_.store(false, std::memory_order_release);
@@ -106,12 +136,14 @@ void EventLoop::run() {
                engine_->name(), tasks_.size());
 
     while (running_.load(std::memory_order_acquire)) {
+        drain_post_queue();
         if (tasks_.empty()) {
             break;
         }
 
         engine_->submit_and_wait(1);
         engine_->process_completions();
+        drain_post_queue();
         buffer_pool_.flush_returns();
 
         std::erase_if(tasks_, [](Task<void>& t) {
@@ -133,6 +165,7 @@ void EventLoop::run() {
         }
     }
 
+    drain_post_queue();
     if (engine_) {
         engine_->process_completions();
     }

@@ -4,4 +4,7 @@ add_subdirectory(tls_server)
 add_subdirectory(middleware_chain)
 add_subdirectory(static_site)
 add_subdirectory(upload)
+add_subdirectory(async_bridge)
+add_subdirectory(ws_echo)
+add_subdirectory(sse_feed)
 

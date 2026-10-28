@@ -97,6 +97,25 @@ AEGON_C_API void        aegon_server_stop(aegon_server_t* server);
 AEGON_C_API aegon_err_t aegon_server_join(aegon_server_t* server);
 AEGON_C_API bool        aegon_server_is_running(aegon_server_t* server);
 
+/* --- Lifecycle hooks (Phase 3) --- */
+typedef void (*aegon_lifecycle_fn)(aegon_server_t* server, void* userdata);
+
+AEGON_C_API aegon_err_t aegon_server_on_start(aegon_server_t* server,
+                                              aegon_lifecycle_fn fn,
+                                              void* userdata,
+                                              aegon_cleanup_fn cleanup);
+AEGON_C_API aegon_err_t aegon_server_on_stop(aegon_server_t* server,
+                                             aegon_lifecycle_fn fn,
+                                             void* userdata,
+                                             aegon_cleanup_fn cleanup);
+
+typedef void (*aegon_worker_fn)(void* userdata);
+
+AEGON_C_API aegon_err_t aegon_server_spawn_worker(aegon_server_t* server,
+                                                  aegon_worker_fn fn,
+                                                  void* userdata,
+                                                  aegon_cleanup_fn cleanup);
+
 AEGON_C_END
 
 #endif /* AEGON_C_SERVER_H */

@@ -17,8 +17,10 @@
 #include <aegon/c/access_log.h>
 #include <aegon/c/static_files.h>
 #include <aegon/c/multipart.h>
-/* Phase 3: async.h websocket.h sse.h
- * Phase 4: grpc.h
+#include <aegon/c/async.h>
+#include <aegon/c/websocket.h>
+#include <aegon/c/sse.h>
+/* Phase 4: grpc.h
  * (included here as each phase lands; #include order is dependency-free) */
 
 AEGON_C_BEGIN

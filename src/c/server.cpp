@@ -303,4 +303,61 @@ bool aegon_server_is_running(aegon_server_t* server) {
     return h->server->is_running() || h->async_running.load();
 }
 
+aegon_err_t aegon_server_on_start(aegon_server_t* server,
+                                  aegon_lifecycle_fn fn,
+                                  void* userdata,
+                                  aegon_cleanup_fn cleanup) {
+    if (!server || !fn) return AEGON_ERR_INVALID_ARG;
+    auto* s = aegon::c::to_cpp(server);
+    if (!s) return AEGON_ERR_INVALID_ARG;
+    if (s->is_running()) return aegon::c::record_error("server is already running", AEGON_ERR_STATE);
+
+    AEGON_C_TRY {
+        auto holder = aegon::c::make_cleanup_holder(userdata, cleanup);
+        s->on_start([server, fn, userdata, holder](aegon::http::Server&) -> aegon::core::Task<void> {
+            fn(server, userdata);
+            co_return;
+        });
+        return AEGON_OK;
+    } AEGON_C_CATCH
+}
+
+aegon_err_t aegon_server_on_stop(aegon_server_t* server,
+                                 aegon_lifecycle_fn fn,
+                                 void* userdata,
+                                 aegon_cleanup_fn cleanup) {
+    if (!server || !fn) return AEGON_ERR_INVALID_ARG;
+    auto* s = aegon::c::to_cpp(server);
+    if (!s) return AEGON_ERR_INVALID_ARG;
+    if (s->is_running()) return aegon::c::record_error("server is already running", AEGON_ERR_STATE);
+
+    AEGON_C_TRY {
+        auto holder = aegon::c::make_cleanup_holder(userdata, cleanup);
+        s->on_stop([server, fn, userdata, holder](aegon::http::Server&) -> aegon::core::Task<void> {
+            fn(server, userdata);
+            co_return;
+        });
+        return AEGON_OK;
+    } AEGON_C_CATCH
+}
+
+aegon_err_t aegon_server_spawn_worker(aegon_server_t* server,
+                                      aegon_worker_fn fn,
+                                      void* userdata,
+                                      aegon_cleanup_fn cleanup) {
+    if (!server || !fn) return AEGON_ERR_INVALID_ARG;
+    auto* s = aegon::c::to_cpp(server);
+    if (!s) return AEGON_ERR_INVALID_ARG;
+    if (s->is_running()) return aegon::c::record_error("server is already running", AEGON_ERR_STATE);
+
+    AEGON_C_TRY {
+        auto holder = aegon::c::make_cleanup_holder(userdata, cleanup);
+        s->spawn_worker([fn, userdata, holder](aegon::http::Server&, aegon::core::EventLoop&) -> aegon::core::Task<void> {
+            fn(userdata);
+            co_return;
+        });
+        return AEGON_OK;
+    } AEGON_C_CATCH
+}
+
 } // extern "C"

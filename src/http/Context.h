@@ -269,12 +269,19 @@ public:
      *   auto stream = co_await ctx.sse();
      *   co_await stream.event("update", "hello");
      */
-    core::Task<SseStream> sse() {
+    /**
+     * @brief Creates and returns an SseStream synchronously.
+     */
+    SseStream create_sse_stream() {
         res_.sse();                              // set headers, mark flag
         if (!sse_writer_ && sse_provider_.build) {
             sse_writer_ = sse_provider_.build(sse_provider_.user_data);
         }
-        co_return SseStream(sse_writer_);        // hand write channel to handler
+        return SseStream(sse_writer_);
+    }
+
+    core::Task<SseStream> sse() {
+        co_return create_sse_stream();
     }
 };
 

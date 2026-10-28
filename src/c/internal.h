@@ -15,7 +15,18 @@
 #include <atomic>
 #include <unordered_map>
 #include <memory>
+#include <coroutine>
+#include <mutex>
+#include <queue>
+#include <optional>
+#include "core/EventLoop.h"
 #include "http/RouteGroup.h"
+#include "http/Context.h"
+#include "http/websocket/WebSocket.h"
+#include "http/SseStream.h"
+#include <aegon/c/async.h>
+#include <aegon/c/websocket.h>
+#include <aegon/c/sse.h>
 
 // Forward declarations for C++ engine types
 namespace aegon::http {
@@ -144,6 +155,136 @@ inline aegon_next* to_next_handle(aegon_next_t* n) noexcept {
 inline aegon_next_t* to_c(aegon_next* n) noexcept {
     return reinterpret_cast<aegon_next_t*>(n);
 }
+
+inline http::websocket::WebSocket* to_cpp(aegon_ws_t* w) noexcept {
+    return reinterpret_cast<http::websocket::WebSocket*>(w);
+}
+inline aegon_ws_t* to_c(http::websocket::WebSocket* w) noexcept {
+    return reinterpret_cast<aegon_ws_t*>(w);
+}
+
+inline aegon_sse* to_sse_handle(aegon_sse_t* s) noexcept {
+    return reinterpret_cast<aegon_sse*>(s);
+}
+inline aegon_sse_t* to_c(aegon_sse* s) noexcept {
+    return reinterpret_cast<aegon_sse_t*>(s);
+}
+
+} // namespace aegon::c
+
+struct aegon_async : std::enable_shared_from_this<aegon_async> {
+    aegon::core::EventLoop* loop{nullptr};
+    aegon::http::Context* ctx{nullptr};
+    aegon_async_done_fn done_fn{nullptr};
+    void* userdata{nullptr};
+
+    std::atomic<bool> created{false};
+    std::atomic<bool> completed{false};
+    std::atomic<bool> suspended{false};
+    std::coroutine_handle<> coro_handle{nullptr};
+    std::mutex mtx;
+
+    void resume_on_loop() {
+        std::coroutine_handle<> h{nullptr};
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            h = coro_handle;
+            coro_handle = nullptr;
+        }
+        if (done_fn && ctx) {
+            done_fn(aegon::c::to_c(ctx), userdata);
+        }
+        if (h) {
+            h.resume();
+        }
+    }
+
+    auto awaiter() {
+        struct Awaiter {
+            std::shared_ptr<aegon_async> self;
+            bool await_ready() const noexcept { return false; }
+            void await_suspend(std::coroutine_handle<> h) noexcept {
+                bool should_resume = false;
+                {
+                    std::lock_guard<std::mutex> lock(self->mtx);
+                    self->coro_handle = h;
+                    self->suspended.store(true, std::memory_order_release);
+                    if (self->completed.load(std::memory_order_acquire)) {
+                        should_resume = true;
+                    }
+                }
+                if (should_resume) {
+                    self->loop->post([s = self]() {
+                        s->resume_on_loop();
+                    });
+                }
+            }
+            void await_resume() const noexcept {}
+        };
+        return Awaiter{shared_from_this()};
+    }
+};
+
+struct aegon_sse_impl : std::enable_shared_from_this<aegon_sse_impl> {
+    aegon::core::EventLoop* loop{nullptr};
+    std::shared_ptr<aegon_async> async_token;
+    std::optional<aegon::http::SseStream> stream;
+    aegon_sse_on_close_fn on_close{nullptr};
+    void* userdata{nullptr};
+
+    std::atomic<bool> is_open{true};
+    std::queue<std::string> pending_frames;
+    bool sending{false};
+
+    void handle_error() {
+        bool expected = true;
+        if (is_open.compare_exchange_strong(expected, false, std::memory_order_acq_rel)) {
+            if (stream) stream->close();
+            while (!pending_frames.empty()) pending_frames.pop();
+            if (on_close) {
+                on_close(userdata);
+            }
+            if (async_token) {
+                aegon_async_complete(async_token.get());
+            }
+        }
+    }
+
+    void enqueue_and_flush(std::string frame) {
+        if (!is_open.load(std::memory_order_acquire)) return;
+        pending_frames.push(std::move(frame));
+        if (sending) return;
+        sending = true;
+
+        loop->spawn([](std::shared_ptr<aegon_sse_impl> s) -> aegon::core::Task<void> {
+            while (!s->pending_frames.empty() && s->is_open.load(std::memory_order_acquire)) {
+                std::string f = std::move(s->pending_frames.front());
+                s->pending_frames.pop();
+                try {
+                    if (s->stream) {
+                        co_await s->stream->send(f);
+                    }
+                } catch (...) {
+                    s->handle_error();
+                    break;
+                }
+            }
+            s->sending = false;
+        }(shared_from_this()));
+    }
+
+    void send_frame(std::string frame) {
+        loop->post([s = shared_from_this(), f = std::move(frame)]() mutable {
+            s->enqueue_and_flush(std::move(f));
+        });
+    }
+};
+
+struct aegon_sse {
+    std::shared_ptr<aegon_sse_impl> impl;
+};
+
+namespace aegon::c {
 
 struct CleanupHolder {
     void* userdata{nullptr};

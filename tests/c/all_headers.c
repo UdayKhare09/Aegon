@@ -14,6 +14,9 @@
 #include <aegon/c/access_log.h>
 #include <aegon/c/static_files.h>
 #include <aegon/c/multipart.h>
+#include <aegon/c/async.h>
+#include <aegon/c/websocket.h>
+#include <aegon/c/sse.h>
 #include <aegon/c/aegon.h>
 
 int main(void) {

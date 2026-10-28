@@ -7,6 +7,7 @@
 #include <functional>
 #include <atomic>
 #include <memory>
+#include <mutex>
 
 namespace aegon::core {
 
@@ -56,6 +57,9 @@ public:
     // Spawn a root coroutine Task onto the event loop
     void spawn(Task<void> task);
 
+    // Thread-safe: enqueue fn to run on this event loop as soon as possible.
+    void post(std::function<void()> fn);
+
     [[nodiscard]] IoEngine&   engine()      noexcept { return *engine_; }
     [[nodiscard]] BufferPool& buffer_pool() noexcept { return buffer_pool_; }
     [[nodiscard]] bool is_running() const noexcept {
@@ -63,10 +67,14 @@ public:
     }
 
 private:
+    void drain_post_queue();
+
     BufferPool                buffer_pool_;
     std::unique_ptr<IoEngine> engine_;
     std::atomic<bool>         running_{false};
     std::vector<Task<void>>   tasks_;
+    std::mutex                post_mutex_;
+    std::vector<std::function<void()>> post_queue_;
 };
 
 } // namespace aegon::core
