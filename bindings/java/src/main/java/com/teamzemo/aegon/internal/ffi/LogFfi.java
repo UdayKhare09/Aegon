@@ -35,3 +35,4 @@ public final class LogFfi {
 
     private LogFfi() {}
 }
+

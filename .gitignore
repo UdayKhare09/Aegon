@@ -34,3 +34,8 @@ oom-*
 tests/fuzz/corpora/**
 !tests/fuzz/corpora/**/
 !tests/fuzz/corpora/**/*.raw
+
+# Java / JVM test runtime artifacts
+hs_err_*.log
+*.dumpstream
+*.dump

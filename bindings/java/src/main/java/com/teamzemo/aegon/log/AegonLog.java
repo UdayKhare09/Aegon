@@ -121,3 +121,4 @@ public final class AegonLog {
         } catch (Throwable ignored) {}
     }
 }
+
