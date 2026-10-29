@@ -114,6 +114,38 @@ SERVERS_CONFIG: Dict[str, Dict[str, Any]] = {
             "ws":       ["echo", "pipeline", "limited-conn"],
         },
     },
+    "drogon": {
+        "name": "Drogon",
+        "bin": os.path.join(SCRIPT_DIR, "servers", "drogon", "bench_drogon"),
+        "base_port": 18095,
+        "ports": {
+            "h1_plain": 18095,
+            "h1_tls": 18096,
+            "ws": 18095,
+        },
+        "subscribes": {
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo"],
+            "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo"],
+            "ws":       ["echo", "pipeline", "limited-conn"],
+        },
+    },
+    "springboot": {
+        "name": "Spring Boot",
+        "bin": os.path.join(SCRIPT_DIR, "servers", "springboot", "bench_springboot"),
+        "base_port": 18100,
+        "ports": {
+            "h1_plain": 18100,
+            "h1_tls": 18101,
+            "h2": 18102,
+            "ws": 18100,
+        },
+        "subscribes": {
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo"],
+            "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo"],
+            "h2":       ["baseline", "pipeline", "json", "delay", "echo"],
+            "ws":       ["echo", "pipeline", "limited-conn"],
+        },
+    },
 }
 
 # ==============================================================================

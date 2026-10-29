@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: springboot-benchmark
+  threads:
+    virtual:
+      enabled: true
+  main:
+    banner-mode: "off"
+
+server:
+  port: 18100
+  tomcat:
+    threads:
+      max: 200
+
+logging:
+  level:
+    root: ERROR
+    org.springframework: ERROR
+    org.apache.tomcat: ERROR
+    org.apache.catalina: ERROR
+    org.apache.coyote: ERROR
+
