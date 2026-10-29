@@ -13,11 +13,6 @@ static void handle_server_test(aegon_ctx_t* ctx, void* ud) {
     void* app_data = aegon_ctx_app_data(ctx);
     CHECK(app_data == EXPECTED_APP_DATA);
 
-    /* 2. Per-request locals check */
-    CHECK(aegon_ctx_local_get(ctx, "session_id") == NULL);
-    CHECK_INT_EQ(aegon_ctx_local_set(ctx, "session_id", (void*)(uintptr_t)0xcafe), AEGON_OK);
-    CHECK(aegon_ctx_local_get(ctx, "session_id") == (void*)(uintptr_t)0xcafe);
-
     aegon_res_t* res = aegon_ctx_res(ctx);
     aegon_res_status(res, AEGON_STATUS_OK);
     aegon_res_text(res, AEGON_STR("server test ok"));

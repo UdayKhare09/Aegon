@@ -19,14 +19,6 @@ AEGON_C_API aegon_res_t* aegon_ctx_res(aegon_ctx_t* ctx);
  * from every handler on every worker. Not freed by Aegon. NULL if unset. */
 AEGON_C_API void* aegon_ctx_app_data(aegon_ctx_t* ctx);
 
-/* --- Per-request key/value locals (C replacement for ctx.set<T>/get<T>) ---
- * Backed by a lazily-created map; keys are C strings (case-sensitive).
- * Values are opaque void*; Aegon does not free them. Lifetime: single request.
- * get returns NULL when absent. */
-AEGON_C_API aegon_err_t aegon_ctx_local_set(aegon_ctx_t* ctx, const char* key,
-                                            void* value);
-AEGON_C_API void*       aegon_ctx_local_get(aegon_ctx_t* ctx, const char* key);
-
 /* --- RFC 7807 Problem Details (Context::problem) ---
  * Sets status, Content-Type: application/problem+json, JSON body with
  * type/title/status/detail/instance. All strings copied. */

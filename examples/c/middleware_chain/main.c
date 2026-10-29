@@ -51,12 +51,7 @@ int main(void) {
     aegon_compress_config_init(&comp_cfg);
     aegon_router_use_compress(router, &comp_cfg);
 
-    /* 4. Built-in Access Logging */
-    aegon_access_log_config_t log_cfg;
-    aegon_access_log_config_init(&log_cfg);
-    aegon_router_use_access_log(router, &log_cfg);
-
-    /* 5. Custom Onion Middleware */
+    /* 4. Custom Onion Middleware */
     aegon_router_use(router, mw_timing_tracer, NULL, NULL);
 
     /* Routes */

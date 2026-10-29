@@ -32,6 +32,40 @@ AEGON_C_API aegon_err_t aegon_group_use(aegon_group_t* group,
                                         void* userdata,
                                         aegon_cleanup_fn cleanup);
 
+/* --- Asynchronous Middleware Support --- */
+typedef struct aegon_async_mw aegon_async_mw_t;
+
+/* Async middleware callback. Runs on the worker thread.
+ * May hand mw to an external thread pool or virtual thread.
+ * MUST eventually call aegon_async_mw_complete (after optionally calling aegon_async_mw_next). */
+typedef void (*aegon_async_middleware_fn)(aegon_ctx_t* ctx,
+                                          aegon_async_mw_t* mw,
+                                          void* userdata);
+
+/* Advances the chain to downstream middlewares and the route handler.
+ * Thread-safe: must be called from an offloaded worker thread or virtual thread.
+ * Blocks the calling thread until downstream processing finishes, allowing
+ * the caller to perform post-processing on ctx afterwards.
+ * Returns AEGON_OK on success, AEGON_ERR_STATE if called twice or on the reactor loop. */
+AEGON_C_API aegon_err_t aegon_async_mw_next(aegon_async_mw_t* mw, aegon_ctx_t* ctx);
+
+/* Signals that this async middleware has completed all processing (including post-processing).
+ * Must be called exactly once per invocation, whether next was called or short-circuited.
+ * Thread-safe: can be called from any thread. */
+AEGON_C_API void aegon_async_mw_complete(aegon_async_mw_t* mw);
+
+/* Global async middleware (Router::use_async). */
+AEGON_C_API aegon_err_t aegon_router_use_async(aegon_router_t* router,
+                                               aegon_async_middleware_fn mw,
+                                               void* userdata,
+                                               aegon_cleanup_fn cleanup);
+
+/* Group async middleware (RouteGroup::use_async). */
+AEGON_C_API aegon_err_t aegon_group_use_async(aegon_group_t* group,
+                                              aegon_async_middleware_fn mw,
+                                              void* userdata,
+                                              aegon_cleanup_fn cleanup);
+
 /* Per-route middleware (add_route route_mw vector). Registration-time only;
  * stack arrays are fine (contents are copied). */
 typedef struct aegon_middleware_slot {

@@ -22,29 +22,6 @@ void* aegon_ctx_app_data(aegon_ctx_t* ctx) {
     return app_data ? app_data->ptr : nullptr;
 }
 
-aegon_err_t aegon_ctx_local_set(aegon_ctx_t* ctx, const char* key, void* value) {
-    if (!ctx || !key) return AEGON_ERR_INVALID_ARG;
-    AEGON_C_TRY {
-        auto* cpp_ctx = aegon::c::to_cpp(ctx);
-        auto* locals = cpp_ctx->get<aegon::c::CLocalsMap>();
-        if (!locals) {
-            cpp_ctx->set(aegon::c::CLocalsMap{});
-            locals = cpp_ctx->get<aegon::c::CLocalsMap>();
-        }
-        locals->map[key] = value;
-        return AEGON_OK;
-    } AEGON_C_CATCH
-}
-
-void* aegon_ctx_local_get(aegon_ctx_t* ctx, const char* key) {
-    if (!ctx || !key) return nullptr;
-    auto* cpp_ctx = aegon::c::to_cpp(ctx);
-    auto* locals = cpp_ctx->get<aegon::c::CLocalsMap>();
-    if (!locals) return nullptr;
-    auto it = locals->map.find(key);
-    return it != locals->map.end() ? it->second : nullptr;
-}
-
 aegon_err_t aegon_ctx_problem(aegon_ctx_t* ctx, uint16_t status,
                               aegon_str_t title, aegon_str_t detail) {
     if (!ctx) return AEGON_ERR_INVALID_ARG;

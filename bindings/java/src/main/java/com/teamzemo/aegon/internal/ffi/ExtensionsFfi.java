@@ -40,16 +40,6 @@ public final class ExtensionsFfi {
     public static final MethodHandle MH_aegon_group_use_security_headers = FfiSupport.downcall("aegon_group_use_security_headers",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
-    /* --- Access Log (access_log.h) --- */
-    public static final MethodHandle MH_aegon_access_log_config_init = FfiSupport.downcall("aegon_access_log_config_init",
-            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
-
-    public static final MethodHandle MH_aegon_router_use_access_log = FfiSupport.downcall("aegon_router_use_access_log",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-
-    public static final MethodHandle MH_aegon_group_use_access_log = FfiSupport.downcall("aegon_group_use_access_log",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-
     /* --- Static Files (static_files.h) --- */
     public static final MethodHandle MH_aegon_static_files_config_init = FfiSupport.downcall("aegon_static_files_config_init",
             FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));

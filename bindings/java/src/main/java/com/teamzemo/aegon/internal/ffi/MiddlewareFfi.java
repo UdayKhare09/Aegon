@@ -31,6 +31,18 @@ public final class MiddlewareFfi {
     public static final MethodHandle MH_aegon_group_use = FfiSupport.downcall("aegon_group_use",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
+    public static final MethodHandle MH_aegon_async_mw_next = FfiSupport.downcall("aegon_async_mw_next",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_async_mw_complete = FfiSupport.downcall("aegon_async_mw_complete",
+            FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_router_use_async = FfiSupport.downcall("aegon_router_use_async",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
+    public static final MethodHandle MH_aegon_group_use_async = FfiSupport.downcall("aegon_group_use_async",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+
     private MiddlewareFfi() {}
 }
 

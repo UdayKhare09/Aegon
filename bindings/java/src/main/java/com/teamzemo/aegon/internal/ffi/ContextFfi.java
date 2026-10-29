@@ -18,12 +18,6 @@ public final class ContextFfi {
     public static final MethodHandle MH_aegon_ctx_app_data = FfiSupport.downcall("aegon_ctx_app_data",
             FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 
-    public static final MethodHandle MH_aegon_ctx_local_set = FfiSupport.downcall("aegon_ctx_local_set",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-
-    public static final MethodHandle MH_aegon_ctx_local_get = FfiSupport.downcall("aegon_ctx_local_get",
-            FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-
     public static final MethodHandle MH_aegon_ctx_problem = FfiSupport.downcall("aegon_ctx_problem",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_SHORT, FfiSupport.STR_LAYOUT, FfiSupport.STR_LAYOUT));
 

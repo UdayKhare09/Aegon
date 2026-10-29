@@ -241,7 +241,6 @@ if(AEGON_BUILD_C_ABI)
         src/c/cors.cpp
         src/c/compress.cpp
         src/c/security.cpp
-        src/c/access_log.cpp
         src/c/static_files.cpp
         src/c/multipart.cpp
         src/c/async.cpp

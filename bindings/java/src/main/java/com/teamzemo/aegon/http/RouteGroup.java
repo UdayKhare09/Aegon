@@ -244,6 +244,24 @@ public final class RouteGroup {
         }
     }
 
+    public RouteGroup useAsync(Middleware middleware) {
+        long id = Router.registerMiddleware(middleware);
+        try {
+            MemorySegment userdata = MemorySegment.ofAddress(id);
+            int err = (int) MiddlewareFfi.MH_aegon_group_use_async.invokeExact(
+                    groupPtr,
+                    Router.ASYNC_MIDDLEWARE_UPCALL_STUB,
+                    userdata,
+                    Router.MIDDLEWARE_CLEANUP_STUB
+            );
+            FfiSupport.checkErr(err);
+            return this;
+        } catch (Throwable t) {
+            Router.unregisterMiddleware(id);
+            throw new RuntimeException("Failed to register group async middleware: " + t.getMessage(), t);
+        }
+    }
+
     public RouteGroup useCors(CorsConfig config) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment cfgSeg = arena.allocate(128);
@@ -277,18 +295,6 @@ public final class RouteGroup {
             return this;
         } catch (Throwable t) {
             throw new RuntimeException("Failed to apply group security headers: " + t.getMessage(), t);
-        }
-    }
-
-    public RouteGroup useAccessLog(AccessLogConfig config) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment cfgSeg = arena.allocate(128);
-            ExtensionsFfi.MH_aegon_access_log_config_init.invokeExact(cfgSeg);
-            int err = (int) ExtensionsFfi.MH_aegon_group_use_access_log.invokeExact(groupPtr, cfgSeg);
-            FfiSupport.checkErr(err);
-            return this;
-        } catch (Throwable t) {
-            throw new RuntimeException("Failed to apply group access log: " + t.getMessage(), t);
         }
     }
 

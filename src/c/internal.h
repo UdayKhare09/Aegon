@@ -17,6 +17,7 @@
 #include <memory>
 #include <coroutine>
 #include <mutex>
+#include <condition_variable>
 #include <queue>
 #include <optional>
 #include "core/EventLoop.h"
@@ -46,9 +47,6 @@ struct CAppData {
     void* ptr{nullptr};
 };
 
-struct CLocalsMap {
-    std::unordered_map<std::string, void*> map;
-};
 } // namespace aegon::c
 
 struct aegon_server {
@@ -85,6 +83,7 @@ typedef struct aegon_router aegon_router_t;
 typedef struct aegon_group aegon_group_t;
 typedef struct aegon_next aegon_next_t;
 typedef struct aegon_async aegon_async_t;
+typedef struct aegon_async_mw aegon_async_mw_t;
 typedef struct aegon_ws aegon_ws_t;
 typedef struct aegon_sse aegon_sse_t;
 typedef struct aegon_multipart aegon_multipart_t;
@@ -216,6 +215,122 @@ struct aegon_async : std::enable_shared_from_this<aegon_async> {
                 if (should_resume) {
                     self->loop->post([s = self]() {
                         s->resume_on_loop();
+                    });
+                }
+            }
+            void await_resume() const noexcept {}
+        };
+        return Awaiter{shared_from_this()};
+    }
+};
+
+struct aegon_async_mw : std::enable_shared_from_this<aegon_async_mw> {
+    aegon::core::EventLoop* loop{nullptr};
+    aegon::http::Context* ctx{nullptr};
+    aegon::http::Next* next_fn{nullptr};
+
+    std::atomic<bool> called_next{false};
+    std::atomic<bool> completed{false};
+
+    std::atomic<bool> pre_suspended{false};
+    std::atomic<bool> pre_ready{false};
+    std::coroutine_handle<> pre_coro{nullptr};
+
+    std::atomic<bool> post_suspended{false};
+    std::atomic<bool> post_ready{false};
+    std::coroutine_handle<> post_coro{nullptr};
+
+    std::mutex downstream_mtx;
+    std::condition_variable downstream_cv;
+    std::atomic<bool> downstream_finished{false};
+
+    std::mutex mtx;
+
+    void signal_downstream_done() {
+        {
+            std::lock_guard<std::mutex> lock(downstream_mtx);
+            downstream_finished.store(true, std::memory_order_release);
+        }
+        downstream_cv.notify_all();
+    }
+
+    void wait_downstream_done() {
+        std::unique_lock<std::mutex> lock(downstream_mtx);
+        downstream_cv.wait(lock, [this] {
+            return downstream_finished.load(std::memory_order_acquire);
+        });
+    }
+
+    void resume_pre() {
+        std::coroutine_handle<> h{nullptr};
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            h = pre_coro;
+            pre_coro = nullptr;
+        }
+        if (h) {
+            h.resume();
+        }
+    }
+
+    void resume_post() {
+        std::coroutine_handle<> h{nullptr};
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            h = post_coro;
+            post_coro = nullptr;
+        }
+        if (h) {
+            h.resume();
+        }
+    }
+
+    auto pre_awaiter() {
+        struct Awaiter {
+            std::shared_ptr<aegon_async_mw> self;
+            bool await_ready() const noexcept {
+                return self->pre_ready.load(std::memory_order_acquire);
+            }
+            void await_suspend(std::coroutine_handle<> h) noexcept {
+                bool should_resume = false;
+                {
+                    std::lock_guard<std::mutex> lock(self->mtx);
+                    self->pre_coro = h;
+                    self->pre_suspended.store(true, std::memory_order_release);
+                    if (self->pre_ready.load(std::memory_order_acquire)) {
+                        should_resume = true;
+                    }
+                }
+                if (should_resume) {
+                    self->loop->post([s = self]() {
+                        s->resume_pre();
+                    });
+                }
+            }
+            void await_resume() const noexcept {}
+        };
+        return Awaiter{shared_from_this()};
+    }
+
+    auto post_awaiter() {
+        struct Awaiter {
+            std::shared_ptr<aegon_async_mw> self;
+            bool await_ready() const noexcept {
+                return self->post_ready.load(std::memory_order_acquire);
+            }
+            void await_suspend(std::coroutine_handle<> h) noexcept {
+                bool should_resume = false;
+                {
+                    std::lock_guard<std::mutex> lock(self->mtx);
+                    self->post_coro = h;
+                    self->post_suspended.store(true, std::memory_order_release);
+                    if (self->post_ready.load(std::memory_order_acquire)) {
+                        should_resume = true;
+                    }
+                }
+                if (should_resume) {
+                    self->loop->post([s = self]() {
+                        s->resume_post();
                     });
                 }
             }

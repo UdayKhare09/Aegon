@@ -47,6 +47,7 @@ public final class Router implements AutoCloseable {
     public static final MemorySegment CLEANUP_UPCALL_STUB;
     public static final MemorySegment ERROR_UPCALL_STUB;
     public static final MemorySegment MIDDLEWARE_UPCALL_STUB;
+    public static final MemorySegment ASYNC_MIDDLEWARE_UPCALL_STUB;
     public static final MemorySegment MIDDLEWARE_CLEANUP_STUB;
 
     public static final MemorySegment WS_ON_OPEN_STUB;
@@ -81,6 +82,10 @@ public final class Router implements AutoCloseable {
             MethodHandle mhMw = lookup.findStatic(Router.class, "middlewareTrampoline",
                     MethodType.methodType(void.class, MemorySegment.class, MemorySegment.class, MemorySegment.class));
             MIDDLEWARE_UPCALL_STUB = FfiSupport.LINKER.upcallStub(mhMw, MiddlewareFfi.MIDDLEWARE_UPCALL_DESC, Arena.global());
+
+            MethodHandle mhAsyncMw = lookup.findStatic(Router.class, "asyncMiddlewareTrampoline",
+                    MethodType.methodType(void.class, MemorySegment.class, MemorySegment.class, MemorySegment.class));
+            ASYNC_MIDDLEWARE_UPCALL_STUB = FfiSupport.LINKER.upcallStub(mhAsyncMw, MiddlewareFfi.MIDDLEWARE_UPCALL_DESC, Arena.global());
 
             MethodHandle mhMwCleanup = lookup.findStatic(Router.class, "middlewareCleanupTrampoline",
                     MethodType.methodType(void.class, MemorySegment.class));
@@ -414,6 +419,25 @@ public final class Router implements AutoCloseable {
         }
     }
 
+    public Router useAsync(Middleware middleware) {
+        checkNotClosed();
+        long id = registerMiddleware(middleware);
+        try {
+            MemorySegment userdata = MemorySegment.ofAddress(id);
+            int err = (int) MiddlewareFfi.MH_aegon_router_use_async.invokeExact(
+                    routerPtr,
+                    ASYNC_MIDDLEWARE_UPCALL_STUB,
+                    userdata,
+                    MIDDLEWARE_CLEANUP_STUB
+            );
+            FfiSupport.checkErr(err);
+            return this;
+        } catch (Throwable t) {
+            unregisterMiddleware(id);
+            throw new RuntimeException("Failed to register async middleware: " + t.getMessage(), t);
+        }
+    }
+
     public Router useCors(CorsConfig config) {
         checkNotClosed();
         try (Arena arena = Arena.ofConfined()) {
@@ -450,19 +474,6 @@ public final class Router implements AutoCloseable {
             return this;
         } catch (Throwable t) {
             throw new RuntimeException("Failed to apply security headers: " + t.getMessage(), t);
-        }
-    }
-
-    public Router useAccessLog(AccessLogConfig config) {
-        checkNotClosed();
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment cfgSeg = arena.allocate(128);
-            ExtensionsFfi.MH_aegon_access_log_config_init.invokeExact(cfgSeg);
-            int err = (int) ExtensionsFfi.MH_aegon_router_use_access_log.invokeExact(routerPtr, cfgSeg);
-            FfiSupport.checkErr(err);
-            return this;
-        } catch (Throwable t) {
-            throw new RuntimeException("Failed to apply access log: " + t.getMessage(), t);
         }
     }
 
@@ -722,6 +733,41 @@ public final class Router implements AutoCloseable {
                 handleException(ctx, t);
             }
         }
+    }
+
+    private static void asyncMiddlewareTrampoline(MemorySegment ctxPtr, MemorySegment mwPtr, MemorySegment userdataPtr) {
+        long id = userdataPtr.address();
+        Middleware mw = MIDDLEWARE_REGISTRY.get(id);
+        if (mw == null) {
+            try {
+                MiddlewareFfi.MH_aegon_async_mw_complete.invokeExact(mwPtr);
+            } catch (Throwable ignored) {}
+            return;
+        }
+
+        Thread.ofVirtual().name("aegon-async-mw-" + System.nanoTime()).start(() -> {
+            Context ctx = new Context(ctxPtr);
+            Next next = (context) -> {
+                try {
+                    int err = (int) MiddlewareFfi.MH_aegon_async_mw_next.invokeExact(mwPtr, context.handle());
+                    FfiSupport.checkErr(err);
+                } catch (Throwable t) {
+                    throw new RuntimeException(t);
+                }
+            };
+            try {
+                mw.handle(ctx, next);
+            } catch (Throwable t) {
+                try {
+                    handleException(ctx, t);
+                } catch (Throwable ignored) {}
+            } finally {
+                try {
+                    MiddlewareFfi.MH_aegon_async_mw_complete.invokeExact(mwPtr);
+                } catch (Throwable ignored) {}
+                ctx.clearLocals();
+            }
+        });
     }
 
     private static void middlewareCleanupTrampoline(MemorySegment userdataPtr) {

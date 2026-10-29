@@ -104,5 +104,85 @@ public class MiddlewareAndFeaturesTest {
         assertEquals("Custom", res.headers().firstValue("X-Error-Handled").orElse(""));
         assertTrue(res.body().contains("Intentional crash for testing"));
     }
+
+    @Test
+    public void testAsyncMiddlewareWithVirtualThreadBlocking() throws Exception {
+        AegonServer s = AegonServer.create();
+        int testPort = 19089;
+        s.router().useAsync((ctx, next) -> {
+            // Simulate blocking call on Java Virtual Thread
+            Thread.sleep(50);
+            ctx.set("async_mw_user", "alice");
+            next.call(ctx);
+            // Post-processing on Virtual Thread
+            ctx.res().header("X-Async-Middleware", "VirtualThread-Active");
+        });
+
+        s.router().get("/async-mw-test", ctx -> {
+            String user = ctx.get("async_mw_user");
+            ctx.res().status(StatusCode.OK).text("hello-" + user);
+        });
+
+        s.listen(testPort, "127.0.0.1");
+        s.runAsync(2);
+        try {
+            for (int i = 0; i < 50; i++) {
+                if (s.isRunning()) break;
+                Thread.sleep(20);
+            }
+
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create("http://127.0.0.1:" + testPort + "/async-mw-test"))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, res.statusCode());
+            assertEquals("hello-alice", res.body());
+            assertEquals("VirtualThread-Active", res.headers().firstValue("X-Async-Middleware").orElse(""));
+        } finally {
+            s.stop();
+            s.close();
+        }
+    }
+
+    @Test
+    public void testAsyncMiddlewareShortCircuit() throws Exception {
+        AegonServer s = AegonServer.create();
+        int testPort = 19090;
+        s.router().useAsync((ctx, next) -> {
+            Thread.sleep(20);
+            if (ctx.req().path().contains("blocked")) {
+                ctx.res().status(StatusCode.FORBIDDEN).text("async-blocked");
+                return;
+            }
+            next.call(ctx);
+        });
+
+        s.router().get("/blocked", ctx -> {
+            ctx.res().status(StatusCode.OK).text("should not reach here");
+        });
+
+        s.listen(testPort, "127.0.0.1");
+        s.runAsync(2);
+        try {
+            for (int i = 0; i < 50; i++) {
+                if (s.isRunning()) break;
+                Thread.sleep(20);
+            }
+
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create("http://127.0.0.1:" + testPort + "/blocked"))
+                    .GET()
+                    .build();
+
+            HttpResponse<String> res = client.send(req, HttpResponse.BodyHandlers.ofString());
+            assertEquals(403, res.statusCode());
+            assertEquals("async-blocked", res.body());
+        } finally {
+            s.stop();
+            s.close();
+        }
+    }
 }
 

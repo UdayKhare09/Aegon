@@ -11,7 +11,6 @@
 #include <aegon/c/cors.h>
 #include <aegon/c/compress.h>
 #include <aegon/c/security.h>
-#include <aegon/c/access_log.h>
 #include <aegon/c/static_files.h>
 #include <aegon/c/multipart.h>
 #include <aegon/c/async.h>
