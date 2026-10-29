@@ -623,6 +623,8 @@ public final class Router implements AutoCloseable {
                 h.handle(ctx);
             } catch (Throwable t) {
                 handleException(ctx, t);
+            } finally {
+                ctx.clearLocals();
             }
         }
     }
@@ -638,18 +640,18 @@ public final class Router implements AutoCloseable {
             if (token.equals(MemorySegment.NULL)) return;
 
             Thread.ofVirtual().name("aegon-vt-" + System.nanoTime()).start(() -> {
+                Context ctx = new Context(ctxPtr);
                 try {
-                    Context ctx = new Context(ctxPtr);
                     h.handle(ctx);
                 } catch (Throwable t) {
                     try {
-                        Context ctx = new Context(ctxPtr);
                         handleException(ctx, t);
                     } catch (Throwable ignored) {}
                 } finally {
                     try {
                         AsyncFfi.MH_aegon_async_complete.invokeExact(token);
                     } catch (Throwable ignored) {}
+                    ctx.clearLocals();
                 }
             });
         } catch (Throwable ignored) {}

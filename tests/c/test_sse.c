@@ -161,6 +161,7 @@ int main(void) {
     aegon_server_join(server);
     aegon_server_destroy(server);
 
+    (void)g_sse_closed;
     printf("[test_sse] All tests PASSED!\n");
     return 0;
 }

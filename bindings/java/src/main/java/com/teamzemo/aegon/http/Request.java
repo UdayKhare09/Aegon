@@ -170,8 +170,8 @@ public final class Request {
      * @return off-heap memory segment
      */
     public MemorySegment bodySegment() {
-        try {
-            MemorySegment strSeg = (MemorySegment) RequestFfi.MH_aegon_req_body.invokeExact((SegmentAllocator) Arena.global(), reqPtr);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment strSeg = (MemorySegment) RequestFfi.MH_aegon_req_body.invokeExact((SegmentAllocator) arena, reqPtr);
             return FfiSupport.readStrSegment(strSeg);
         } catch (Throwable t) {
             return MemorySegment.NULL;

@@ -83,6 +83,7 @@ public final class ServerConfig {
 
             cfg.set(ValueLayout.JAVA_BOOLEAN, 56, tcpNoDelay);
             cfg.set(ValueLayout.JAVA_BOOLEAN, 57, tcpKeepAlive);
+            cfg.set(ValueLayout.JAVA_BOOLEAN, 128, enableHttp3);
             return cfg;
         } catch (Throwable t) {
             throw new RuntimeException("Failed to construct native server config: " + t.getMessage(), t);
