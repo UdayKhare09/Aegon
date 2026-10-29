@@ -239,18 +239,21 @@ int main(int argc, char* argv[]) {
     // base_port     (18080): HTTP/1.1 Plain & WebSocket
     // base_port + 1 (18081): TLS 1.3 HTTP/1.1
     // base_port + 2 (18082): TLS 1.3 HTTP/2 ALPN
+    // base_port + 3 (18083): TLS 1.3 HTTP/3 over QUIC
     uint16_t port_plain = base_port;
     uint16_t port_tls   = base_port + 1;
     uint16_t port_h2    = base_port + 2;
+    uint16_t port_h3    = base_port + 3;
 
     server.listen(port_plain);
 
     bool has_certs = std::filesystem::exists(cert_file) && std::filesystem::exists(key_file);
     if (has_certs) {
         server.enable_tls(cert_file, key_file);
-        server.enable_http3(false);
+        server.enable_http3(true);
         server.listen_tls(port_tls);
         server.listen_tls(port_h2);
+        server.listen_tls(port_h3);
     }
 
     std::cout << "===================================================================\n";
@@ -259,6 +262,7 @@ int main(int argc, char* argv[]) {
     if (has_certs) {
         std::cout << "   -> TLS 1.3 HTTP/1.1    : https://0.0.0.0:" << port_tls << "\n";
         std::cout << "   -> TLS 1.3 HTTP/2      : https://0.0.0.0:" << port_h2 << "\n";
+        std::cout << "   -> TLS 1.3 HTTP/3 QUIC : https://0.0.0.0:" << port_h3 << "\n";
     }
     std::cout << "===================================================================\n" << std::flush;
 

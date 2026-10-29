@@ -11,6 +11,9 @@ docs/.vitepress/cache
 **/bench_fiber
 **/bench_aegon
 **/bench_viltrum
+!**/bench_aegon_java
+!**/build.sh
+dependency-reduced-pom.xml
 **/upstream
 **/.zig-cache
 **__pycache__

@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 Unified HttpArena-Compliant Benchmark Runner
-Benchmarking Aegon vs Viltrum across H1 Plain, H1 TLS, H2, and WebSocket.
+Dynamic, config-driven harness for H1 Plain, H1 TLS, H2, H3 (QUIC), and WebSocket.
 
 Usage:
     python3 benchmarks/run_benchmarks.py [options]
 
 Examples:
-    # Run all protocols and workloads in single run mode
+    # Run all subscribed protocols and workloads across all configured servers
     python3 benchmarks/run_benchmarks.py
+
+    # Benchmark only Aegon Java
+    python3 benchmarks/run_benchmarks.py -s aegon_java
+
+    # Compare Aegon C++ and Aegon Java
+    python3 benchmarks/run_benchmarks.py -s aegon,aegon_java
+
+    # Benchmark HTTP/3 across all servers that subscribe to h3
+    python3 benchmarks/run_benchmarks.py -p h3
 
     # Run triplicate (3 runs with average & stddev)
     python3 benchmarks/run_benchmarks.py --runs 3
 
     # Benchmark only WebSocket
-    python3 benchmarks/run_benchmarks.py --protocols ws
-
-    # Benchmark HTTP/2 baseline and json workloads on Aegon only
-    python3 benchmarks/run_benchmarks.py -p h2 -w baseline,json -s aegon
+    python3 benchmarks/run_benchmarks.py -p ws
 
     # Quick 3s test with 50 connections
     python3 benchmarks/run_benchmarks.py -d 3 -c 50
@@ -37,32 +44,62 @@ from typing import Dict, List, Optional, Any
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 
-AEGON_BIN = os.path.join(ROOT_DIR, "build", "benchmarks", "bench_aegon")
-if not os.path.exists(AEGON_BIN):
-    AEGON_BIN = os.path.join(SCRIPT_DIR, "servers", "aegon", "bench_aegon")
-
-VILTRUM_BIN = os.path.join(SCRIPT_DIR, "servers", "viltrum", "bench_viltrum")
-
 # Tool discovery
 WRK_BIN = shutil.which("wrk") or "/usr/bin/wrk"
 H2LOAD_BIN = shutil.which("h2load") or "/usr/bin/h2load"
+H2LOAD_H3_BIN = shutil.which("h2load-h3") or os.path.expanduser("~/.local/bin/h2load-h3")
 GCANNON_BIN = shutil.which("gcannon") or os.path.expanduser("~/.local/bin/gcannon")
 
-SERVERS_CONFIG = {
+ALL_PROTOCOLS = ["h1_plain", "h1_tls", "h2", "h3", "ws"]
+
+# ==============================================================================
+# Central Server Configuration & Benchmark Subscriptions
+# ==============================================================================
+# Add, configure, or adjust servers here. The runner automatically discovers
+# server keys, display names, binaries, ports, and subscribed workloads.
+SERVERS_CONFIG: Dict[str, Dict[str, Any]] = {
     "aegon": {
         "name": "Aegon",
-        "bin": AEGON_BIN,
+        "bin": os.path.join(ROOT_DIR, "build", "benchmarks", "bench_aegon"),
+        "fallback_bin": os.path.join(SCRIPT_DIR, "servers", "aegon", "bench_aegon"),
         "base_port": 18080,
         "ports": {
             "h1_plain": 18080,
             "h1_tls": 18081,
             "h2": 18082,
+            "h3": 18083,
             "ws": 18080,
+        },
+        "subscribes": {
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo"],
+            "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo"],
+            "h2":       ["baseline", "pipeline", "json", "delay", "echo"],
+            "h3":       ["baseline", "pipeline", "json", "delay", "echo"],
+            "ws":       ["echo", "pipeline", "limited-conn"],
+        },
+    },
+    "aegon_java": {
+        "name": "Aegon Java",
+        "bin": os.path.join(SCRIPT_DIR, "servers", "aegon_java", "bench_aegon_java"),
+        "base_port": 18090,
+        "ports": {
+            "h1_plain": 18090,
+            "h1_tls": 18091,
+            "h2": 18092,
+            "h3": 18093,
+            "ws": 18090,
+        },
+        "subscribes": {
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo"],
+            "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo"],
+            "h2":       ["baseline", "pipeline", "json", "delay", "echo"],
+            "h3":       ["baseline", "pipeline", "json", "delay", "echo"],
+            "ws":       ["echo", "pipeline", "limited-conn"],
         },
     },
     "viltrum": {
         "name": "Viltrum",
-        "bin": VILTRUM_BIN,
+        "bin": os.path.join(SCRIPT_DIR, "servers", "viltrum", "bench_viltrum"),
         "base_port": 18085,
         "ports": {
             "h1_plain": 18085,
@@ -70,10 +107,19 @@ SERVERS_CONFIG = {
             "h2": 18087,
             "ws": 18085,
         },
+        "subscribes": {
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo"],
+            "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo"],
+            "h2":       ["baseline", "pipeline", "json", "delay", "echo"],
+            "ws":       ["echo", "pipeline", "limited-conn"],
+        },
     },
 }
 
-HTTP_WORKLOADS = {
+# ==============================================================================
+# Hardcoded HttpArena Workload Catalog (Framework-Agnostic)
+# ==============================================================================
+HTTP_WORKLOADS: Dict[str, Dict[str, str]] = {
     "baseline": {
         "method": "GET",
         "path": "/baseline?a=13&b=42",
@@ -101,7 +147,7 @@ HTTP_WORKLOADS = {
     },
 }
 
-WS_WORKLOADS = {
+WS_WORKLOADS: Dict[str, Dict[str, Any]] = {
     "echo": {
         "path": "/ws",
         "pipeline": 1,
@@ -121,6 +167,29 @@ WS_WORKLOADS = {
         "desc": "WebSocket Reconnect (10 frames/conn)",
     },
 }
+
+# ==============================================================================
+# Helper Functions
+# ==============================================================================
+
+def resolve_server_bin(cfg: Dict[str, Any]) -> str:
+    primary = cfg.get("bin", "")
+    if primary and os.path.exists(primary):
+        return primary
+    fallback = cfg.get("fallback_bin", "")
+    if fallback and os.path.exists(fallback):
+        return fallback
+    return primary
+
+def is_server_subscribed(server_key: str, protocol: str, workload: str) -> bool:
+    cfg = SERVERS_CONFIG.get(server_key, {})
+    subs = cfg.get("subscribes", {})
+    if protocol not in subs:
+        return False
+    subscribed_wls = subs[protocol]
+    if subscribed_wls == "*" or workload in subscribed_wls:
+        return True
+    return False
 
 def parse_time_us(val_str: str, unit: str) -> float:
     try:
@@ -191,7 +260,6 @@ def parse_h2load_output(output: str) -> Dict[str, Any]:
     dur_match = re.search(r"finished in\s+([0-9.]+)s", output)
     duration_s = float(dur_match.group(1)) if dur_match else 10.0
 
-    # request latency row: min max median p95 p99 mean sd
     req_row = re.search(r"request\s*:\s*([0-9.]+\w+)\s+([0-9.]+\w+)\s+([0-9.]+\w+)\s+([0-9.]+\w+)\s+([0-9.]+\w+)\s+([0-9.]+\w+)", output)
     avg_us, p50_us, p90_us, p99_us = 0.0, 0.0, 0.0, 0.0
     if req_row:
@@ -205,7 +273,7 @@ def parse_h2load_output(output: str) -> Dict[str, Any]:
             return parse_time_us(m.group(1), m.group(2)) if m else 0.0
 
         p50_us = to_us(p50_raw)
-        p90_us = to_us(p95_raw) # h2load outputs p95
+        p90_us = to_us(p95_raw)
         p99_us = to_us(p99_raw)
         avg_us = to_us(mean_raw)
 
@@ -241,6 +309,10 @@ def parse_gcannon_json(output: str) -> Dict[str, Any]:
             "avg_us": 0.0, "p50_us": 0.0, "p90_us": 0.0, "p99_us": 0.0,
         }
 
+# ==============================================================================
+# Benchmark Runner
+# ==============================================================================
+
 class BenchmarkRunner:
     def __init__(self, args):
         self.args = args
@@ -260,8 +332,9 @@ class BenchmarkRunner:
             print(f"  [Server] {cfg['name']} is already running on port {base_port}.")
             return True
 
-        if not os.path.exists(cfg["bin"]):
-            print(f"  [Error] Binary for {cfg['name']} not found at {cfg['bin']}.")
+        bin_path = resolve_server_bin(cfg)
+        if not os.path.exists(bin_path):
+            print(f"  [Error] Binary for {cfg['name']} not found at {bin_path}.")
             return False
 
         cert_file = os.path.join(SCRIPT_DIR, "certs", "server.crt")
@@ -269,7 +342,7 @@ class BenchmarkRunner:
 
         cmd = [
             "taskset", "-c", self.args.server_cores,
-            cfg["bin"],
+            bin_path,
             "2",
             str(base_port),
             cert_file,
@@ -280,8 +353,8 @@ class BenchmarkRunner:
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.active_processes[server_key] = proc
 
-        # Wait for health check
-        for _ in range(40):
+        # Wait for health check (up to 7.5 seconds)
+        for _ in range(50):
             time.sleep(0.15)
             if self.is_port_open(base_port):
                 time.sleep(0.2)
@@ -354,6 +427,25 @@ class BenchmarkRunner:
             res = subprocess.run(cmd, capture_output=True, text=True)
             return parse_h2load_output(res.stdout)
 
+        elif protocol == "h3":
+            wl = HTTP_WORKLOADS[workload_name]
+            url = f"https://127.0.0.1:{port}{wl['path']}"
+            cmd = [
+                "taskset", "-c", cores,
+                H2LOAD_H3_BIN,
+                "--alpn-list=h3",
+                "-n", "0",
+                "-D", f"{duration}s",
+                "-c", str(conns),
+                "-m", "16",
+                "-t", str(threads),
+            ]
+            if workload_name == "echo":
+                cmd += ["-d", echo_bin, "-H", "Content-Type: application/octet-stream"]
+            cmd.append(url)
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            return parse_h2load_output(res.stdout)
+
         elif protocol == "ws":
             wl = WS_WORKLOADS[workload_name]
             url = f"http://127.0.0.1:{port}{wl['path']}"
@@ -376,18 +468,23 @@ class BenchmarkRunner:
         raise ValueError(f"Unknown protocol: {protocol}")
 
     def run(self):
-        protocols = ["h1_plain", "h1_tls", "h2", "ws"] if "all" in self.args.protocols else self.args.protocols
-        servers = ["aegon", "viltrum"] if "all" in self.args.servers else self.args.servers
+        protocols = ALL_PROTOCOLS if "all" in self.args.protocols else self.args.protocols
+        servers = list(SERVERS_CONFIG.keys()) if "all" in self.args.servers else self.args.servers
+
+        # Filter out unknown servers
+        servers = [s for s in servers if s in SERVERS_CONFIG]
+        server_names = [SERVERS_CONFIG[s]["name"] for s in servers]
+        title_servers = " vs ".join(server_names)
 
         print("\n" + "=" * 80)
-        print("          HttpArena Unified Benchmark Runner: Aegon vs Viltrum")
+        print(f"     HttpArena Unified Benchmark Runner: {title_servers}")
         print("=" * 80)
         print(f" Protocols:       {', '.join(protocols)}")
-        print(f" Servers:         {', '.join(servers)}")
+        print(f" Servers:         {', '.join(server_names)} ({', '.join(servers)})")
         print(f" Concurrency:     {self.args.concurrency} connections | {self.args.threads} client threads")
         print(f" Core Allocation: Server -> Cores {self.args.server_cores} | Client -> Cores {self.args.client_cores}")
         print(f" Runs Per Test:   {self.args.runs} (Duration: {self.args.duration}s, Warmup: {self.args.warmup}s)")
-        print(f" Tooling:         H1 Plain/TLS: wrk | H2: h2load | WS: gcannon")
+        print(f" Tooling:         H1 Plain/TLS: wrk | H2: h2load | H3: h2load --h3 | WS: gcannon")
         print("=" * 80 + "\n")
 
         try:
@@ -401,20 +498,30 @@ class BenchmarkRunner:
                 if not target_workloads:
                     continue
 
+                # Filter servers that have subscribed to this protocol
+                proto_eligible_servers = [s for s in servers if proto in SERVERS_CONFIG[s].get("subscribes", {})]
+                if not proto_eligible_servers:
+                    continue
+
                 print(f"\n>>> Protocol Suite: [{proto.upper()}] <<<")
 
-                for s_key in servers:
+                for s_key in proto_eligible_servers:
+                    s_name = SERVERS_CONFIG[s_key]["name"]
+
+                    # Filter workloads subscribed by this specific server
+                    server_workloads = [w for w in target_workloads if is_server_subscribed(s_key, proto, w)]
+                    if not server_workloads:
+                        continue
+
                     if self.args.manage_servers:
                         if not self.start_server(s_key):
                             continue
 
-                    s_name = SERVERS_CONFIG[s_key]["name"]
-
-                    for wl_key in target_workloads:
+                    for wl_key in server_workloads:
                         wl_desc = workloads_map[wl_key]["desc"]
                         test_key = f"{proto}::{wl_key}"
 
-                        print(f"  -> Testing {s_name:<7} | {test_key:<20} ({wl_desc})...", end="", flush=True)
+                        print(f"  -> Testing {s_name:<11} | {test_key:<20} ({wl_desc})...", end="", flush=True)
 
                         # Warmup
                         if self.args.warmup > 0:
@@ -470,85 +577,138 @@ class BenchmarkRunner:
             self.save_markdown_summary(self.args.markdown_out)
             print(f"[Artifact] Markdown summary saved to: {self.args.markdown_out}")
 
+    def _get_active_servers(self) -> List[str]:
+        servers = []
+        for test_key, data in self.results.items():
+            for skey in data.keys():
+                if skey not in servers:
+                    servers.append(skey)
+        # Preserve natural order as defined in SERVERS_CONFIG
+        config_order = list(SERVERS_CONFIG.keys())
+        return sorted(servers, key=lambda s: config_order.index(s) if s in config_order else 99)
+
     def print_summary_table(self):
         if not self.results:
             return
 
-        print("\n" + "=" * 90)
-        print(f" {'BENCHMARK COMPARISON SUMMARY: AEGON VS VILTRUM':^88}")
-        print("=" * 90)
-        print(f" {'Protocol / Workload':<28} | {'Aegon RPS':<13} | {'Viltrum RPS':<13} | {'Delta RPS':<11} | {'Aegon p99':<10} | {'Viltrum p99':<10}")
-        print("-" * 90)
+        active_servers = self._get_active_servers()
+        if not active_servers:
+            return
+
+        names = [SERVERS_CONFIG.get(s, {}).get("name", s) for s in active_servers]
+        title = "BENCHMARK COMPARISON SUMMARY: " + " VS ".join(names).upper()
+
+        col_w = 14
+        header_parts = [f"{'Protocol / Workload':<28}"]
+        for name in names:
+            header_parts.append(f"{name + ' RPS':<{col_w}}")
+        if len(active_servers) == 2:
+            header_parts.append(f"{'Delta RPS':<11}")
+        for name in names:
+            header_parts.append(f"{name + ' p99':<12}")
+
+        header_str = " | ".join(header_parts)
+        sep_len = max(90, len(header_str) + 2)
+
+        print("\n" + "=" * sep_len)
+        print(f" {title:^{sep_len-2}}")
+        print("=" * sep_len)
+        print(" " + header_str)
+        print("-" * sep_len)
 
         for test_key, data in self.results.items():
-            aegon = data.get("aegon", {})
-            viltrum = data.get("viltrum", {})
+            row_parts = [f"{test_key:<28}"]
+            rps_list = []
+            for s in active_servers:
+                s_data = data.get(s, {})
+                rps = s_data.get("rps", 0.0)
+                rps_list.append(rps)
+                rps_str = f"{rps:,.0f}" if rps > 0 else "-"
+                row_parts.append(f"{rps_str:<{col_w}}")
 
-            a_rps = aegon.get("rps", 0.0)
-            v_rps = viltrum.get("rps", 0.0)
-            a_p99 = aegon.get("p99_us", 0.0)
-            v_p99 = viltrum.get("p99_us", 0.0)
+            if len(active_servers) == 2:
+                delta_str = "-"
+                if rps_list[0] > 0 and rps_list[1] > 0:
+                    delta = ((rps_list[0] - rps_list[1]) / rps_list[1]) * 100.0
+                    delta_str = f"{delta:+.1f}%"
+                row_parts.append(f"{delta_str:<11}")
 
-            delta_str = "N/A"
-            if v_rps > 0 and a_rps > 0:
-                delta = ((a_rps - v_rps) / v_rps) * 100.0
-                delta_str = f"{delta:+.1f}%"
+            for s in active_servers:
+                s_data = data.get(s, {})
+                p99 = s_data.get("p99_us", 0.0)
+                p99_str = f"{p99:.1f}µs" if p99 > 0 else "-"
+                row_parts.append(f"{p99_str:<12}")
 
-            a_rps_str = f"{a_rps:,.0f}" if a_rps > 0 else "N/A"
-            v_rps_str = f"{v_rps:,.0f}" if v_rps > 0 else "N/A"
-            a_p99_str = f"{a_p99:.1f}µs" if a_p99 > 0 else "N/A"
-            v_p99_str = f"{v_p99:.1f}µs" if v_p99 > 0 else "N/A"
+            print(" " + " | ".join(row_parts))
 
-            print(f" {test_key:<28} | {a_rps_str:<13} | {v_rps_str:<13} | {delta_str:<11} | {a_p99_str:<10} | {v_p99_str:<10}")
-
-        print("=" * 90 + "\n")
+        print("=" * sep_len + "\n")
 
     def save_markdown_summary(self, path: str):
+        active_servers = self._get_active_servers()
+        if not active_servers:
+            return
+
+        names = [SERVERS_CONFIG.get(s, {}).get("name", s) for s in active_servers]
+        title = "Benchmark Comparison: " + " vs. ".join(names)
+
+        headers = ["Protocol / Workload"] + [f"{n} (RPS)" for n in names]
+        if len(active_servers) == 2:
+            headers.append("Δ Throughput")
+        headers += [f"{n} p99 Latency" for n in names]
+
+        align = [":---"] + [":---:"] * (len(headers) - 1)
+
         lines = [
-            "# Benchmark Comparison: Aegon vs. Viltrum",
+            f"# {title}",
             "",
             f"- **Server Hardware**: Physical Cores {self.args.server_cores} (2 worker threads)",
             f"- **Client Hardware**: Physical Cores {self.args.client_cores} ({self.args.threads} threads, {self.args.concurrency} conns)",
             f"- **Duration**: {self.args.duration}s per test | Runs: {self.args.runs}",
             "",
-            "| Protocol / Workload | Aegon (RPS) | Viltrum (RPS) | Δ Throughput | Aegon p99 Latency | Viltrum p99 Latency |",
-            "| :--- | :---: | :---: | :---: | :---: | :---: |",
+            "| " + " | ".join(headers) + " |",
+            "| " + " | ".join(align) + " |",
         ]
+
         for test_key, data in self.results.items():
-            aegon = data.get("aegon", {})
-            viltrum = data.get("viltrum", {})
+            row = [f"`{test_key}`"]
+            rps_list = []
+            for s in active_servers:
+                s_data = data.get(s, {})
+                rps = s_data.get("rps", 0.0)
+                rps_list.append(rps)
+                rps_str = f"{rps:,.0f}" if rps > 0 else "-"
+                row.append(rps_str)
 
-            a_rps = aegon.get("rps", 0.0)
-            v_rps = viltrum.get("rps", 0.0)
-            a_p99 = aegon.get("p99_us", 0.0)
-            v_p99 = viltrum.get("p99_us", 0.0)
+            if len(active_servers) == 2:
+                delta_str = "-"
+                if rps_list[0] > 0 and rps_list[1] > 0:
+                    delta = ((rps_list[0] - rps_list[1]) / rps_list[1]) * 100.0
+                    delta_str = f"**{delta:+.1f}%**"
+                row.append(delta_str)
 
-            delta_str = "N/A"
-            if v_rps > 0 and a_rps > 0:
-                delta = ((a_rps - v_rps) / v_rps) * 100.0
-                delta_str = f"**{delta:+.1f}%**"
+            for s in active_servers:
+                s_data = data.get(s, {})
+                p99 = s_data.get("p99_us", 0.0)
+                p99_str = f"{p99:.1f} µs" if p99 > 0 else "-"
+                row.append(p99_str)
 
-            a_rps_str = f"{a_rps:,.0f}" if a_rps > 0 else "N/A"
-            v_rps_str = f"{v_rps:,.0f}" if v_rps > 0 else "N/A"
-            a_p99_str = f"{a_p99:.1f} µs" if a_p99 > 0 else "N/A"
-            v_p99_str = f"{v_p99:.1f} µs" if v_p99 > 0 else "N/A"
-
-            lines.append(f"| `{test_key}` | {a_rps_str} | {v_rps_str} | {delta_str} | {a_p99_str} | {v_p99_str} |")
+            lines.append("| " + " | ".join(row) + " |")
 
         lines.append("")
         with open(path, "w") as f:
             f.write("\n".join(lines))
 
 def main():
-    parser = argparse.ArgumentParser(description="HttpArena Benchmark Suite: Aegon vs. Viltrum")
+    available_servers_str = ", ".join(list(SERVERS_CONFIG.keys()))
+    available_protocols_str = ", ".join(ALL_PROTOCOLS)
+
+    parser = argparse.ArgumentParser(description=f"HttpArena Benchmark Suite: {available_servers_str}")
     parser.add_argument("-p", "--protocols", nargs="+", default=["all"],
-                        choices=["all", "h1_plain", "h1_tls", "h2", "ws"],
-                        help="Protocols to run (default: all)")
+                        help=f"Protocols to run: all, {available_protocols_str} (default: all)")
     parser.add_argument("-w", "--workloads", nargs="+", default=["all"],
-                        help="Workloads to run (all, baseline, pipeline, json, delay, echo, limited-conn)")
+                        help="Workloads to run: all, baseline, pipeline, json, delay, echo, limited-conn")
     parser.add_argument("-s", "--servers", nargs="+", default=["all"],
-                        choices=["all", "aegon", "viltrum"],
-                        help="Servers to test (default: all)")
+                        help=f"Servers to test: all, {available_servers_str} (default: all)")
     parser.add_argument("-r", "--runs", type=int, default=1,
                         help="Number of iterations per test (default: 1, pass 3 for triplicate)")
     parser.add_argument("-d", "--duration", type=int, default=10,
@@ -565,12 +725,24 @@ def main():
                         help="CPU affinity for client load generators (default: '2,3,4,5')")
     parser.add_argument("--no-manage-servers", dest="manage_servers", action="store_false", default=True,
                         help="Do not auto-start/stop servers (assumes servers are already running)")
+    parser.add_argument("--config", default=None,
+                        help="Optional path to external JSON configuration file to add or override servers")
     parser.add_argument("--json-out", default=None,
                         help="Save results to specified JSON file")
     parser.add_argument("--markdown-out", default=None,
                         help="Save summary table to Markdown file")
 
     args = parser.parse_args()
+
+    # Load external server configuration if specified
+    if args.config:
+        if os.path.exists(args.config):
+            with open(args.config) as f:
+                extra_servers = json.load(f)
+                SERVERS_CONFIG.update(extra_servers)
+        else:
+            print(f"[Error] Configuration file not found: {args.config}")
+            sys.exit(1)
 
     # Expand comma-separated values if passed as -p h1_plain,h2 or -w baseline,json
     expanded_p = []

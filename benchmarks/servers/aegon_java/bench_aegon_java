@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+
+JAR_PATH="${SCRIPT_DIR}/target/bench_aegon_java.jar"
+
+if [ ! -f "${JAR_PATH}" ]; then
+    echo "[bench_aegon_java] Target jar not found. Building..."
+    mvn -f "${SCRIPT_DIR}/pom.xml" package -DskipTests
+fi
+
+LIB_PATH="${ROOT_DIR}/build/libaegon_c.so"
+if [ ! -f "${LIB_PATH}" ]; then
+    LIB_PATH="${ROOT_DIR}/build/libaegon_c.so.0.2.1"
+fi
+
+exec java \
+  --enable-native-access=ALL-UNNAMED \
+  -Daegon.library.path="${LIB_PATH}" \
+  -Xms512m -Xmx2g \
+  -XX:+UseG1GC \
+  -jar "${JAR_PATH}" "$@"
+
