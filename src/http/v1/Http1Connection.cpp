@@ -169,6 +169,9 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
             continue;
         }
         if (recv_res.bytes <= 0) {
+            if (recv_res.buffer_valid) {
+                loop_.buffer_pool().return_buffer(recv_res.bid);
+            }
             break;
         }
 

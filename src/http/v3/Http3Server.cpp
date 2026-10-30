@@ -248,7 +248,9 @@ core::Task<Http3Connection*> Http3Server::dispatch_datagram_internal(
                     }
                 },
                 [this](std::string_view cid) {
-                    connections_.erase(cid);
+                    if (auto it = connections_.find(cid); it != connections_.end()) {
+                        connections_.erase(it);
+                    }
                 }
             );
         }

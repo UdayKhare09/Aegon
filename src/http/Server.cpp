@@ -153,6 +153,9 @@ core::Task<void> Server::run_h2_loop(core::EventLoop& loop, core::os_socket_t cl
     while (running_ && !h2.is_closed() && h2.wants_read()) {
         auto recv_res = co_await stream.next();
         if (recv_res.bytes <= 0) {
+            if (recv_res.buffer_valid) {
+                loop.buffer_pool().return_buffer(recv_res.bid);
+            }
             break;
         }
 
