@@ -120,11 +120,14 @@ struct RecvProvidedAwaiter : IoAwaiter {
 #if defined(_WIN32)
     WSABUF wsa_buf{};
     uint16_t allocated_bid{0};
+    BufferPool* buffer_pool{nullptr};
+    bool buffer_allocated{false};
 #endif
 
     RecvProvidedAwaiter(IoEngine& e, os_socket_t fd, uint16_t b) noexcept
         : engine(e), socket_fd(fd), bgid(b) {}
     void submit() noexcept override;
+    void on_completion(int res, uint32_t flags) noexcept override;
     [[nodiscard]] RecvResult await_resume() noexcept;
 };
 
@@ -371,6 +374,8 @@ public:
 #if defined(_WIN32)
         WSABUF wsa_buf{};
         uint16_t allocated_bid{0};
+        BufferPool* buffer_pool{nullptr};
+        bool buffer_allocated{false};
 #endif
 
         StreamState(IoEngine& e, os_socket_t fd, uint16_t b) noexcept

@@ -250,6 +250,8 @@ void IocpEngine::submit_recv_provided(RecvProvidedAwaiter& aw) noexcept {
     }
 
     aw.allocated_bid = static_cast<uint16_t>(bid);
+    aw.buffer_pool = buffer_pool_;
+    aw.buffer_allocated = true;
     auto slice = buffer_pool_->get_buffer(aw.allocated_bid, static_cast<int>(buffer_pool_->buffer_size()));
 
     associate_socket(aw.socket_fd);
@@ -264,6 +266,7 @@ void IocpEngine::submit_recv_provided(RecvProvidedAwaiter& aw) noexcept {
         int err = WSAGetLastError();
         if (err != WSA_IO_PENDING) {
             buffer_pool_->return_buffer(aw.allocated_bid);
+            aw.buffer_allocated = false;
             aw.result = -err;
             resume_continuation(aw);
         }
@@ -538,6 +541,8 @@ void IocpEngine::submit_multishot_recv(MultishotRecvStream::StreamState& st) noe
     }
 
     st.allocated_bid = static_cast<uint16_t>(bid);
+    st.buffer_pool = buffer_pool_;
+    st.buffer_allocated = true;
     auto slice = buffer_pool_->get_buffer(st.allocated_bid, static_cast<int>(buffer_pool_->buffer_size()));
 
     associate_socket(st.socket_fd);
@@ -554,6 +559,7 @@ void IocpEngine::submit_multishot_recv(MultishotRecvStream::StreamState& st) noe
         int err = WSAGetLastError();
         if (err != WSA_IO_PENDING) {
             buffer_pool_->return_buffer(st.allocated_bid);
+            st.buffer_allocated = false;
             st.armed = false;
             st.result = -err;
             resume_continuation(st);

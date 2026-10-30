@@ -38,7 +38,7 @@ RecvResult RecvProvidedAwaiter::await_resume() noexcept {
     RecvResult res;
     res.bytes        = result;
 #if defined(_WIN32)
-    res.buffer_valid = (result >= 0);
+    res.buffer_valid = buffer_allocated;
     res.bid          = allocated_bid;
     res.has_more     = false;
     res.eof          = (result == 0);
@@ -51,6 +51,16 @@ RecvResult RecvProvidedAwaiter::await_resume() noexcept {
     res.eof      = (result == 0);
 #endif
     return res;
+}
+
+void RecvProvidedAwaiter::on_completion(int res, uint32_t cqe_flags) noexcept {
+#if defined(_WIN32)
+    if (res < 0 && buffer_allocated && buffer_pool) {
+        buffer_pool->return_buffer(allocated_bid);
+        buffer_allocated = false;
+    }
+#endif
+    IoAwaiter::on_completion(res, cqe_flags);
 }
 
 int RecvAwaiter::await_resume() noexcept {
@@ -178,10 +188,14 @@ void MultishotAcceptStream::StreamState::on_completion(int res, uint32_t cqe_fla
         armed = r.has_more;
     }
 
+#if defined(_WIN32)
+    finished = res < 0;
+#else
     if (!r.has_more || res < 0) {
         finished = true;
         armed    = false;
     }
+#endif
 
     if (continuation && !continuation.done()) {
         current_result = r;
@@ -226,7 +240,11 @@ void MultishotRecvStream::StreamState::on_completion(int res, uint32_t cqe_flags
     RecvResult r;
     r.bytes        = res;
 #if defined(_WIN32)
-    r.buffer_valid = (res >= 0);
+    if (res < 0 && buffer_allocated && buffer_pool) {
+        buffer_pool->return_buffer(allocated_bid);
+        buffer_allocated = false;
+    }
+    r.buffer_valid = buffer_allocated;
     r.bid          = allocated_bid;
     r.has_more     = false;
     r.eof          = (res == 0);
@@ -246,10 +264,17 @@ void MultishotRecvStream::StreamState::on_completion(int res, uint32_t cqe_flags
         armed = r.has_more;
     }
 
+#if defined(_WIN32)
+    if (res <= 0) {
+        finished = true;
+        armed = false;
+    }
+#else
     if (!r.has_more || res <= 0) {
         finished = true;
         armed    = false;
     }
+#endif
 
     if (continuation && !continuation.done()) {
         current_result = r;
@@ -400,4 +425,3 @@ std::unique_ptr<IoEngine> IoEngine::create(const EngineConfig& config, BufferPoo
 }
 
 } // namespace aegon::core
-

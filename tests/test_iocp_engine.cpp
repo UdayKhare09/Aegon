@@ -6,6 +6,7 @@
 #include <cassert>
 #include <thread>
 #include <chrono>
+#include <cstdlib>
 
 using namespace aegon::core;
 
@@ -138,6 +139,66 @@ void test_iocp_tcp_loopback() {
     std::cout << "  -> PASS: IocpEngine TCP loopback completed cleanly!\n";
 }
 
+void test_iocp_multishot_accept_rearms() {
+    std::cout << "[TEST 3] Testing IocpEngine multishot accept re-arming...\n";
+    init_sockets();
+
+    EventLoop loop(1024, 8, 4096);
+    auto& engine = loop.engine();
+
+    SOCKET listen_sock = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+    if (listen_sock == INVALID_SOCKET) std::abort();
+
+    sockaddr_in saddr{};
+    saddr.sin_family = AF_INET;
+    saddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    saddr.sin_port = 0;
+    if (bind(listen_sock, reinterpret_cast<sockaddr*>(&saddr), sizeof(saddr)) != 0) std::abort();
+    if (listen(listen_sock, 8) != 0) std::abort();
+
+    int addr_len = sizeof(saddr);
+    if (getsockname(listen_sock, reinterpret_cast<sockaddr*>(&saddr), &addr_len) != 0) std::abort();
+    uint16_t port = ntohs(saddr.sin_port);
+
+    bool server_done = false;
+    std::thread client_thread([&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        for (int i = 0; i < 2; ++i) {
+            SOCKET client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (client == INVALID_SOCKET) std::abort();
+            sockaddr_in server_addr{};
+            server_addr.sin_family = AF_INET;
+            server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            server_addr.sin_port = htons(port);
+            if (connect(client, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) != 0) std::abort();
+            closesocket(client);
+        }
+    });
+
+    auto accept_task = [&]() -> Task<void> {
+        auto stream = engine.accept_multishot(listen_sock);
+        auto first = co_await stream.next();
+        auto second = co_await stream.next();
+        if (!is_valid_socket(first.fd) || !is_valid_socket(second.fd) || first.fd == second.fd) {
+            std::cerr << "Multishot accept did not yield two distinct sockets.\n";
+            std::abort();
+        }
+        (void)(co_await engine.close(first.fd));
+        (void)(co_await engine.close(second.fd));
+        server_done = true;
+    };
+
+    loop.spawn(accept_task());
+    while (!server_done) {
+        engine.submit_and_wait(1);
+        engine.process_completions();
+    }
+
+    client_thread.join();
+    closesocket(listen_sock);
+    std::cout << "  -> PASS: Two accepts were delivered as distinct sockets.\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "          AEGON IOCP ENGINE VERIFICATION SUITE         \n";
@@ -145,6 +206,7 @@ int main() {
 
     test_iocp_engine_basics();
     test_iocp_tcp_loopback();
+    test_iocp_multishot_accept_rearms();
 
     std::cout << "\n=======================================================\n";
     std::cout << "    >>> ALL IOCP ENGINE TESTS PASSED CLEANLY! <<<      \n";
