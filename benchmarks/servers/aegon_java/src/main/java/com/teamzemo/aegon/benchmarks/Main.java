@@ -224,6 +224,22 @@ public final class Main {
         // 6. HttpArena WebSocket Echo (/ws)
         router.wsEcho("/ws");
 
+        // 7. HttpArena Static Files (/static/*)
+        List<String> staticPaths = List.of(
+            "benchmarks/data/static",
+            "data/static",
+            "../data/static",
+            "../../data/static",
+            "/data/static"
+        );
+        for (String sp : staticPaths) {
+            Path p = Path.of(sp);
+            if (Files.exists(p) && Files.isDirectory(p)) {
+                router.staticFiles("/static", p.toAbsolutePath().toString());
+                break;
+            }
+        }
+
         int portPlain = basePort;
         int portTls   = basePort + 1;
         int portH2    = basePort + 2;

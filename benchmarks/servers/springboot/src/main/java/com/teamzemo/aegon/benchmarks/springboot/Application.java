@@ -16,6 +16,9 @@ import org.springframework.web.socket.config.annotation.EnableWebSocket;
 import org.springframework.web.socket.config.annotation.WebSocketConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
+import org.springframework.http.CacheControl;
+import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -30,7 +33,7 @@ import java.util.List;
 @SpringBootApplication
 @EnableWebSocket
 @RestController
-public class Application implements WebServerFactoryCustomizer<TomcatServletWebServerFactory>, WebSocketConfigurer {
+public class Application implements WebServerFactoryCustomizer<TomcatServletWebServerFactory>, WebSocketConfigurer, WebMvcConfigurer {
 
     // --- Domain Models ---
     public record Rating(int score, long count) {}
@@ -120,6 +123,27 @@ public class Application implements WebServerFactoryCustomizer<TomcatServletWebS
                 session.sendMessage(message);
             }
         }, "/ws");
+    }
+
+    // --- 7. Static Files (/static/**) ---
+    @Override
+    public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        String[] searchPaths = {
+            "benchmarks/data/static",
+            "data/static",
+            "../data/static",
+            "/data/static"
+        };
+        for (String p : searchPaths) {
+            File dir = new File(p);
+            if (dir.exists() && dir.isDirectory()) {
+                registry.addResourceHandler("/static/**")
+                    .addResourceLocations("file:" + dir.getAbsolutePath() + "/")
+                    .setCacheControl(CacheControl.noCache());
+                System.out.println("[Spring Boot] Serving static files from " + dir.getAbsolutePath());
+                break;
+            }
+        }
     }
 
     // --- Multi-Port Listeners (Plain, TLS, H2) ---

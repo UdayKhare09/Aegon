@@ -235,6 +235,20 @@ int main(int argc, char* argv[]) {
     // 6. HttpArena WebSocket Echo (/ws)
     server.router().ws("/ws");
 
+    // 7. HttpArena Static Files (/static/*)
+    std::vector<std::string> static_paths = {
+        "benchmarks/data/static",
+        "data/static",
+        "../data/static",
+        "/data/static"
+    };
+    for (const auto& sp : static_paths) {
+        if (std::filesystem::exists(sp) && std::filesystem::is_directory(sp)) {
+            server.router().static_files("/static", sp);
+            break;
+        }
+    }
+
     // Port allocation:
     // base_port     (18080): HTTP/1.1 Plain & WebSocket
     // base_port + 1 (18081): TLS 1.3 HTTP/1.1

@@ -196,6 +196,22 @@ int main(int argc, char* argv[]) {
         {Post}
     );
 
+    // 6. HttpArena Static Files (/static/*)
+    std::vector<std::string> staticPaths = {
+        "benchmarks/data/static",
+        "data/static",
+        "../data/static",
+        "/data/static"
+    };
+    for (const auto& path : staticPaths) {
+        if (std::filesystem::exists(path) && std::filesystem::is_directory(path)) {
+            std::string absPath = std::filesystem::canonical(path).string();
+            app().addALocation("/static", "", absPath);
+            break;
+        }
+    }
+    app().setStaticFilesCacheTime(-1);
+
     uint16_t portPlain = basePort;
     uint16_t portTls = basePort + 1;
 

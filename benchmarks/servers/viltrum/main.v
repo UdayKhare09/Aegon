@@ -142,6 +142,24 @@ fn main() {
 		}
 	})
 
+	// 7. HttpArena Static Files (/static)
+	static_paths := [
+		'benchmarks/data/static',
+		'data/static',
+		'../data/static',
+		'/data/static',
+	]
+	mut static_dir := ''
+	for p in static_paths {
+		if os.is_dir(p) {
+			static_dir = p
+			break
+		}
+	}
+	if static_dir != '' {
+		app.static_files('/static', static_dir, precompressed: true)
+	}
+
 	port_plain := base_port
 	port_tls := base_port + 1
 	port_h2 := base_port + 2
