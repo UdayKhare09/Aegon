@@ -1,11 +1,13 @@
 #include "core/engine/EpollEngine.h"
 #include "core/BufferPool.h"
+#include "core/ThreadPool.h"
 #include "log/Logger.h"
 
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/eventfd.h>
+#include <sys/uio.h>
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <cstring>
@@ -466,6 +468,14 @@ int EpollEngine::submit_and_wait(uint32_t min_complete) {
 }
 
 size_t EpollEngine::process_completions() noexcept {
+    {
+        std::lock_guard<std::mutex> lock(posted_mutex_);
+        while (!posted_completions_.empty()) {
+            ready_completions_.push_back(posted_completions_.front());
+            posted_completions_.pop_front();
+        }
+    }
+
     if (ready_completions_.empty()) return 0;
 
     auto ready = std::move(ready_completions_);
@@ -694,6 +704,70 @@ void EpollEngine::submit_recvmsg(RecvmsgAwaiter& aw) noexcept {
     } else {
         ready_completions_.push_back({&aw, -errno, 0});
     }
+}
+
+void EpollEngine::post_completion(IoAwaiter* aw, int res) noexcept {
+    {
+        std::lock_guard<std::mutex> lock(posted_mutex_);
+        posted_completions_.push_back({aw, res, 0});
+    }
+    wakeup();
+}
+
+void EpollEngine::submit_read(ReadAwaiter& aw) noexcept {
+#if defined(RWF_NOWAIT)
+    struct iovec iov{aw.buf, aw.len};
+    ssize_t n = ::preadv2(aw.fd, &iov, 1, aw.offset, RWF_NOWAIT);
+    if (n >= 0) {
+        ready_completions_.push_back({&aw, static_cast<int>(n), 0});
+        return;
+    }
+#endif
+
+    ThreadPool::default_pool().post([this, &aw]() {
+        ssize_t ret;
+        if (aw.offset >= 0) {
+            ret = ::pread(aw.fd, aw.buf, aw.len, aw.offset);
+        } else {
+            ret = ::read(aw.fd, aw.buf, aw.len);
+        }
+        int res = (ret >= 0) ? static_cast<int>(ret) : -errno;
+        this->post_completion(&aw, res);
+    });
+}
+
+void EpollEngine::submit_write(WriteAwaiter& aw) noexcept {
+    ThreadPool::default_pool().post([this, &aw]() {
+        ssize_t ret;
+        if (aw.offset >= 0) {
+            ret = ::pwrite(aw.fd, aw.buf, aw.len, aw.offset);
+        } else {
+            ret = ::write(aw.fd, aw.buf, aw.len);
+        }
+        int res = (ret >= 0) ? static_cast<int>(ret) : -errno;
+        this->post_completion(&aw, res);
+    });
+}
+
+void EpollEngine::submit_fsync(FsyncAwaiter& aw) noexcept {
+    ThreadPool::default_pool().post([this, &aw]() {
+        int ret;
+        if (aw.fsync_flags & 1 /* IORING_FSYNC_DATASYNC */) {
+            ret = ::fdatasync(aw.fd);
+        } else {
+            ret = ::fsync(aw.fd);
+        }
+        int res = (ret == 0) ? 0 : -errno;
+        this->post_completion(&aw, res);
+    });
+}
+
+void EpollEngine::submit_fallocate(FallocateAwaiter& aw) noexcept {
+    ThreadPool::default_pool().post([this, &aw]() {
+        int ret = ::fallocate(aw.fd, aw.mode, aw.offset, aw.len);
+        int res = (ret == 0) ? 0 : -errno;
+        this->post_completion(&aw, res);
+    });
 }
 
 } // namespace aegon::core

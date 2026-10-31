@@ -132,6 +132,22 @@ int RecvmsgAwaiter::await_resume() noexcept {
     return result;
 }
 
+int ReadAwaiter::await_resume() noexcept {
+    return result;
+}
+
+int WriteAwaiter::await_resume() noexcept {
+    return result;
+}
+
+int FsyncAwaiter::await_resume() noexcept {
+    return result;
+}
+
+int FallocateAwaiter::await_resume() noexcept {
+    return result;
+}
+
 // ---------------------------------------------------------------------------
 // MultishotAcceptStream
 // ---------------------------------------------------------------------------

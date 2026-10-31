@@ -102,6 +102,7 @@ aegon_add_test(orm_advanced aegon_orm)
 aegon_add_test(sql_tx_cache_parity aegon_orm)
 aegon_add_test(live_postgres aegon_orm aegon_http)
 aegon_add_test(live_postgres_orm_cache aegon_orm aegon_redis)
+aegon_add_test(storage aegon_storage aegon_core aegon_memory)
 
 
 # Standalone Test Servers & Harnesses (Non-CTest Executables)

@@ -283,6 +283,58 @@ struct RecvmsgAwaiter : IoAwaiter {
     [[nodiscard]] int await_resume() noexcept;
 };
 
+struct ReadAwaiter : IoAwaiter {
+    IoEngine& engine;
+    int fd{-1};
+    void* buf{nullptr};
+    size_t len{0};
+    int64_t offset{0};
+    int fixed_buf_idx{-1};
+
+    ReadAwaiter(IoEngine& e, int f, void* b, size_t l, int64_t off = -1, int buf_idx = -1) noexcept
+        : engine(e), fd(f), buf(b), len(l), offset(off), fixed_buf_idx(buf_idx) {}
+    void submit() noexcept override;
+    [[nodiscard]] int await_resume() noexcept;
+};
+
+struct WriteAwaiter : IoAwaiter {
+    IoEngine& engine;
+    int fd{-1};
+    const void* buf{nullptr};
+    size_t len{0};
+    int64_t offset{0};
+    int fixed_buf_idx{-1};
+
+    WriteAwaiter(IoEngine& e, int f, const void* b, size_t l, int64_t off = -1, int buf_idx = -1) noexcept
+        : engine(e), fd(f), buf(b), len(l), offset(off), fixed_buf_idx(buf_idx) {}
+    void submit() noexcept override;
+    [[nodiscard]] int await_resume() noexcept;
+};
+
+struct FsyncAwaiter : IoAwaiter {
+    IoEngine& engine;
+    int fd{-1};
+    unsigned int fsync_flags{0};
+
+    FsyncAwaiter(IoEngine& e, int f, unsigned int flags = 0) noexcept
+        : engine(e), fd(f), fsync_flags(flags) {}
+    void submit() noexcept override;
+    [[nodiscard]] int await_resume() noexcept;
+};
+
+struct FallocateAwaiter : IoAwaiter {
+    IoEngine& engine;
+    int fd{-1};
+    int mode{0};
+    int64_t offset{0};
+    int64_t len{0};
+
+    FallocateAwaiter(IoEngine& e, int f, int m, int64_t off, int64_t l) noexcept
+        : engine(e), fd(f), mode(m), offset(off), len(l) {}
+    void submit() noexcept override;
+    [[nodiscard]] int await_resume() noexcept;
+};
+
 // ---------------------------------------------------------------------------
 // Multishot Stream Classes
 // ---------------------------------------------------------------------------
@@ -469,6 +521,10 @@ public:
     virtual void submit_shutdown(ShutdownAwaiter& aw) noexcept = 0;
     virtual void submit_cancel(CancelAwaiter& aw) noexcept = 0;
     virtual void submit_recvmsg(RecvmsgAwaiter& aw) noexcept = 0;
+    virtual void submit_read(ReadAwaiter& aw) noexcept = 0;
+    virtual void submit_write(WriteAwaiter& aw) noexcept = 0;
+    virtual void submit_fsync(FsyncAwaiter& aw) noexcept = 0;
+    virtual void submit_fallocate(FallocateAwaiter& aw) noexcept = 0;
     virtual void submit_multishot_accept(MultishotAcceptStream::StreamState& st) noexcept = 0;
     virtual void cancel_multishot_accept(MultishotAcceptStream::StreamState& st) noexcept = 0;
     virtual void submit_multishot_recv(MultishotRecvStream::StreamState& st) noexcept = 0;
@@ -565,6 +621,30 @@ public:
         return RecvmsgAwaiter{*this, fd, msg};
     }
 
+    [[nodiscard]] ReadAwaiter read(int fd, void* buf, size_t len, int64_t offset = -1) noexcept {
+        return ReadAwaiter{*this, fd, buf, len, offset};
+    }
+
+    [[nodiscard]] ReadAwaiter read_fixed(int fd, void* buf, size_t len, int64_t offset, int buf_index) noexcept {
+        return ReadAwaiter{*this, fd, buf, len, offset, buf_index};
+    }
+
+    [[nodiscard]] WriteAwaiter write(int fd, const void* buf, size_t len, int64_t offset = -1) noexcept {
+        return WriteAwaiter{*this, fd, buf, len, offset};
+    }
+
+    [[nodiscard]] WriteAwaiter write_fixed(int fd, const void* buf, size_t len, int64_t offset, int buf_index) noexcept {
+        return WriteAwaiter{*this, fd, buf, len, offset, buf_index};
+    }
+
+    [[nodiscard]] FsyncAwaiter fsync(int fd, unsigned int flags = 0) noexcept {
+        return FsyncAwaiter{*this, fd, flags};
+    }
+
+    [[nodiscard]] FallocateAwaiter fallocate(int fd, int mode, int64_t offset, int64_t len) noexcept {
+        return FallocateAwaiter{*this, fd, mode, offset, len};
+    }
+
     // Engine-level send_all loop (reusable across all engines)
     [[nodiscard]] Task<int> send_all(os_socket_t fd, const void* buf, size_t len);
     [[nodiscard]] Task<int> send_all(os_socket_t fd, const char* str);
@@ -610,6 +690,10 @@ inline void CloseAwaiter::submit() noexcept { engine.submit_close(*this); }
 inline void ShutdownAwaiter::submit() noexcept { engine.submit_shutdown(*this); }
 inline void CancelAwaiter::submit() noexcept { engine.submit_cancel(*this); }
 inline void RecvmsgAwaiter::submit() noexcept { engine.submit_recvmsg(*this); }
+inline void ReadAwaiter::submit() noexcept { engine.submit_read(*this); }
+inline void WriteAwaiter::submit() noexcept { engine.submit_write(*this); }
+inline void FsyncAwaiter::submit() noexcept { engine.submit_fsync(*this); }
+inline void FallocateAwaiter::submit() noexcept { engine.submit_fallocate(*this); }
 
 inline void MultishotAcceptStream::StreamState::submit() noexcept { engine.submit_multishot_accept(*this); }
 inline void MultishotRecvStream::StreamState::submit() noexcept { engine.submit_multishot_recv(*this); }

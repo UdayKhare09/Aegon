@@ -4,6 +4,8 @@
 #include <liburing.h>
 #include <unordered_set>
 #include <vector>
+#include <deque>
+#include <mutex>
 
 namespace aegon::core {
 
@@ -46,6 +48,11 @@ public:
     void submit_shutdown(ShutdownAwaiter& aw) noexcept override;
     void submit_cancel(CancelAwaiter& aw) noexcept override;
     void submit_recvmsg(RecvmsgAwaiter& aw) noexcept override;
+    void submit_read(ReadAwaiter& aw) noexcept override;
+    void submit_write(WriteAwaiter& aw) noexcept override;
+    void submit_fsync(FsyncAwaiter& aw) noexcept override;
+    void submit_fallocate(FallocateAwaiter& aw) noexcept override;
+    void post_completion(IoAwaiter* aw, int res = 0) noexcept override;
 
     void submit_multishot_accept(MultishotAcceptStream::StreamState& st) noexcept override;
     void cancel_multishot_accept(MultishotAcceptStream::StreamState& st) noexcept override;
@@ -83,6 +90,13 @@ private:
     unsigned direct_fd_slots_{0};
     int wakeup_fd_{-1};
     std::unordered_set<uint64_t> cancelled_user_data_{};
+
+    struct PostedCompletion {
+        IoAwaiter* awaiter{nullptr};
+        int res{0};
+    };
+    std::deque<PostedCompletion> posted_completions_{};
+    std::mutex posted_mutex_{};
 };
 
 } // namespace aegon::core

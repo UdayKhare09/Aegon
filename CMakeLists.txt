@@ -59,6 +59,7 @@ target_link_libraries(aegon_log PUBLIC
 # 1. Async I/O Engine Core (aegon_core)
 set(AEGON_CORE_SOURCES
     src/core/BufferPool.cpp
+    src/core/ThreadPool.cpp
     src/core/engine/IoEngine.cpp
     src/core/EventLoop.cpp
 )
@@ -254,7 +255,25 @@ target_precompile_headers(aegon_http PRIVATE
     <openssl/crypto.h>
 )
 
-# 7. C ABI Wrapper Library (libaegon_c shared + static)
+# 8. Asynchronous Persistent Storage Engine (aegon_storage)
+add_library(aegon_storage
+    src/storage/DeviceDetector.cpp
+    src/storage/File.cpp
+    src/storage/FileStream.cpp
+    src/storage/WalLog.cpp
+)
+target_link_libraries(aegon_storage PUBLIC
+    aegon_core
+    aegon_memory
+)
+if(NOT WIN32 AND TARGET uring)
+    target_link_libraries(aegon_storage PUBLIC uring)
+endif()
+if(WIN32)
+    target_link_libraries(aegon_storage PUBLIC ws2_32)
+endif()
+
+# 9. C ABI Wrapper Library (libaegon_c shared + static)
 option(AEGON_BUILD_C_ABI "Build the C ABI wrapper library (libaegon_c)" ON)
 
 if(AEGON_BUILD_C_ABI)
@@ -335,7 +354,7 @@ endif()
 # ==============================================================================
 # Include Directories, Aliases & Export Names
 # ==============================================================================
-set(AEGON_MODULES log core config net redis memory orm http)
+set(AEGON_MODULES log core config net redis memory orm http storage)
 
 set(AEGON_ACTIVE_TARGETS "")
 foreach(mod ${AEGON_MODULES})

@@ -190,6 +190,18 @@ size_t IoUringEngine::process_completions() noexcept {
     if (count > 0) {
         io_uring_cq_advance(&ring_, static_cast<unsigned>(count));
     }
+
+    {
+        std::lock_guard<std::mutex> lock(posted_mutex_);
+        while (!posted_completions_.empty()) {
+            auto comp = posted_completions_.front();
+            posted_completions_.pop_front();
+            if (comp.awaiter) {
+                comp.awaiter->on_completion(comp.res, 0);
+                ++count;
+            }
+        }
+    }
     return count;
 }
 
@@ -438,6 +450,74 @@ void IoUringEngine::remove_direct_fd(unsigned slot) noexcept {
     if (!files_registered_ || slot >= direct_fd_slots_) return;
     int minus_one = -1;
     (void)io_uring_register_files_update(&ring_, slot, &minus_one, 1);
+}
+
+void IoUringEngine::post_completion(IoAwaiter* aw, int res) noexcept {
+    {
+        std::lock_guard<std::mutex> lock(posted_mutex_);
+        posted_completions_.push_back({aw, res});
+    }
+    wakeup();
+}
+
+void IoUringEngine::submit_read(ReadAwaiter& aw) noexcept {
+    struct io_uring_sqe* sqe = acquire_sqe();
+    if (!sqe) [[unlikely]] {
+        aw.result = -EBUSY;
+        resume_continuation(aw);
+        return;
+    }
+    if (aw.fixed_buf_idx >= 0) {
+        io_uring_prep_read_fixed(sqe, aw.fd, aw.buf, static_cast<unsigned>(aw.len),
+                                 aw.offset >= 0 ? static_cast<__u64>(aw.offset) : -1ULL,
+                                 aw.fixed_buf_idx);
+    } else {
+        io_uring_prep_read(sqe, aw.fd, aw.buf, static_cast<unsigned>(aw.len),
+                           aw.offset >= 0 ? static_cast<__u64>(aw.offset) : -1ULL);
+    }
+    io_uring_sqe_set_data(sqe, &aw);
+}
+
+void IoUringEngine::submit_write(WriteAwaiter& aw) noexcept {
+    struct io_uring_sqe* sqe = acquire_sqe();
+    if (!sqe) [[unlikely]] {
+        aw.result = -EBUSY;
+        resume_continuation(aw);
+        return;
+    }
+    if (aw.fixed_buf_idx >= 0) {
+        io_uring_prep_write_fixed(sqe, aw.fd, aw.buf, static_cast<unsigned>(aw.len),
+                                  aw.offset >= 0 ? static_cast<__u64>(aw.offset) : -1ULL,
+                                  aw.fixed_buf_idx);
+    } else {
+        io_uring_prep_write(sqe, aw.fd, aw.buf, static_cast<unsigned>(aw.len),
+                            aw.offset >= 0 ? static_cast<__u64>(aw.offset) : -1ULL);
+    }
+    io_uring_sqe_set_data(sqe, &aw);
+}
+
+void IoUringEngine::submit_fsync(FsyncAwaiter& aw) noexcept {
+    struct io_uring_sqe* sqe = acquire_sqe();
+    if (!sqe) [[unlikely]] {
+        aw.result = -EBUSY;
+        resume_continuation(aw);
+        return;
+    }
+    io_uring_prep_fsync(sqe, aw.fd, aw.fsync_flags);
+    io_uring_sqe_set_data(sqe, &aw);
+}
+
+void IoUringEngine::submit_fallocate(FallocateAwaiter& aw) noexcept {
+    struct io_uring_sqe* sqe = acquire_sqe();
+    if (!sqe) [[unlikely]] {
+        aw.result = -EBUSY;
+        resume_continuation(aw);
+        return;
+    }
+    io_uring_prep_fallocate(sqe, aw.fd, aw.mode,
+                            static_cast<__u64>(aw.offset),
+                            static_cast<__u64>(aw.len));
+    io_uring_sqe_set_data(sqe, &aw);
 }
 
 } // namespace aegon::core

@@ -3,6 +3,8 @@
 #include "core/engine/IoEngine.h"
 #include <sys/epoll.h>
 #include <vector>
+#include <deque>
+#include <mutex>
 #include <chrono>
 #include <queue>
 #include <memory>
@@ -51,6 +53,11 @@ public:
     void submit_shutdown(ShutdownAwaiter& aw) noexcept override;
     void submit_cancel(CancelAwaiter& aw) noexcept override;
     void submit_recvmsg(RecvmsgAwaiter& aw) noexcept override;
+    void submit_read(ReadAwaiter& aw) noexcept override;
+    void submit_write(WriteAwaiter& aw) noexcept override;
+    void submit_fsync(FsyncAwaiter& aw) noexcept override;
+    void submit_fallocate(FallocateAwaiter& aw) noexcept override;
+    void post_completion(IoAwaiter* aw, int res = 0) noexcept override;
 
     void submit_multishot_accept(MultishotAcceptStream::StreamState& st) noexcept override;
     void cancel_multishot_accept(MultishotAcceptStream::StreamState& st) noexcept override;
@@ -116,6 +123,8 @@ private:
     std::vector<FdSlot> slots_{};
     std::vector<struct epoll_event> ep_events_{};
     std::vector<ReadyCompletion> ready_completions_{};
+    std::deque<ReadyCompletion> posted_completions_{};
+    std::mutex posted_mutex_{};
 
     std::priority_queue<TimerEntry, std::vector<TimerEntry>, std::greater<TimerEntry>> timers_{};
     uint64_t next_timer_id_{0};
