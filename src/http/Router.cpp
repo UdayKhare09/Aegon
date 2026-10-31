@@ -125,29 +125,47 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
         bool accept_gz = options.precompressed && accept_enc && (accept_enc->find("gzip") != std::string_view::npos || accept_enc->find("deflate") != std::string_view::npos);
 
         auto try_serve = [&](const std::string& file_path, std::string_view encoding, bool is_fallback) -> bool {
+            int fd = -1;
             struct stat st{};
-            if (::stat(file_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
-                return false;
-            }
+            time_t current_mtime = 0;
+            long current_nsec = 0;
 
+            if (options.cache_in_memory) {
+                if (::stat(file_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
+                    return false;
+                }
 #if defined(__linux__)
-            time_t current_mtime = st.st_mtime;
-            long current_nsec = st.st_mtim.tv_nsec;
+                current_mtime = st.st_mtime;
+                current_nsec = st.st_mtim.tv_nsec;
 #elif defined(_WIN32)
-            time_t current_mtime = st.st_mtime;
-            long current_nsec = 0;
-            WIN32_FILE_ATTRIBUTE_DATA fad;
-            if (::GetFileAttributesExA(file_path.c_str(), GetFileExInfoStandard, &fad)) {
-                ULARGE_INTEGER ull;
-                ull.LowPart = fad.ftLastWriteTime.dwLowDateTime;
-                ull.HighPart = fad.ftLastWriteTime.dwHighDateTime;
-                current_mtime = static_cast<time_t>((ull.QuadPart - 116444736000000000ULL) / 10000000ULL);
-                current_nsec = static_cast<long>(((ull.QuadPart - 116444736000000000ULL) % 10000000ULL) * 100);
-            }
+                current_mtime = st.st_mtime;
+                current_nsec = 0;
 #else
-            time_t current_mtime = st.st_mtime;
-            long current_nsec = 0;
+                current_mtime = st.st_mtime;
+                current_nsec = 0;
 #endif
+            } else {
+#if defined(_WIN32)
+                fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
+                if (fd < 0) return false;
+                struct _stat64 st_win{};
+                if (::_fstat64(fd, &st_win) != 0 || !(st_win.st_mode & _S_IFREG)) {
+                    ::_close(fd);
+                    return false;
+                }
+                current_mtime = static_cast<time_t>(st_win.st_mtime);
+                st.st_size = static_cast<off_t>(st_win.st_size);
+#else
+                fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+                if (fd < 0) return false;
+                if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+                    ::close(fd);
+                    return false;
+                }
+                current_mtime = st.st_mtime;
+                current_nsec = st.st_mtim.tv_nsec;
+#endif
+            }
 
             std::string_view content_type = Response::infer_mime_type(file_path);
             CachedStaticFile entry;
@@ -166,6 +184,14 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
 
             if (!found_in_cache) {
                 if (!options.cache_in_memory && st.st_size > 64 * 1024) {
+                    if (fd >= 0) {
+#if defined(_WIN32)
+                        ::_close(fd);
+#else
+                        ::close(fd);
+#endif
+                        fd = -1;
+                    }
                     entry = CachedStaticFile{
                         .mtime = current_mtime,
                         .mtime_nsec = current_nsec,
@@ -177,22 +203,26 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                         .content_encoding = std::string(encoding)
                     };
                 } else {
+                    if (fd < 0) {
 #if defined(_WIN32)
-                    int fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
+                        fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
 #else
-                    int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+                        fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
 #endif
-                    if (fd < 0) return false;
+                        if (fd < 0) return false;
+                    }
 
                     std::string data;
                     data.resize(static_cast<size_t>(st.st_size));
 #if defined(_WIN32)
                     int n = ::_read(fd, data.data(), static_cast<unsigned int>(data.size()));
                     ::_close(fd);
+                    fd = -1;
                     if (n != static_cast<int>(data.size())) return false;
 #else
                     ssize_t n = ::pread(fd, data.data(), data.size(), 0);
                     ::close(fd);
+                    fd = -1;
                     if (n != static_cast<ssize_t>(data.size())) return false;
 #endif
 

@@ -246,7 +246,7 @@ int main(int argc, char* argv[]) {
         if (std::filesystem::exists(sp) && std::filesystem::is_directory(sp)) {
             StaticFilesOptions opts;
             opts.precompressed = true;
-            opts.cache_in_memory = true;
+            opts.cache_in_memory = false;
             server.router().static_files("/static", sp, opts);
             break;
         }
