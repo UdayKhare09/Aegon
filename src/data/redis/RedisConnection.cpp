@@ -1,4 +1,5 @@
 #include "RedisConnection.h"
+#include "net/tcp/TcpConnector.h"
 #if defined(_WIN32)
 #include <ws2tcpip.h>
 #else
@@ -51,44 +52,12 @@ void RedisConnection::close() {
 core::Task<bool> RedisConnection::connect() {
     close();
 
-    struct addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-
-    struct addrinfo* res = nullptr;
-    std::string port_str = std::to_string(config_.port);
-    int rc = getaddrinfo(config_.host.c_str(), port_str.c_str(), &hints, &res);
-    if (rc != 0 || !res) {
+    auto stream_opt = co_await net::TcpConnector::connect(engine_, config_.host, config_.port);
+    if (!stream_opt.has_value()) {
         co_return false;
     }
 
-    os_socket_t sock = INVALID_OS_SOCKET;
-    for (struct addrinfo* p = res; p != nullptr; p = p->ai_next) {
-#if defined(_WIN32)
-        sock = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-#else
-        sock = ::socket(p->ai_family, p->ai_socktype | SOCK_NONBLOCK | SOCK_CLOEXEC, p->ai_protocol);
-#endif
-        if (sock == INVALID_OS_SOCKET) continue;
-
-        int flag = 1;
-        setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&flag), sizeof(flag));
-
-        int conn_res = co_await engine_.connect(sock, p->ai_addr, static_cast<int>(p->ai_addrlen));
-        if (conn_res >= 0) {
-            fd_ = sock;
-            break;
-        }
-
-        close_socket(sock);
-        sock = INVALID_OS_SOCKET;
-    }
-
-    freeaddrinfo(res);
-
-    if (fd_ == INVALID_OS_SOCKET) {
-        co_return false;
-    }
+    fd_ = stream_opt->release();
 
     // Authenticate if password provided
     if (!config_.password.empty()) {

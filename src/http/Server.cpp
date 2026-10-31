@@ -1,9 +1,11 @@
 #include "http/Server.h"
+#include "net/tcp/TcpListener.h"
+#include "net/SocketOptions.h"
 #include "http/v1/Http1Connection.h"
 #include "http/v2/Http2Connection.h"
 #include "http/v2/Http2Frame.h"
-#include "http/tls/TlsContext.h"
-#include "http/tls/TlsStream.h"
+#include "net/tls/TlsContext.h"
+#include "net/tls/TlsStream.h"
 #include "http/v3/Http3Server.h"
 #include "core/OsSocket.h"
 #include "log/Logger.h"
@@ -67,7 +69,7 @@ Server& Server::operator=(Server&& other) noexcept {
 }
 
 Server& Server::enable_tls(const std::string& cert_file, const std::string& key_file) {
-    tls_ctx_ = std::make_unique<tls::TlsContext>();
+    tls_ctx_ = std::make_unique<net::tls::TlsContext>();
     if (!cert_file.empty() && !key_file.empty()) {
         if (::access(cert_file.c_str(), R_OK) != 0) {
             throw std::runtime_error("Server TLS configuration error: certificate file does not exist or is unreadable: " + cert_file);
@@ -92,48 +94,23 @@ core::os_socket_t Server::create_listen_socket(uint16_t port, const std::string&
         throw std::runtime_error("Server configuration error: port must be greater than 0 (1-65535)");
     }
 
-    core::init_sockets();
-#if defined(_WIN32)
-    core::os_socket_t fd = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-#elif defined(SOCK_CLOEXEC)
-    core::os_socket_t fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-#else
-    core::os_socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
-#endif
-    if (fd == core::INVALID_OS_SOCKET) {
-        throw std::runtime_error("Failed to create TCP socket");
-    }
+    net::TcpListenConfig listen_cfg;
+    listen_cfg.port = port;
+    listen_cfg.host = host;
+    listen_cfg.reuse_addr = true;
+    listen_cfg.reuse_port = true;
+    listen_cfg.tcp_nodelay = config_.tcp.nodelay;
+    listen_cfg.tcp_keepalive = config_.tcp.keepalive;
+    listen_cfg.keepidle = config_.tcp.keepidle;
+    listen_cfg.keepintvl = config_.tcp.keepintvl;
+    listen_cfg.keepcnt = config_.tcp.keepcnt;
+    listen_cfg.backlog = 32768;
 
-    int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt), sizeof(opt));
-#if defined(SO_REUSEPORT)
-    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&opt), sizeof(opt));
-#endif
-    if (config_.tcp.nodelay) {
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&opt), sizeof(opt));
+    auto listener = net::TcpListener::bind(port, host, listen_cfg);
+    if (!listener) {
+        throw std::runtime_error("Failed to bind and listen on " + host + ":" + std::to_string(port));
     }
-    if (config_.tcp.keepalive) {
-        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&opt), sizeof(opt));
-    }
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) <= 0) {
-        addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    }
-
-    if (bind(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        core::close_socket(fd);
-        throw std::runtime_error("Failed to bind socket to port " + std::to_string(port));
-    }
-
-    if (::listen(fd, 32768) < 0) {
-        core::close_socket(fd);
-        throw std::runtime_error("Failed to listen on socket");
-    }
-
-    return fd;
+    return listener->release();
 }
 
 core::Task<void> Server::run_h2_loop(core::EventLoop& loop, core::os_socket_t client_fd, v2::Http2Connection& h2,
@@ -200,7 +177,7 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, core::os_so
 }
 
 core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, core::os_socket_t client_fd, uint16_t port) {
-    tls::TlsStream tls_stream(loop, client_fd, tls_ctx_->native_handle());
+    net::tls::TlsStream tls_stream(loop, client_fd, tls_ctx_->native_handle());
     bool ok = co_await tls_stream.handshake();
     if (!ok) {
         (void)(co_await loop.engine().close(client_fd));

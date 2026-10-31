@@ -1,4 +1,5 @@
 #include "http/v3/Http3Server.h"
+#include "net/udp/UdpSocket.h"
 #include "core/OsSocket.h"
 #include <cstring>
 #include <iostream>
@@ -19,80 +20,15 @@ Http3Server::~Http3Server() {
 }
 
 bool Http3Server::start() {
-    core::init_sockets();
-#if defined(_WIN32)
-    udp_fd_ = WSASocketW(AF_INET6, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-    if (udp_fd_ != core::INVALID_OS_SOCKET) {
-        u_long mode = 1;
-        ioctlsocket(udp_fd_, FIONBIO, &mode);
+    auto sock = net::UdpSocket::bind(port_, "::", true);
+    if (!sock) {
+        sock = net::UdpSocket::bind(port_, "0.0.0.0", true);
     }
-#elif defined(SOCK_CLOEXEC)
-    udp_fd_ = socket(AF_INET6, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-#else
-    udp_fd_ = socket(AF_INET6, SOCK_DGRAM | SOCK_NONBLOCK, 0);
-#endif
-    bool is_v6 = (udp_fd_ != core::INVALID_OS_SOCKET);
-    if (is_v6) {
-        int opt_v6only = 0; // Dual-stack IPv6 & IPv4
-        setsockopt(udp_fd_, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&opt_v6only), sizeof(opt_v6only));
-        int reuse = 1;
-        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-#if defined(SO_REUSEPORT)
-        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-#endif
+    if (!sock) return false;
 
-        int buf_size = 8 * 1024 * 1024;
-        setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&buf_size), sizeof(buf_size));
-        setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buf_size), sizeof(buf_size));
-
-        sockaddr_in6 addr6{};
-        addr6.sin6_family = AF_INET6;
-        addr6.sin6_addr = in6addr_any;
-        addr6.sin6_port = htons(port_);
-
-        if (bind(udp_fd_, reinterpret_cast<sockaddr*>(&addr6), sizeof(addr6)) < 0) {
-            core::close_socket(udp_fd_);
-            udp_fd_ = core::INVALID_OS_SOCKET;
-            is_v6 = false;
-        }
-    }
-
-    if (!is_v6) {
-#if defined(_WIN32)
-        udp_fd_ = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-        if (udp_fd_ != core::INVALID_OS_SOCKET) {
-            u_long mode = 1;
-            ioctlsocket(udp_fd_, FIONBIO, &mode);
-        }
-#elif defined(SOCK_CLOEXEC)
-        udp_fd_ = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-#else
-        udp_fd_ = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
-#endif
-        if (udp_fd_ == core::INVALID_OS_SOCKET) return false;
-
-        int reuse = 1;
-        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-#if defined(SO_REUSEPORT)
-        setsockopt(udp_fd_, SOL_SOCKET, SO_REUSEPORT, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-#endif
-
-        int buf_size = 8 * 1024 * 1024;
-        setsockopt(udp_fd_, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&buf_size), sizeof(buf_size));
-        setsockopt(udp_fd_, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buf_size), sizeof(buf_size));
-
-        sockaddr_in addr4{};
-        addr4.sin_family = AF_INET;
-        addr4.sin_addr.s_addr = htonl(INADDR_ANY);
-        addr4.sin_port = htons(port_);
-
-        if (bind(udp_fd_, reinterpret_cast<sockaddr*>(&addr4), sizeof(addr4)) < 0) {
-            core::close_socket(udp_fd_);
-            udp_fd_ = core::INVALID_OS_SOCKET;
-            return false;
-        }
-    }
-
+    // Set 8MB high-throughput buffer size
+    sock->set_buffer_sizes(8 * 1024 * 1024, 8 * 1024 * 1024);
+    udp_fd_ = sock->release();
     running_ = true;
     return true;
 }
@@ -202,7 +138,7 @@ core::Task<Http3Connection*> Http3Server::dispatch_datagram_internal(
     const sockaddr_storage& from_addr,
     socklen_t from_len,
     bool flush) {
-    if (!QuicHeader::is_quic_packet(pkt)) {
+    if (!net::quic::QuicHeader::is_quic_packet(pkt)) {
         co_return nullptr;
     }
 

@@ -6,7 +6,7 @@
 #include "http/ServiceRegistry.h"
 #include "http/v1/Http1Parser.h"
 #include "http/v1/Http1Serializer.h"
-#include "http/tls/TlsStream.h"
+#include "net/tls/TlsStream.h"
 #include "core/EventLoop.h"
 #include "core/OsSocket.h"
 #include "core/Task.h"
@@ -46,7 +46,7 @@ public:
     /**
      * @brief Run connection loop for TLS HTTP/1.1 on tls_stream.
      */
-    core::Task<void> run_tls(tls::TlsStream& tls_stream, std::string_view alt_svc_hdr = {});
+    core::Task<void> run_tls(net::tls::TlsStream& tls_stream, std::string_view alt_svc_hdr = {});
 
     /**
      * @brief Generates standard RFC 9112 error response for parser errors.

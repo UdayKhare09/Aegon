@@ -1,5 +1,5 @@
 #include "http/Server.h"
-#include "http/v3/QuicPacket.h"
+#include "net/quic/QuicPacket.h"
 #include "http/v3/Http3Server.h"
 #include "data/types/UUID.h"
 #include "data/types/UUIDGenerator.h"
@@ -32,7 +32,7 @@ void test_quic_packet_header_validation() {
         0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18  // SCID
     };
 
-    assert(v3::QuicHeader::is_quic_packet(valid_initial_pkt));
+    assert(net::quic::QuicHeader::is_quic_packet(valid_initial_pkt));
 
     ngtcp2_version_cid vc{};
     int rv = ngtcp2_pkt_decode_version_cid(&vc, valid_initial_pkt, sizeof(valid_initial_pkt), 16);
@@ -46,7 +46,7 @@ void test_quic_packet_header_validation() {
 
     // Invalid packet: fixed bit (0x40) is not set
     uint8_t invalid_pkt[] = { 0x00, 0x01, 0x02, 0x03 };
-    assert(!v3::QuicHeader::is_quic_packet(invalid_pkt));
+    assert(!net::quic::QuicHeader::is_quic_packet(invalid_pkt));
     (void)invalid_pkt;
 
     std::cout << "PASSED\n";

@@ -311,7 +311,7 @@ void test_live_server_loopback() {
 }
 
 #include "http/v2/Http2Frame.h"
-#include "http/v3/QuicPacket.h"
+#include "net/quic/QuicPacket.h"
 
 void test_http2_and_http3_structures() {
     std::cout << "[TEST 3] Testing HTTP/2 frame encoding and HTTP/3 packet structures...\n";
@@ -336,7 +336,7 @@ void test_http2_and_http3_structures() {
     std::cout << "  -> HTTP/2 9-byte frame header encode/decode verified\n";
 
     // 2. HTTP/3 QUIC Packet Test
-    using namespace aegon::http::v3;
+    using namespace aegon::net::quic;
     uint8_t quic_short_packet[] = { 0x40 | 0x01, 0x02, 0x03, 0x04 };
     assert(QuicHeader::is_quic_packet(quic_short_packet));
     (void)quic_short_packet;

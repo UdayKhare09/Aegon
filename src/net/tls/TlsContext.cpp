@@ -1,5 +1,5 @@
-#include "http/tls/TlsContext.h"
-#include "http/tls/TlsStream.h"
+#include "net/tls/TlsContext.h"
+#include "net/tls/TlsStream.h"
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include <openssl/rsa.h>
@@ -7,18 +7,27 @@
 #include <cstring>
 #include <iostream>
 
-namespace aegon::http::tls {
+namespace aegon::net::tls {
 
 namespace {
 
-// ALPN wire format: [len][proto][len][proto] -> \x02h3\x02h2\x08http/1.1
-static const unsigned char SERVER_ALPN[] = "\x02h3\x02h2\x08http/1.1";
-static const unsigned int SERVER_ALPN_LEN = sizeof(SERVER_ALPN) - 1;
+// Default ALPN wire format: [len][proto][len][proto] -> \x02h3\x02h2\x08http/1.1
+static const unsigned char DEFAULT_SERVER_ALPN[] = "\x02h3\x02h2\x08http/1.1";
+static const unsigned int DEFAULT_SERVER_ALPN_LEN = sizeof(DEFAULT_SERVER_ALPN) - 1;
 
 int alpn_select_cb(SSL*, const unsigned char** out, unsigned char* outlen,
-                   const unsigned char* in, unsigned int inlen, void*) {
+                   const unsigned char* in, unsigned int inlen, void* arg) {
+    auto* ctx_obj = static_cast<TlsContext*>(arg);
+    const unsigned char* server_alpn = DEFAULT_SERVER_ALPN;
+    unsigned int server_alpn_len = DEFAULT_SERVER_ALPN_LEN;
+
+    if (ctx_obj && !ctx_obj->alpn_wire().empty()) {
+        server_alpn = ctx_obj->alpn_wire().data();
+        server_alpn_len = static_cast<unsigned int>(ctx_obj->alpn_wire().size());
+    }
+
     if (SSL_select_next_proto(const_cast<unsigned char**>(out), outlen,
-                              SERVER_ALPN, SERVER_ALPN_LEN, in, inlen) != OPENSSL_NPN_NEGOTIATED) {
+                              server_alpn, server_alpn_len, in, inlen) != OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_ALERT_FATAL;
     }
     return SSL_TLSEXT_ERR_OK;
@@ -66,7 +75,8 @@ TlsContext::~TlsContext() {
     }
 }
 
-TlsContext::TlsContext(TlsContext&& other) noexcept : ctx_(other.ctx_) {
+TlsContext::TlsContext(TlsContext&& other) noexcept
+    : ctx_(other.ctx_), alpn_wire_(std::move(other.alpn_wire_)) {
     other.ctx_ = nullptr;
 }
 
@@ -74,6 +84,7 @@ TlsContext& TlsContext::operator=(TlsContext&& other) noexcept {
     if (this != &other) {
         if (ctx_) SSL_CTX_free(ctx_);
         ctx_ = other.ctx_;
+        alpn_wire_ = std::move(other.alpn_wire_);
         other.ctx_ = nullptr;
     }
     return *this;
@@ -81,7 +92,7 @@ TlsContext& TlsContext::operator=(TlsContext&& other) noexcept {
 
 void TlsContext::setup_alpn() {
     if (ctx_) {
-        SSL_CTX_set_alpn_select_cb(ctx_, alpn_select_cb, nullptr);
+        SSL_CTX_set_alpn_select_cb(ctx_, alpn_select_cb, this);
         SSL_CTX_set_client_hello_cb(ctx_, [](SSL* s, int* al, void*) -> int {
             if (!SSL_is_quic(s)) {
                 return SSL_CLIENT_HELLO_SUCCESS;
@@ -100,9 +111,18 @@ void TlsContext::setup_alpn() {
     }
 }
 
+void TlsContext::set_alpn_protocols(const std::vector<std::string>& protocols) {
+    alpn_wire_.clear();
+    for (const auto& proto : protocols) {
+        if (!proto.empty() && proto.size() <= 255) {
+            alpn_wire_.push_back(static_cast<unsigned char>(proto.size()));
+            alpn_wire_.insert(alpn_wire_.end(), proto.begin(), proto.end());
+        }
+    }
+}
+
 bool TlsContext::load_cert_and_key(const std::string& cert_path, const std::string& key_path) {
     if (!ctx_) return false;
-
     if (SSL_CTX_use_certificate_chain_file(ctx_, cert_path.c_str()) <= 0) {
         return false;
     }
@@ -126,29 +146,41 @@ bool TlsContext::generate_self_signed(const std::string& common_name) {
 
     ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
     X509_gmtime_adj(X509_get_notBefore(x509), 0);
-    X509_gmtime_adj(X509_get_notAfter(x509), 31536000L); // 1 year
+    X509_gmtime_adj(X509_get_notAfter(x509), 31536000L); // 1 year validity
 
     X509_set_pubkey(x509, pkey);
 
     X509_NAME* name = X509_get_subject_name(x509);
-    X509_NAME_add_entry_by_txt(name, "C", MBSTRING_ASC, (const unsigned char*)"US", -1, -1, 0);
-    X509_NAME_add_entry_by_txt(name, "O", MBSTRING_ASC, (const unsigned char*)"Aegon", -1, -1, 0);
-    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (const unsigned char*)common_name.c_str(), -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name, "C", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("US"), -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name, "O", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("Aegon Dev"), -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(common_name.c_str()), -1, -1, 0);
     X509_set_issuer_name(x509, name);
 
-    if (X509_sign(x509, pkey, EVP_sha256()) <= 0) {
+    // Add Subject Alternative Name (SAN) extension for localhost / IP compatibility
+    X509V3_CTX ctx_v3;
+    X509V3_set_ctx_nodb(&ctx_v3);
+    X509V3_set_ctx(&ctx_v3, x509, x509, nullptr, nullptr, 0);
+    std::string san_str = "DNS:" + common_name + ",DNS:localhost,IP:127.0.0.1,IP:::1";
+    X509_EXTENSION* ext = X509V3_EXT_conf_nid(nullptr, &ctx_v3, NID_subject_alt_name, san_str.c_str());
+    if (ext) {
+        X509_add_ext(x509, ext, -1);
+        X509_EXTENSION_free(ext);
+    }
+
+    if (X509_sign(x509, pkey, EVP_sha256()) == 0) {
         X509_free(x509);
         EVP_PKEY_free(pkey);
         return false;
     }
 
-    bool ok = (SSL_CTX_use_certificate(ctx_, x509) == 1) &&
-              (SSL_CTX_use_PrivateKey(ctx_, pkey) == 1) &&
-              (SSL_CTX_check_private_key(ctx_) == 1);
+    int rc1 = SSL_CTX_use_certificate(ctx_, x509);
+    int rc2 = SSL_CTX_use_PrivateKey(ctx_, pkey);
+    int rc3 = SSL_CTX_check_private_key(ctx_);
 
     X509_free(x509);
     EVP_PKEY_free(pkey);
-    return ok;
+
+    return (rc1 == 1 && rc2 == 1 && rc3 == 1);
 }
 
-} // namespace aegon::http::tls
+} // namespace aegon::net::tls

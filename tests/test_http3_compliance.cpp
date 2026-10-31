@@ -1,7 +1,7 @@
 #include "http/v3/Http3Server.h"
 #include "http/v3/Http3Connection.h"
-#include "http/v3/QuicPacket.h"
-#include "http/tls/TlsContext.h"
+#include "net/quic/QuicPacket.h"
+#include "net/tls/TlsContext.h"
 #include "http/Router.h"
 #include "http/Server.h"
 #include "data/types/UUIDGenerator.h"
@@ -26,6 +26,7 @@
 
 using namespace aegon;
 using namespace aegon::http;
+using namespace aegon::net;
 
 // ============================================================================
 // Test 1: RFC 9114 §4.2 Prohibited Headers

@@ -2,13 +2,19 @@
 
 #include "core/EventLoop.h"
 #include "core/OsSocket.h"
+#include "core/Task.h"
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <string_view>
+#include <string>
 #include <vector>
 
-namespace aegon::http::tls {
+namespace aegon::net::tls {
 
+/**
+ * @brief High-performance asynchronous TLS stream wrapper using memory BIOs and io_uring.
+ * Provides full support for Kernel TLS (kTLS) TX offload and ALPN negotiation.
+ */
 class TlsStream {
 public:
     TlsStream(core::EventLoop& loop, core::os_socket_t client_fd, SSL_CTX* ctx);
@@ -16,6 +22,9 @@ public:
 
     TlsStream(const TlsStream&) = delete;
     TlsStream& operator=(const TlsStream&) = delete;
+
+    TlsStream(TlsStream&& other) noexcept;
+    TlsStream& operator=(TlsStream&& other) noexcept;
 
     /**
      * @brief Perform async TLS handshake over io_uring.
@@ -34,7 +43,7 @@ public:
     core::Task<int> write_plaintext(const void* buf, size_t len);
 
     /**
-     * @brief Negotiated ALPN protocol (e.g. "h2", "http/1.1", or empty).
+     * @brief Negotiated ALPN protocol (e.g. "h2", "http/1.1", or custom protocol).
      */
     [[nodiscard]] std::string_view alpn() const noexcept;
 
@@ -52,11 +61,14 @@ public:
         server_traffic_secret_ = hex_secret;
     }
 
+    [[nodiscard]] core::os_socket_t native_handle() const noexcept { return client_fd_; }
+    [[nodiscard]] SSL* native_ssl() const noexcept { return ssl_; }
+
 private:
     core::Task<bool> flush_outbound();
     bool try_enable_ktls_tx();
 
-    core::EventLoop& loop_;
+    core::EventLoop* loop_{nullptr};
     core::os_socket_t client_fd_{core::INVALID_OS_SOCKET};
     SSL* ssl_{nullptr};
     BIO* in_bio_{nullptr};   // Ciphertext received from network -> read by SSL
@@ -68,4 +80,5 @@ private:
 
 int get_tls_stream_ex_index() noexcept;
 
-} // namespace aegon::http::tls
+} // namespace aegon::net::tls
+

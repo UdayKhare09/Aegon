@@ -3,7 +3,7 @@
 #include "http/Router.h"
 #include "http/ServiceRegistry.h"
 #include "http/ServerConfig.h"
-#include "http/tls/TlsContext.h"
+#include "net/tls/TlsContext.h"
 #include "http/v3/Http3Server.h"
 #include "core/EventLoop.h"
 #include "core/OsSocket.h"
@@ -306,7 +306,7 @@ private:
 
     ServerConfig config_{};
     bool tls_enabled_{false};
-    std::unique_ptr<tls::TlsContext> tls_ctx_;
+    std::unique_ptr<net::tls::TlsContext> tls_ctx_;
     std::mutex loops_mutex_;
     std::vector<core::EventLoop*> active_loops_;
 };

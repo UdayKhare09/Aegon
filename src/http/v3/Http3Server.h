@@ -1,7 +1,7 @@
 #pragma once
 
 #include "http/v3/Http3Connection.h"
-#include "http/v3/QuicPacket.h"
+#include "net/quic/QuicPacket.h"
 #include "http/Router.h"
 #include "core/EventLoop.h"
 #include "core/OsSocket.h"

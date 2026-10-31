@@ -429,7 +429,7 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
     (void)(co_await loop_.engine().close(client_fd_));
 }
 
-core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::string_view alt_svc_hdr) {
+core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::string_view alt_svc_hdr) {
     std::string req_accum;
     req_accum.reserve(16384);
     std::string resp_batch;
@@ -488,7 +488,7 @@ core::Task<void> Http1Connection::run_tls(tls::TlsStream& tls_stream, std::strin
                 // Executed synchronously inline with 0 coroutines
             } else {
                 struct SseTlsContext {
-                    tls::TlsStream& tls_stream;
+                    net::tls::TlsStream& tls_stream;
                     std::string_view alt_svc_hdr;
                     Response& res;
                     std::string& resp_batch;

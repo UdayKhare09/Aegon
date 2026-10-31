@@ -49,6 +49,7 @@ target_include_directories(test_version PRIVATE ${CMAKE_SOURCE_DIR}/src)
 add_test(NAME version COMMAND test_version)
 
 aegon_add_test(simd_string aegon_core)
+aegon_add_test(net aegon_net aegon_core)
 aegon_add_test(logger aegon_log)
 if(TARGET glaze::glaze)
     aegon_add_test(foundational_types aegon_core glaze::glaze)

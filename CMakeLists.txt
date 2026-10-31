@@ -124,7 +124,7 @@ add_library(aegon_redis
     src/data/redis/RedisLock.cpp
 )
 target_link_libraries(aegon_redis PUBLIC
-    aegon_core
+    aegon_net
     ${AEGON_CRYPTO_LIB}
 )
 if(WIN32)
@@ -170,7 +170,42 @@ if(WIN32)
     target_link_libraries(aegon_orm PUBLIC ws2_32)
 endif()
 
-# 6. HTTP & WebSocket Server Engine (aegon_http)
+# 6. Asynchronous Networking Engine (aegon_net)
+add_library(aegon_net
+    src/net/SocketAddress.cpp
+    src/net/SocketOptions.cpp
+    src/net/tcp/TcpListener.cpp
+    src/net/tcp/TcpConnector.cpp
+    src/net/udp/UdpSocket.cpp
+    src/net/tls/TlsContext.cpp
+    src/net/tls/TlsStream.cpp
+    src/net/quic/QuicConnection.cpp
+    src/net/quic/QuicServer.cpp
+)
+target_link_libraries(aegon_net PUBLIC
+    aegon_core
+    ${AEGON_SSL_LIB}
+    ${AEGON_CRYPTO_LIB}
+    ${AEGON_NGTCP2_CRYPTO_LIB}
+    ${AEGON_NGTCP2_LIB}
+)
+if(WIN32)
+    target_link_libraries(aegon_net PUBLIC ws2_32)
+endif()
+
+target_precompile_headers(aegon_net PRIVATE
+    <vector>
+    <string>
+    <string_view>
+    <span>
+    <memory>
+    <optional>
+    <chrono>
+    <openssl/ssl.h>
+    <openssl/crypto.h>
+)
+
+# 7. HTTP & WebSocket Server Engine (aegon_http)
 add_library(aegon_http
     src/http/RadixTree.cpp
     src/http/Router.cpp
@@ -178,8 +213,6 @@ add_library(aegon_http
     src/http/v1/Http1Connection.cpp
     src/http/v1/Http1Serializer.cpp
     src/http/v2/Http2Connection.cpp
-    src/http/tls/TlsContext.cpp
-    src/http/tls/TlsStream.cpp
     src/http/v3/Http3Connection.cpp
     src/http/v3/Http3Server.cpp
     src/http/client/TlsClientStream.cpp
@@ -191,15 +224,11 @@ add_library(aegon_http
     src/http/websocket/WebSocketConnection.cpp
 )
 target_link_libraries(aegon_http PUBLIC
-    aegon_core
+    aegon_net
     glaze::glaze
     ${AEGON_DEFLATE_LIB}
     ${AEGON_NGHTTP2_LIB}
-    ${AEGON_NGTCP2_CRYPTO_LIB}
-    ${AEGON_NGTCP2_LIB}
     ${AEGON_NGHTTP3_LIB}
-    ${AEGON_SSL_LIB}
-    ${AEGON_CRYPTO_LIB}
     ${AEGON_PROTOBUF_LIB}
 )
 if(Protobuf_INCLUDE_DIRS)
@@ -306,7 +335,7 @@ endif()
 # ==============================================================================
 # Include Directories, Aliases & Export Names
 # ==============================================================================
-set(AEGON_MODULES log core config redis memory orm http)
+set(AEGON_MODULES log core config net redis memory orm http)
 
 set(AEGON_ACTIVE_TARGETS "")
 foreach(mod ${AEGON_MODULES})

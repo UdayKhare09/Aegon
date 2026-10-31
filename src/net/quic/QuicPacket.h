@@ -4,9 +4,8 @@
 #include <string_view>
 #include <span>
 
-namespace aegon::http::v3 {
+namespace aegon::net::quic {
 
-// HTTP/3 ALPN protocol identifier: "h3"
 inline constexpr std::string_view ALPN_H3 = "h3";
 
 enum class PacketType : uint8_t {
@@ -26,9 +25,10 @@ struct QuicHeader {
 
     [[nodiscard]] static bool is_quic_packet(std::span<const uint8_t> datagram) noexcept {
         if (datagram.empty()) return false;
-        // The fixed bit (0x40) must be 1 in all QUIC packets
+        // The fixed bit (0x40) must be 1 in all QUIC packets per RFC 9000
         return (datagram[0] & 0x40) != 0;
     }
 };
 
-} // namespace aegon::http::v3
+} // namespace aegon::net::quic
+
