@@ -173,22 +173,6 @@ public:
     [[nodiscard]] const ServerConfig& config() const noexcept { return config_; }
     [[nodiscard]] ServerConfig& config() noexcept { return config_; }
 
-    Server& engine_type(core::EngineType type) noexcept {
-        config_.engine_type = type;
-        return *this;
-    }
-    [[nodiscard]] core::EngineType engine_type() const noexcept { return config_.engine_type; }
-
-    Server& use_epoll() noexcept {
-        config_.engine_type = core::EngineType::Epoll;
-        return *this;
-    }
-
-    Server& use_io_uring() noexcept {
-        config_.engine_type = core::EngineType::IoUring;
-        return *this;
-    }
-
     Server& ring_entries(uint32_t entries) noexcept {
         config_.ring_entries = entries;
         return *this;
