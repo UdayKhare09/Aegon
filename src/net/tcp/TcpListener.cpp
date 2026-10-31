@@ -28,6 +28,8 @@ std::optional<TcpListener> TcpListener::bind(const SocketAddress& addr, const Tc
         return std::nullopt;
     }
 
+    SocketOptions::set_nonblocking(fd, true);
+
     if (cfg.reuse_addr) {
         SocketOptions::set_reuse_address(fd, true);
     }

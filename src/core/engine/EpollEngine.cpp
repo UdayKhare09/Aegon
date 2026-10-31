@@ -485,6 +485,10 @@ size_t EpollEngine::process_completions() noexcept {
 // ---------------------------------------------------------------------------
 
 void EpollEngine::submit_accept(AcceptAwaiter& aw) noexcept {
+    int flags = ::fcntl(aw.listen_fd, F_GETFL, 0);
+    if (flags >= 0 && !(flags & O_NONBLOCK)) {
+        ::fcntl(aw.listen_fd, F_SETFL, flags | O_NONBLOCK);
+    }
     int client_fd = ::accept4(aw.listen_fd, reinterpret_cast<sockaddr*>(&aw.addr), &aw.addr_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
     if (client_fd >= 0) {
         ready_completions_.push_back({&aw, client_fd, 0});
