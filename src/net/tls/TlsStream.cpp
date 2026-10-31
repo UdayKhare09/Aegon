@@ -134,61 +134,59 @@ bool TlsStream::try_enable_ktls_tx() {
         uint8_t info[64];
         info[0] = static_cast<uint8_t>((out_len >> 8) & 0xFF);
         info[1] = static_cast<uint8_t>(out_len & 0xFF);
-        const char* prefix = "tls13 ";
-        size_t prefix_len = 6;
-        info[2] = static_cast<uint8_t>(prefix_len + label_len);
-        std::memcpy(info + 3, prefix, prefix_len);
-        std::memcpy(info + 3 + prefix_len, label, label_len);
-        info[3 + prefix_len + label_len] = 0; // context len = 0
-        size_t info_len = 4 + prefix_len + label_len;
+        info[2] = static_cast<uint8_t>(6 + label_len);
+        std::memcpy(info + 3, "tls13 ", 6);
+        std::memcpy(info + 9, label, label_len);
+        info[9 + label_len] = 0x00;
+        info[10 + label_len] = 0x01;
+        size_t info_len = 11 + label_len;
 
-        unsigned int hlen = 0;
-        uint8_t step1[EVP_MAX_MD_SIZE];
-        HMAC(md, sec, static_cast<int>(sec_len), info, info_len, step1, &hlen);
-        uint8_t input2[EVP_MAX_MD_SIZE + 64];
-        std::memcpy(input2, step1, hlen);
-        std::memcpy(input2 + hlen, info, info_len);
-        input2[hlen + info_len] = 1;
-        uint8_t step2[EVP_MAX_MD_SIZE];
-        HMAC(md, sec, static_cast<int>(sec_len), input2, hlen + info_len + 1, step2, &hlen);
-        std::memcpy(out, step2, out_len);
+        uint8_t hmac_out[EVP_MAX_MD_SIZE];
+        unsigned int hmac_len = 0;
+        HMAC(md, sec, static_cast<int>(sec_len),
+             info, info_len, hmac_out, &hmac_len);
+        std::memcpy(out, hmac_out, out_len);
     };
 
-    uint8_t write_key[32];
-    uint8_t write_iv[12];
-    hkdf_expand_label(secret, secret_len, "key", 3, static_cast<uint16_t>(key_len), write_key);
-    hkdf_expand_label(secret, secret_len, "iv", 2, 12, write_iv);
+    uint8_t key[32];
+    uint8_t iv[12];
+    hkdf_expand_label(secret, secret_len, "key", 3, static_cast<uint16_t>(key_len), key);
+    hkdf_expand_label(secret, secret_len, "iv", 2, 12, iv);
 
-    if (setsockopt(client_fd_, SOL_TCP, TCP_ULP, "tls", sizeof("tls")) != 0) {
-        return false;
+    // 1. Install TCP_ULP "tls" on socket
+    int ulp_ret = ::setsockopt(client_fd_, 6 /* SOL_TCP */, 31 /* TCP_ULP */, "tls", sizeof("tls") - 1);
+    if (ulp_ret == 0) {
+        // 2. Program TLS_TX crypto info into kernel
+        if (cipher_id == 0x03001301) {
+            struct tls12_crypto_info_aes_gcm_128 crypto_info{};
+            crypto_info.info.version = 0x0304; // TLS_1_3_VERSION
+            crypto_info.info.cipher_type = cipher_type;
+            std::memcpy(crypto_info.iv, iv + 4, 8);
+            std::memcpy(crypto_info.salt, iv, 4);
+            std::memcpy(crypto_info.key, key, 16);
+            std::memset(crypto_info.rec_seq, 0, 8);
+            int tx_ret = ::setsockopt(client_fd_, 282 /* SOL_TLS */, 1 /* TLS_TX */, &crypto_info, sizeof(crypto_info));
+            if (tx_ret == 0) ktls_tx_ = true;
+            OPENSSL_cleanse(&crypto_info, sizeof(crypto_info));
+        } else {
+            struct tls12_crypto_info_aes_gcm_256 crypto_info{};
+            crypto_info.info.version = 0x0304; // TLS_1_3_VERSION
+            crypto_info.info.cipher_type = cipher_type;
+            std::memcpy(crypto_info.iv, iv + 4, 8);
+            std::memcpy(crypto_info.salt, iv, 4);
+            std::memcpy(crypto_info.key, key, 32);
+            std::memset(crypto_info.rec_seq, 0, 8);
+            int tx_ret = ::setsockopt(client_fd_, 282 /* SOL_TLS */, 1 /* TLS_TX */, &crypto_info, sizeof(crypto_info));
+            if (tx_ret == 0) ktls_tx_ = true;
+            OPENSSL_cleanse(&crypto_info, sizeof(crypto_info));
+        }
     }
 
-    if (cipher_type == 51) {
-        tls12_crypto_info_aes_gcm_128 crypto_info{};
-        crypto_info.info.version = TLS_1_3_VERSION;
-        crypto_info.info.cipher_type = cipher_type;
-        std::memcpy(crypto_info.key, write_key, 16);
-        std::memcpy(crypto_info.iv, write_iv, 4);
-        std::memcpy(crypto_info.salt, write_iv + 4, 8);
-        std::memset(crypto_info.rec_seq, 0, sizeof(crypto_info.rec_seq));
-        if (setsockopt(client_fd_, SOL_TLS, TLS_TX, &crypto_info, sizeof(crypto_info)) != 0) {
-            return false;
-        }
-    } else {
-        tls12_crypto_info_aes_gcm_256 crypto_info{};
-        crypto_info.info.version = TLS_1_3_VERSION;
-        crypto_info.info.cipher_type = cipher_type;
-        std::memcpy(crypto_info.key, write_key, 32);
-        std::memcpy(crypto_info.iv, write_iv, 4);
-        std::memcpy(crypto_info.salt, write_iv + 4, 8);
-        std::memset(crypto_info.rec_seq, 0, sizeof(crypto_info.rec_seq));
-        if (setsockopt(client_fd_, SOL_TLS, TLS_TX, &crypto_info, sizeof(crypto_info)) != 0) {
-            return false;
-        }
-    }
-
-    ktls_tx_ = true;
-    return true;
+    OPENSSL_cleanse(secret, sizeof(secret));
+    OPENSSL_cleanse(key, sizeof(key));
+    OPENSSL_cleanse(iv, sizeof(iv));
+    server_traffic_secret_.clear();
+    return ktls_tx_;
 #else
     return false;
 #endif
