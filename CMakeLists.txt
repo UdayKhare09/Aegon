@@ -206,7 +206,25 @@ target_precompile_headers(aegon_net PRIVATE
     <openssl/crypto.h>
 )
 
-# 7. HTTP & WebSocket Server Engine (aegon_http)
+# 7. Asynchronous Persistent Storage Engine (aegon_storage)
+add_library(aegon_storage
+    src/storage/DeviceDetector.cpp
+    src/storage/File.cpp
+    src/storage/FileStream.cpp
+    src/storage/WalLog.cpp
+)
+target_link_libraries(aegon_storage PUBLIC
+    aegon_core
+    aegon_memory
+)
+if(NOT WIN32 AND TARGET uring)
+    target_link_libraries(aegon_storage PUBLIC uring)
+endif()
+if(WIN32)
+    target_link_libraries(aegon_storage PUBLIC ws2_32)
+endif()
+
+# 8. HTTP & WebSocket Server Engine (aegon_http)
 add_library(aegon_http
     src/http/RadixTree.cpp
     src/http/Router.cpp
@@ -226,6 +244,7 @@ add_library(aegon_http
 )
 target_link_libraries(aegon_http PUBLIC
     aegon_net
+    aegon_storage
     glaze::glaze
     ${AEGON_DEFLATE_LIB}
     ${AEGON_NGHTTP2_LIB}
@@ -254,24 +273,6 @@ target_precompile_headers(aegon_http PRIVATE
     <openssl/ssl.h>
     <openssl/crypto.h>
 )
-
-# 8. Asynchronous Persistent Storage Engine (aegon_storage)
-add_library(aegon_storage
-    src/storage/DeviceDetector.cpp
-    src/storage/File.cpp
-    src/storage/FileStream.cpp
-    src/storage/WalLog.cpp
-)
-target_link_libraries(aegon_storage PUBLIC
-    aegon_core
-    aegon_memory
-)
-if(NOT WIN32 AND TARGET uring)
-    target_link_libraries(aegon_storage PUBLIC uring)
-endif()
-if(WIN32)
-    target_link_libraries(aegon_storage PUBLIC ws2_32)
-endif()
 
 # 9. C ABI Wrapper Library (libaegon_c shared + static)
 option(AEGON_BUILD_C_ABI "Build the C ABI wrapper library (libaegon_c)" ON)

@@ -3,6 +3,8 @@
 #include "http/Request.h"
 #include "http/Response.h"
 #include "http/Router.h"
+#include "storage/File.h"
+#include "storage/FileStream.h"
 #include "core/Task.h"
 #include "core/EventLoop.h"
 #include "core/OsSocket.h"
@@ -78,6 +80,12 @@ struct Http3Stream {
     size_t sse_offset{0};               // bytes transmitted so far
     bool is_sse{false};                 // true after ctx.sse() is called
     bool sse_eof{false};                // true after handler returns
+
+    // File streaming state
+    std::string file_buf;
+    size_t file_offset{0};
+    bool is_file{false};
+    bool file_eof{false};
 };
 
 class Http3Connection {
@@ -157,6 +165,12 @@ private:
      */
     void push_sse_frame(Http3Stream* stream, std::string frame);
     core::Task<void> dispatch_pending_requests();
+
+    /**
+     * @brief Asynchronously stream disk file into nghttp3 DATA frames.
+     */
+    core::Task<void> stream_file_h3(int64_t stream_id, std::string file_path, size_t file_size,
+                                    std::shared_ptr<storage::File> file_handle = nullptr);
 
     core::EventLoop& loop_;
     core::os_socket_t udp_fd_{core::INVALID_OS_SOCKET};

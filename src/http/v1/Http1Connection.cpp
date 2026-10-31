@@ -81,6 +81,39 @@ std::optional<Response> Http1Connection::validate_websocket_upgrade(const Reques
     return std::nullopt;
 }
 
+core::Task<bool> Http1Connection::stream_file(core::EventLoop& loop, core::os_socket_t client_fd,
+                                              const std::string& file_path, size_t file_size,
+                                              std::shared_ptr<storage::File> file_handle) {
+    if (file_size == 0) co_return true;
+
+#if !defined(_WIN32)
+    if (!file_handle) {
+        if (co_await stream_file_zero_copy(loop, client_fd, file_path, file_size)) {
+            co_return true;
+        }
+    }
+#endif
+
+    try {
+        storage::File local_file;
+        storage::File* active_file = file_handle.get();
+        if (!active_file) {
+            local_file = co_await storage::File::open(file_path, storage::OpenMode::ReadOnly);
+            active_file = &local_file;
+        }
+
+        storage::FileReadStream stream(*active_file, 64 * 1024, 0, static_cast<int64_t>(file_size));
+        while (auto chunk = co_await stream.next_chunk()) {
+            int sent = co_await loop.engine().send_all(client_fd,
+                std::string_view(reinterpret_cast<const char*>(chunk->data()), chunk->size()));
+            if (sent <= 0) co_return false;
+        }
+        co_return true;
+    } catch (...) {
+        co_return false;
+    }
+}
+
 core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, core::os_socket_t client_fd,
                                                         const std::string& file_path, size_t file_size) {
     if (file_size == 0) co_return true;
@@ -367,8 +400,12 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                 std::string header_out;
                 Http1Serializer::serialize_headers(res, header_out);
                 (void)(co_await loop_.engine().send_all(client_fd_, header_out));
-                if (req.method() != Method::HEAD) {
-                    co_await stream_file_zero_copy(loop_, client_fd_, res.file_path(), res.file_size());
+                if (req.method() != Method::HEAD && res.file_size() > 0) {
+                    bool ok = co_await stream_file(loop_, client_fd_, res.file_path(), res.file_size(), res.file_handle());
+                    if (!ok) {
+                        keep_alive = false;
+                        break;
+                    }
                 }
             } else if (res.is_sse()) {
                 // SSE: headers were already set on res, handler streamed chunks directly.
@@ -530,7 +567,36 @@ core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::
                 res.set_header_owned("alt-svc", std::string(alt_svc_hdr));
             }
 
-            if (res.is_sse()) {
+            if (res.has_file()) {
+                if (!resp_batch.empty()) {
+                    (void)(co_await tls_stream.write_plaintext(resp_batch.data(), resp_batch.size()));
+                    resp_batch.clear();
+                }
+                std::string header_out;
+                Http1Serializer::serialize_headers(res, header_out);
+                (void)(co_await tls_stream.write_plaintext(header_out.data(), header_out.size()));
+                if (req.method() != Method::HEAD && res.file_size() > 0) {
+                    try {
+                        storage::File local_file;
+                        storage::File* active_file = res.file_handle().get();
+                        if (!active_file) {
+                            local_file = co_await storage::File::open(res.file_path(), storage::OpenMode::ReadOnly);
+                            active_file = &local_file;
+                        }
+                        storage::FileReadStream stream(*active_file, 64 * 1024, 0, static_cast<int64_t>(res.file_size()));
+                        while (auto chunk = co_await stream.next_chunk()) {
+                            int written = co_await tls_stream.write_plaintext(
+                                reinterpret_cast<const char*>(chunk->data()), chunk->size());
+                            if (written <= 0) {
+                                keep_alive = false;
+                                break;
+                            }
+                        }
+                    } catch (...) {
+                        keep_alive = false;
+                    }
+                }
+            } else if (res.is_sse()) {
                 if (!sse_headers_sent) {
                     if (!resp_batch.empty()) {
                         (void)(co_await tls_stream.write_plaintext(resp_batch.data(), resp_batch.size()));

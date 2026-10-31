@@ -221,10 +221,17 @@ public:
     }
 
     /**
-     * @brief Serves a static file directly with zero-copy kernel streaming.
+     * @brief Serves a static file directly with zero-copy kernel or asynchronous direct I/O streaming.
      */
     Response& send_file(const std::string& filepath, std::string_view mime_type = "") {
         return res_.file(filepath, mime_type);
+    }
+
+    /**
+     * @brief Serves a pre-opened storage::File directly (e.g. NVMe direct I/O handle).
+     */
+    Response& send_file(storage::File file, size_t size, std::string_view mime_type = "application/octet-stream") {
+        return res_.file(std::move(file), size, mime_type);
     }
 
     /**

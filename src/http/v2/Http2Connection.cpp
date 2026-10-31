@@ -385,6 +385,39 @@ ssize_t Http2Connection::on_data_source_read(int32_t stream_id, uint8_t* buf, si
         return static_cast<ssize_t>(to_copy);
     }
 
+    // File streaming path: drain from queued file chunks
+    if (stream->is_file) {
+        if (stream->file_chunks.empty()) {
+            if (stream->file_eof) {
+                if (stream->res.has_trailers() && !stream->trailers_submitted) {
+                    *data_flags |= (NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM);
+                    submit_trailers(stream);
+                } else {
+                    *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+                }
+                return 0;
+            }
+            return NGHTTP2_ERR_DEFERRED;
+        }
+        auto& chunk = stream->file_chunks.front();
+        size_t to_copy = std::min(chunk.size(), length);
+        std::memcpy(buf, chunk.data(), to_copy);
+        if (to_copy == chunk.size()) {
+            stream->file_chunks.pop_front();
+        } else {
+            chunk.erase(0, to_copy);
+        }
+        if (stream->file_chunks.empty() && stream->file_eof) {
+            if (stream->res.has_trailers() && !stream->trailers_submitted) {
+                *data_flags |= (NGHTTP2_DATA_FLAG_EOF | NGHTTP2_DATA_FLAG_NO_END_STREAM);
+                submit_trailers(stream);
+            } else {
+                *data_flags |= NGHTTP2_DATA_FLAG_EOF;
+            }
+        }
+        return static_cast<ssize_t>(to_copy);
+    }
+
     // Normal (non-SSE) path: read from buffered response body
     if (stream->req.method() == Method::HEAD) {
         *data_flags |= NGHTTP2_DATA_FLAG_EOF;
@@ -471,7 +504,8 @@ void Http2Connection::submit_response(Http2Stream* stream) {
     size_t status_len = static_cast<size_t>(p_status - status_buf);
 
     char cl_buf[32];
-    auto [p_cl, _c] = std::to_chars(cl_buf, cl_buf + sizeof(cl_buf), stream->res.body().size());
+    size_t content_len = stream->res.has_file() ? stream->res.file_size() : stream->res.body().size();
+    auto [p_cl, _c] = std::to_chars(cl_buf, cl_buf + sizeof(cl_buf), content_len);
     size_t cl_len = static_cast<size_t>(p_cl - cl_buf);
 
     std::array<nghttp2_nv, 16> nva_stack;
@@ -820,7 +854,18 @@ core::Task<bool> Http2Connection::upgrade_request(Request req, std::string_view 
         co_await router_.dispatch(stream->req, stream->res, services_);
     }
 
-    submit_response(stream);
+    if (stream->res.has_file()) {
+        stream->is_file = true;
+        submit_response(stream);
+        if (stream->req.method() == Method::HEAD || stream->res.file_size() == 0) {
+            stream->file_eof = true;
+            nghttp2_session_resume_data(session_, stream->stream_id);
+        } else {
+            loop_.spawn(stream_file_h2(stream->stream_id, stream->res.file_path(), stream->res.file_size(), stream->res.file_handle()));
+        }
+    } else {
+        submit_response(stream);
+    }
     co_return co_await flush_outbound();
 }
 
@@ -897,8 +942,69 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
             }
             stream->sse_eof = true;  // handler finished; next data_source_read -> EOF
             nghttp2_session_resume_data(session_, stream->stream_id);
+        } else if (stream->res.has_file()) {
+            stream->is_file = true;
+            submit_response(stream);
+            if (stream->req.method() == Method::HEAD || stream->res.file_size() == 0) {
+                stream->file_eof = true;
+                nghttp2_session_resume_data(session_, stream->stream_id);
+            } else {
+                loop_.spawn(stream_file_h2(stream->stream_id, stream->res.file_path(), stream->res.file_size(), stream->res.file_handle()));
+            }
         } else {
             submit_response(stream);
+        }
+    }
+}
+
+core::Task<void> Http2Connection::stream_file_h2(int32_t stream_id, std::string file_path, size_t file_size,
+                                                std::shared_ptr<storage::File> file_handle) {
+    bool had_error = false;
+    try {
+        storage::File local_file;
+        storage::File* active_file = file_handle.get();
+        if (!active_file) {
+            local_file = co_await storage::File::open(file_path, storage::OpenMode::ReadOnly);
+            active_file = &local_file;
+        }
+
+        storage::FileReadStream file_stream(*active_file, 64 * 1024, 0, static_cast<int64_t>(file_size));
+        while (auto chunk = co_await file_stream.next_chunk()) {
+            if (closed_ || closed_stream_ids_.contains(stream_id)) co_return;
+            auto it = streams_.find(stream_id);
+            if (it == streams_.end() || it->second->reset) co_return;
+
+            auto* stream = it->second.get();
+            stream->file_chunks.emplace_back(reinterpret_cast<const char*>(chunk->data()), chunk->size());
+            nghttp2_session_resume_data(session_, stream_id);
+            (void)co_await flush_outbound();
+
+            // Backpressure: yield if queued chunks accumulate waiting for window
+            while (!closed_ && !closed_stream_ids_.contains(stream_id)) {
+                auto check_it = streams_.find(stream_id);
+                if (check_it == streams_.end() || check_it->second->reset) co_return;
+                if (check_it->second->file_chunks.size() <= 2) break;
+                co_await core::yield();
+            }
+        }
+    } catch (...) {
+        had_error = true;
+    }
+
+    if (had_error) {
+        if (!closed_ && !closed_stream_ids_.contains(stream_id)) {
+            nghttp2_submit_rst_stream(session_, NGHTTP2_FLAG_NONE, stream_id, NGHTTP2_INTERNAL_ERROR);
+            (void)co_await flush_outbound();
+        }
+        co_return;
+    }
+
+    if (!closed_ && !closed_stream_ids_.contains(stream_id)) {
+        auto it = streams_.find(stream_id);
+        if (it != streams_.end() && !it->second->reset) {
+            it->second->file_eof = true;
+            nghttp2_session_resume_data(session_, stream_id);
+            (void)co_await flush_outbound();
         }
     }
 }

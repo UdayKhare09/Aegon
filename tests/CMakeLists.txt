@@ -127,6 +127,9 @@ if(TARGET aegon_http)
     add_executable(test_http3_compliance test_http3_compliance.cpp)
     target_link_libraries(test_http3_compliance PRIVATE aegon_http aegon_core)
 
+    add_executable(test_http_file_serving test_http_file_serving.cpp)
+    target_link_libraries(test_http_file_serving PRIVATE aegon_http aegon_storage aegon_core)
+
     add_executable(test_tls_server test_tls_server.cpp)
     target_link_libraries(test_tls_server PRIVATE aegon_http aegon_core)
 

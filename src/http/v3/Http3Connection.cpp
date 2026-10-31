@@ -522,6 +522,27 @@ nghttp3_ssize Http3Connection::on_stream_read(int64_t stream_id, uint32_t* pflag
         return 1;
     }
 
+    // File streaming path: serve from buffered frames
+    if (stream->is_file) {
+        size_t available = (stream->file_offset < stream->file_buf.size())
+                               ? (stream->file_buf.size() - stream->file_offset)
+                               : 0;
+        if (available == 0) {
+            if (stream->file_eof) {
+                *pflags |= NGHTTP3_DATA_FLAG_EOF;
+                return 0;
+            }
+            return NGHTTP3_ERR_WOULDBLOCK;
+        }
+        vec[0].base = reinterpret_cast<uint8_t*>(stream->file_buf.data() + stream->file_offset);
+        vec[0].len  = available;
+        stream->file_offset += available;
+        if (stream->file_offset >= stream->file_buf.size() && stream->file_eof) {
+            *pflags |= NGHTTP3_DATA_FLAG_EOF;
+        }
+        return 1;
+    }
+
     // Normal (non-SSE) path
     if (stream->req.method() == Method::HEAD) {
         *pflags |= NGHTTP3_DATA_FLAG_EOF;
@@ -628,7 +649,8 @@ void Http3Connection::submit_response(Http3Stream* stream) {
     size_t status_len = static_cast<size_t>(p_status - status_buf);
 
     char cl_buf[32];
-    auto [p_cl, _c] = std::to_chars(cl_buf, cl_buf + sizeof(cl_buf), stream->res.body().size());
+    size_t content_len = stream->res.has_file() ? stream->res.file_size() : stream->res.body().size();
+    auto [p_cl, _c] = std::to_chars(cl_buf, cl_buf + sizeof(cl_buf), content_len);
     size_t cl_len = static_cast<size_t>(p_cl - cl_buf);
 
     std::array<nghttp3_nv, 16> nva_stack;
@@ -753,8 +775,69 @@ core::Task<void> Http3Connection::dispatch_pending_requests() {
             stream->sse_eof = true;   // handler done; next on_stream_read -> EOF
             nghttp3_conn_resume_stream(h3conn_, stream->stream_id);
             flush_outbound();
+        } else if (stream->res.has_file()) {
+            stream->is_file = true;
+            submit_response(stream);
+            if (stream->req.method() == Method::HEAD || stream->res.file_size() == 0) {
+                stream->file_eof = true;
+                nghttp3_conn_resume_stream(h3conn_, stream->stream_id);
+                flush_outbound();
+            } else {
+                loop_.spawn(stream_file_h3(stream->stream_id, stream->res.file_path(), stream->res.file_size(), stream->res.file_handle()));
+            }
         } else {
             submit_response(stream);
+        }
+    }
+}
+
+core::Task<void> Http3Connection::stream_file_h3(int64_t stream_id, std::string file_path, size_t file_size,
+                                                std::shared_ptr<storage::File> file_handle) {
+    try {
+        storage::File local_file;
+        storage::File* active_file = file_handle.get();
+        if (!active_file) {
+            local_file = co_await storage::File::open(file_path, storage::OpenMode::ReadOnly);
+            active_file = &local_file;
+        }
+
+        storage::FileReadStream file_stream(*active_file, 64 * 1024, 0, static_cast<int64_t>(file_size));
+        while (auto chunk = co_await file_stream.next_chunk()) {
+            if (closed_) co_return;
+            auto it = streams_.find(stream_id);
+            if (it == streams_.end()) co_return;
+            auto* stream = it->second.get();
+
+            if (stream->file_offset >= stream->file_buf.size()) {
+                stream->file_buf.clear();
+                stream->file_offset = 0;
+            }
+            stream->file_buf.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
+            nghttp3_conn_resume_stream(h3conn_, stream_id);
+            flush_outbound();
+
+            // Backpressure: yield if buffer has not drained yet
+            while (!closed_) {
+                auto check_it = streams_.find(stream_id);
+                if (check_it == streams_.end()) co_return;
+                if (check_it->second->file_offset >= check_it->second->file_buf.size()) break;
+                co_await core::yield();
+            }
+        }
+    } catch (...) {
+        if (!closed_) {
+            nghttp3_conn_close_stream(h3conn_, stream_id, NGHTTP3_H3_INTERNAL_ERROR);
+            flush_outbound();
+        }
+        co_return;
+    }
+
+    if (!closed_) {
+        auto it = streams_.find(stream_id);
+        if (it != streams_.end()) {
+            it->second->file_eof = true;
+            nghttp3_conn_resume_stream(h3conn_, stream_id);
+            flush_outbound();
         }
     }
 }

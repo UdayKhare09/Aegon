@@ -3,6 +3,8 @@
 #include "http/Request.h"
 #include "http/Response.h"
 #include "http/Router.h"
+#include "storage/File.h"
+#include "storage/FileStream.h"
 #include "core/EventLoop.h"
 #include "core/OsSocket.h"
 #include <nghttp2/nghttp2.h>
@@ -65,6 +67,11 @@ struct Http2Stream {
     bool grpc_eof{false};                  // true when streaming handler completes
     std::shared_ptr<grpc::GrpcInboundChannel> grpc_inbound{nullptr};
     bool dispatched{false};
+
+    // File streaming state
+    std::deque<std::string> file_chunks;
+    bool is_file{false};
+    bool file_eof{false};
 };
 
 using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
@@ -138,6 +145,12 @@ private:
      * @brief Push a 5-byte framed gRPC response into the stream's outbound queue.
      */
     core::Task<void> push_grpc_frame(Http2Stream* stream, std::string frame);
+
+    /**
+     * @brief Asynchronously stream disk file into nghttp2 DATA frames with backpressure.
+     */
+    core::Task<void> stream_file_h2(int32_t stream_id, std::string file_path, size_t file_size,
+                                    std::shared_ptr<storage::File> file_handle = nullptr);
 
     core::EventLoop& loop_;
     core::os_socket_t client_fd_;

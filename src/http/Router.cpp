@@ -78,10 +78,17 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
     }
     if (clean_prefix == "/") clean_prefix = "";
 
+    std::error_code ec;
+    std::filesystem::path base_path = std::filesystem::weakly_canonical(base_dir, ec);
+    std::string canonical_base = base_path.lexically_normal().string();
+    while (canonical_base.size() > 1 && canonical_base.back() == '/') {
+        canonical_base.pop_back();
+    }
+
     auto cache = std::make_shared<std::unordered_map<std::string, CachedStaticFile>>();
     auto mtx = std::make_shared<std::shared_mutex>();
 
-    auto handler = [base_dir, options, cache, mtx](Context& ctx) {
+    auto handler = [canonical_base, options, cache, mtx](Context& ctx) {
         std::string_view rel;
         if (auto p = ctx.req().param("filepath")) {
             rel = *p;
@@ -99,9 +106,8 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                 return;
             }
         }
-        rel = decoded_rel;
 
-        // 1. Lexical checks on both raw and URL-decoded path segments
+        // 1. Fast lexical checks on both raw and URL-decoded path segments
         if (rel.find("..") != std::string_view::npos ||
             rel.find('\\') != std::string_view::npos ||
             rel.find('\0') != std::string_view::npos ||
@@ -112,28 +118,7 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
             return;
         }
 
-        // 2. Canonical filesystem boundaries: resolve symlinks and prevent directory breakouts
-        std::error_code ec;
-        std::filesystem::path base_path = std::filesystem::weakly_canonical(base_dir, ec);
-        if (ec) {
-            ctx.res().status(StatusCode::NotFound).text("Not Found");
-            return;
-        }
-
-        std::filesystem::path target_path = std::filesystem::weakly_canonical(base_path / decoded_rel, ec);
-        if (ec) {
-            ctx.res().status(StatusCode::NotFound).text("Not Found");
-            return;
-        }
-
-        auto base_native = base_path.lexically_normal().native();
-        auto target_native = target_path.lexically_normal().native();
-        if (!target_native.starts_with(base_native)) {
-            ctx.res().status(StatusCode::NotFound).text("Not Found");
-            return;
-        }
-
-        std::string full_path = target_path.string();
+        std::string full_path = canonical_base + "/" + decoded_rel;
 
         auto accept_enc = ctx.req().header("accept-encoding");
         bool accept_br = options.precompressed && accept_enc && accept_enc->find("br") != std::string_view::npos;
@@ -180,47 +165,52 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
             }
 
             if (!found_in_cache) {
+                if (!options.cache_in_memory && st.st_size > 64 * 1024) {
+                    entry = CachedStaticFile{
+                        .mtime = current_mtime,
+                        .mtime_nsec = current_nsec,
+                        .size = static_cast<size_t>(st.st_size),
+                        .etag = options.etag ? detail::generate_etag(current_mtime, current_nsec, st.st_size) : "",
+                        .last_modified = options.last_modified ? detail::format_http_date(current_mtime) : "",
+                        .content = "",
+                        .content_type = std::string(content_type),
+                        .content_encoding = std::string(encoding)
+                    };
+                } else {
 #if defined(_WIN32)
-                int fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
+                    int fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
 #else
-                int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+                    int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
 #endif
-                if (fd < 0) return false;
+                    if (fd < 0) return false;
 
-                std::string data;
-                data.resize(static_cast<size_t>(st.st_size));
-                size_t total_read = 0;
-                while (total_read < data.size()) {
+                    std::string data;
+                    data.resize(static_cast<size_t>(st.st_size));
 #if defined(_WIN32)
-                    int n = ::_read(fd, data.data() + total_read, static_cast<unsigned int>(data.size() - total_read));
+                    int n = ::_read(fd, data.data(), static_cast<unsigned int>(data.size()));
+                    ::_close(fd);
+                    if (n != static_cast<int>(data.size())) return false;
 #else
-                    ssize_t n = ::read(fd, data.data() + total_read, data.size() - total_read);
-#endif
-                    if (n <= 0) break;
-                    total_read += static_cast<size_t>(n);
-                }
-#if defined(_WIN32)
-                ::_close(fd);
-#else
-                ::close(fd);
+                    ssize_t n = ::pread(fd, data.data(), data.size(), 0);
+                    ::close(fd);
+                    if (n != static_cast<ssize_t>(data.size())) return false;
 #endif
 
-                if (total_read != data.size()) return false;
+                    entry = CachedStaticFile{
+                        .mtime = current_mtime,
+                        .mtime_nsec = current_nsec,
+                        .size = static_cast<size_t>(st.st_size),
+                        .etag = options.etag ? detail::generate_etag(current_mtime, current_nsec, st.st_size) : "",
+                        .last_modified = options.last_modified ? detail::format_http_date(current_mtime) : "",
+                        .content = std::move(data),
+                        .content_type = std::string(content_type),
+                        .content_encoding = std::string(encoding)
+                    };
 
-                entry = CachedStaticFile{
-                    .mtime = current_mtime,
-                    .mtime_nsec = current_nsec,
-                    .size = static_cast<size_t>(st.st_size),
-                    .etag = options.etag ? detail::generate_etag(current_mtime, current_nsec, st.st_size) : "",
-                    .last_modified = options.last_modified ? detail::format_http_date(current_mtime) : "",
-                    .content = std::move(data),
-                    .content_type = std::string(content_type),
-                    .content_encoding = std::string(encoding)
-                };
-
-                if (options.cache_in_memory) {
-                    std::unique_lock lock(*mtx);
-                    (*cache)[file_path] = entry;
+                    if (options.cache_in_memory) {
+                        std::unique_lock lock(*mtx);
+                        (*cache)[file_path] = entry;
+                    }
                 }
             }
 
@@ -275,7 +265,11 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                 if (!cc.empty()) ctx.res().set_header_owned("Cache-Control", std::move(cc));
             }
 
-            ctx.res().body(entry.content);
+            if (entry.content.empty() && st.st_size > 0) {
+                ctx.send_file(file_path, content_type);
+            } else {
+                ctx.res().body(entry.content);
+            }
             return true;
         };
 
@@ -304,7 +298,7 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                 }
 
                 if (!is_asset_request || accepts_html) {
-                    std::string fallback_path = base_dir + "/" + options.fallback_file;
+                    std::string fallback_path = canonical_base + "/" + options.fallback_file;
                     if (accept_br && try_serve(fallback_path + ".br", "br", true)) return;
                     if (accept_gz && try_serve(fallback_path + ".gz", "gzip", true)) return;
                     if (try_serve(fallback_path, "", true)) return;

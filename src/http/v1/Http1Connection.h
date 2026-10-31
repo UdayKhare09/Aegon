@@ -7,6 +7,8 @@
 #include "http/v1/Http1Parser.h"
 #include "http/v1/Http1Serializer.h"
 #include "net/tls/TlsStream.h"
+#include "storage/File.h"
+#include "storage/FileStream.h"
 #include "core/EventLoop.h"
 #include "core/OsSocket.h"
 #include "core/Task.h"
@@ -67,6 +69,13 @@ public:
      * @brief Validates RFC 6455 Sec-WebSocket-Version header.
      */
     static std::optional<Response> validate_websocket_upgrade(const Request& req);
+
+    /**
+     * @brief Streams file using kernel zero-copy or asynchronous persistent storage engine.
+     */
+    static core::Task<bool> stream_file(core::EventLoop& loop, core::os_socket_t client_fd,
+                                        const std::string& file_path, size_t file_size,
+                                        std::shared_ptr<storage::File> file_handle = nullptr);
 
     /**
      * @brief Zero-copy file streaming via kernel splice pipes.

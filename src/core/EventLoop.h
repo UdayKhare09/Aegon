@@ -77,4 +77,24 @@ private:
     std::vector<std::function<void()>> post_queue_;
 };
 
+struct YieldAwaiter {
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept {
+        auto* loop = EventLoop::current();
+        if (loop) {
+            loop->post([h]() mutable { h.resume(); });
+        } else {
+            h.resume();
+        }
+    }
+    void await_resume() const noexcept {}
+};
+
+/**
+ * @brief Cooperatively yields control back to the event loop so other tasks and I/O can run.
+ */
+[[nodiscard]] inline YieldAwaiter yield() noexcept {
+    return YieldAwaiter{};
+}
+
 } // namespace aegon::core

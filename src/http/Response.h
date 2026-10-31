@@ -3,10 +3,12 @@
 #include "http/Protocol.h"
 #include "http/HeaderMap.h"
 #include "http/Cookie.h"
+#include "storage/File.h"
 #include <glaze/glaze.hpp>
 #include <string>
 #include <string_view>
 #include <deque>
+#include <memory>
 #include <type_traits>
 #include <sys/stat.h>
 
@@ -28,6 +30,7 @@ public:
         is_sse_ = false;
         is_file_ = false;
         file_path_.clear();
+        file_handle_.reset();
         file_size_ = 0;
         owned_strings_.clear();
     }
@@ -169,6 +172,7 @@ public:
     Response& file(const std::string& filepath, std::string_view mime_type = "") {
         is_file_ = true;
         file_path_ = filepath;
+        file_handle_.reset();
         struct stat st{};
         if (::stat(filepath.c_str(), &st) == 0) {
             file_size_ = static_cast<size_t>(st.st_size);
@@ -184,8 +188,18 @@ public:
         return *this;
     }
 
+    Response& file(storage::File file_obj, size_t size, std::string_view mime_type = "application/octet-stream") {
+        is_file_ = true;
+        file_path_ = file_obj.path();
+        file_handle_ = std::make_shared<storage::File>(std::move(file_obj));
+        file_size_ = size;
+        headers_.set("Content-Type", mime_type);
+        return *this;
+    }
+
     [[nodiscard]] bool has_file() const noexcept { return is_file_; }
     [[nodiscard]] const std::string& file_path() const noexcept { return file_path_; }
+    [[nodiscard]] std::shared_ptr<storage::File> file_handle() const noexcept { return file_handle_; }
     [[nodiscard]] size_t file_size() const noexcept { return file_size_; }
 
 
@@ -272,6 +286,7 @@ private:
     bool is_trailers_only_{false};
     bool is_file_{false};
     std::string file_path_{};
+    std::shared_ptr<storage::File> file_handle_{nullptr};
     size_t file_size_{0};
     std::deque<std::string> owned_strings_{};
 };
