@@ -960,35 +960,96 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
 core::Task<void> Http2Connection::stream_file_h2(int32_t stream_id, std::string file_path, size_t file_size,
                                                 std::shared_ptr<storage::File> file_handle) {
     bool had_error = false;
-    try {
-        storage::File local_file;
-        storage::File* active_file = file_handle.get();
-        if (!active_file) {
-            local_file = co_await storage::File::open(file_path, storage::OpenMode::ReadOnly);
-            active_file = &local_file;
-        }
+    if (!file_handle) {
+#if defined(_WIN32)
+        int file_fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
+        if (file_fd < 0) {
+            had_error = true;
+        } else {
+            char buf[65536];
+            size_t remaining = file_size;
+            while (remaining > 0) {
+                if (closed_ || closed_stream_ids_.contains(stream_id)) { ::_close(file_fd); co_return; }
+                auto it = streams_.find(stream_id);
+                if (it == streams_.end() || it->second->reset) { ::_close(file_fd); co_return; }
 
-        storage::FileReadStream file_stream(*active_file, 64 * 1024, 0, static_cast<int64_t>(file_size));
-        while (auto chunk = co_await file_stream.next_chunk()) {
-            if (closed_ || closed_stream_ids_.contains(stream_id)) co_return;
-            auto it = streams_.find(stream_id);
-            if (it == streams_.end() || it->second->reset) co_return;
+                size_t to_read = std::min(remaining, sizeof(buf));
+                int n = ::_read(file_fd, buf, static_cast<unsigned int>(to_read));
+                if (n <= 0) { had_error = true; break; }
 
-            auto* stream = it->second.get();
-            stream->file_chunks.emplace_back(reinterpret_cast<const char*>(chunk->data()), chunk->size());
-            nghttp2_session_resume_data(session_, stream_id);
-            (void)co_await flush_outbound();
+                auto* stream = it->second.get();
+                stream->file_chunks.emplace_back(buf, static_cast<size_t>(n));
+                nghttp2_session_resume_data(session_, stream_id);
+                (void)co_await flush_outbound();
+                remaining -= static_cast<size_t>(n);
 
-            // Backpressure: yield if queued chunks accumulate waiting for window
-            while (!closed_ && !closed_stream_ids_.contains(stream_id)) {
-                auto check_it = streams_.find(stream_id);
-                if (check_it == streams_.end() || check_it->second->reset) co_return;
-                if (check_it->second->file_chunks.size() <= 2) break;
-                co_await core::yield();
+                while (!closed_ && !closed_stream_ids_.contains(stream_id)) {
+                    auto check_it = streams_.find(stream_id);
+                    if (check_it == streams_.end() || check_it->second->reset) { ::_close(file_fd); co_return; }
+                    if (check_it->second->file_chunks.size() <= 2) break;
+                    co_await core::yield();
+                }
             }
+            ::_close(file_fd);
         }
-    } catch (...) {
-        had_error = true;
+#else
+        int file_fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (file_fd < 0) {
+            had_error = true;
+        } else {
+            char buf[65536];
+            size_t remaining = file_size;
+            off_t offset = 0;
+            while (remaining > 0) {
+                if (closed_ || closed_stream_ids_.contains(stream_id)) { ::close(file_fd); co_return; }
+                auto it = streams_.find(stream_id);
+                if (it == streams_.end() || it->second->reset) { ::close(file_fd); co_return; }
+
+                size_t to_read = std::min(remaining, sizeof(buf));
+                ssize_t n = ::pread(file_fd, buf, to_read, offset);
+                if (n <= 0) { had_error = true; break; }
+
+                auto* stream = it->second.get();
+                stream->file_chunks.emplace_back(buf, static_cast<size_t>(n));
+                nghttp2_session_resume_data(session_, stream_id);
+                (void)co_await flush_outbound();
+                offset += n;
+                remaining -= static_cast<size_t>(n);
+
+                while (!closed_ && !closed_stream_ids_.contains(stream_id)) {
+                    auto check_it = streams_.find(stream_id);
+                    if (check_it == streams_.end() || check_it->second->reset) { ::close(file_fd); co_return; }
+                    if (check_it->second->file_chunks.size() <= 2) break;
+                    co_await core::yield();
+                }
+            }
+            ::close(file_fd);
+        }
+#endif
+    } else {
+        try {
+            storage::FileReadStream file_stream(*file_handle, 64 * 1024, 0, static_cast<int64_t>(file_size));
+            while (auto chunk = co_await file_stream.next_chunk()) {
+                if (closed_ || closed_stream_ids_.contains(stream_id)) co_return;
+                auto it = streams_.find(stream_id);
+                if (it == streams_.end() || it->second->reset) co_return;
+
+                auto* stream = it->second.get();
+                stream->file_chunks.emplace_back(reinterpret_cast<const char*>(chunk->data()), chunk->size());
+                nghttp2_session_resume_data(session_, stream_id);
+                (void)co_await flush_outbound();
+
+                // Backpressure: yield if queued chunks accumulate waiting for window
+                while (!closed_ && !closed_stream_ids_.contains(stream_id)) {
+                    auto check_it = streams_.find(stream_id);
+                    if (check_it == streams_.end() || check_it->second->reset) co_return;
+                    if (check_it->second->file_chunks.size() <= 2) break;
+                    co_await core::yield();
+                }
+            }
+        } catch (...) {
+            had_error = true;
+        }
     }
 
     if (had_error) {
@@ -1010,6 +1071,15 @@ core::Task<void> Http2Connection::stream_file_h2(int32_t stream_id, std::string 
 }
 
 core::Task<bool> Http2Connection::flush_outbound() {
+    if (is_flushing_) {
+        co_return true;
+    }
+    is_flushing_ = true;
+    struct FlushGuard {
+        bool& flag;
+        ~FlushGuard() { flag = false; }
+    } guard{is_flushing_};
+
     while (nghttp2_session_want_write(session_)) {
         const uint8_t* data = nullptr;
         ssize_t len = nghttp2_session_mem_send(session_, &data);
@@ -1024,18 +1094,20 @@ core::Task<bool> Http2Connection::flush_outbound() {
         outbound_buf_.append(reinterpret_cast<const char*>(data), static_cast<size_t>(len));
 
         if (outbound_buf_.size() >= 65536) {
+            std::string to_send = std::move(outbound_buf_);
+            outbound_buf_.clear();
             int sent = 0;
             if (sender_) {
-                sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
+                sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(to_send.data()), to_send.size()));
             } else {
-                sent = co_await loop_.engine().send(client_fd_, outbound_buf_);
-                if (sent != static_cast<int>(outbound_buf_.size())) [[unlikely]] {
+                sent = co_await loop_.engine().send(client_fd_, to_send);
+                if (sent != static_cast<int>(to_send.size())) [[unlikely]] {
                     if (sent <= 0) {
                         closed_ = true;
                         co_return false;
                     }
-                    int rem = co_await loop_.engine().send_all(client_fd_, std::string_view(outbound_buf_).substr(sent));
-                    if (rem != static_cast<int>(outbound_buf_.size() - sent)) {
+                    int rem = co_await loop_.engine().send_all(client_fd_, std::string_view(to_send).substr(sent));
+                    if (rem != static_cast<int>(to_send.size() - sent)) {
                         closed_ = true;
                         co_return false;
                     }
@@ -1046,23 +1118,24 @@ core::Task<bool> Http2Connection::flush_outbound() {
                 closed_ = true;
                 co_return false;
             }
-            outbound_buf_.clear();
         }
     }
 
     if (!outbound_buf_.empty()) {
+        std::string to_send = std::move(outbound_buf_);
+        outbound_buf_.clear();
         int sent = 0;
         if (sender_) {
-            sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(outbound_buf_.data()), outbound_buf_.size()));
+            sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(to_send.data()), to_send.size()));
         } else {
-            sent = co_await loop_.engine().send(client_fd_, outbound_buf_);
-            if (sent != static_cast<int>(outbound_buf_.size())) [[unlikely]] {
+            sent = co_await loop_.engine().send(client_fd_, to_send);
+            if (sent != static_cast<int>(to_send.size())) [[unlikely]] {
                 if (sent <= 0) {
                     closed_ = true;
                     co_return false;
                 }
-                int rem = co_await loop_.engine().send_all(client_fd_, std::string_view(outbound_buf_).substr(sent));
-                if (rem != static_cast<int>(outbound_buf_.size() - sent)) {
+                int rem = co_await loop_.engine().send_all(client_fd_, std::string_view(to_send).substr(sent));
+                if (rem != static_cast<int>(to_send.size() - sent)) {
                     closed_ = true;
                     co_return false;
                 }
@@ -1073,7 +1146,6 @@ core::Task<bool> Http2Connection::flush_outbound() {
             closed_ = true;
             co_return false;
         }
-        outbound_buf_.clear();
     }
     co_return true;
 }

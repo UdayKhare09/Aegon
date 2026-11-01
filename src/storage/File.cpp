@@ -79,7 +79,7 @@ core::Task<File> File::open(std::string_view path, OpenMode mode, StorageConfig 
     bool try_direct = false;
     if (has_flag(mode, OpenMode::Direct) || config.direct_io == DirectIoMode::Always) {
         try_direct = true;
-    } else if (config.direct_io == DirectIoMode::Auto) {
+    } else if (config.direct_io == DirectIoMode::Auto && has_flag(mode, OpenMode::WriteOnly)) {
         if (dev.tier == DeviceTier::NVMe || dev.tier == DeviceTier::SATA_SSD) {
             try_direct = true;
         }
@@ -94,8 +94,8 @@ core::Task<File> File::open(std::string_view path, OpenMode mode, StorageConfig 
         fd = ::open(path_str.c_str(), posix_flags | O_DIRECT, 0644);
         if (fd >= 0) {
             is_direct = true;
-        } else if (errno == EINVAL && config.direct_io != DirectIoMode::Always) {
-            // Filesystem does not support O_DIRECT (e.g. tmpfs); fall back to buffered I/O
+        } else if (config.direct_io != DirectIoMode::Always) {
+            // Filesystem or mount does not support O_DIRECT (e.g. tmpfs, overlayfs, docker bind mount); fall back to buffered I/O
             fd = ::open(path_str.c_str(), posix_flags, 0644);
         }
     } else {

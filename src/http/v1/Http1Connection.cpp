@@ -94,15 +94,46 @@ core::Task<bool> Http1Connection::stream_file(core::EventLoop& loop, core::os_so
     }
 #endif
 
-    try {
-        storage::File local_file;
-        storage::File* active_file = file_handle.get();
-        if (!active_file) {
-            local_file = co_await storage::File::open(file_path, storage::OpenMode::ReadOnly);
-            active_file = &local_file;
+    if (!file_handle) {
+#if defined(_WIN32)
+        int file_fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
+        if (file_fd < 0) co_return false;
+        char buf[65536];
+        size_t remaining = file_size;
+        bool ok = true;
+        while (remaining > 0) {
+            size_t to_read = std::min(remaining, sizeof(buf));
+            int n = ::_read(file_fd, buf, static_cast<unsigned int>(to_read));
+            if (n <= 0) { ok = false; break; }
+            int sent = co_await loop.engine().send_all(client_fd, std::string_view(buf, static_cast<size_t>(n)));
+            if (sent <= 0) { ok = false; break; }
+            remaining -= static_cast<size_t>(n);
         }
+        ::_close(file_fd);
+        co_return ok;
+#else
+        int file_fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (file_fd < 0) co_return false;
+        char buf[65536];
+        size_t remaining = file_size;
+        off_t offset = 0;
+        bool ok = true;
+        while (remaining > 0) {
+            size_t to_read = std::min(remaining, sizeof(buf));
+            ssize_t n = ::pread(file_fd, buf, to_read, offset);
+            if (n <= 0) { ok = false; break; }
+            int sent = co_await loop.engine().send_all(client_fd, std::string_view(buf, static_cast<size_t>(n)));
+            if (sent <= 0) { ok = false; break; }
+            offset += n;
+            remaining -= static_cast<size_t>(n);
+        }
+        ::close(file_fd);
+        co_return ok;
+#endif
+    }
 
-        storage::FileReadStream stream(*active_file, 64 * 1024, 0, static_cast<int64_t>(file_size));
+    try {
+        storage::FileReadStream stream(*file_handle, 64 * 1024, 0, static_cast<int64_t>(file_size));
         while (auto chunk = co_await stream.next_chunk()) {
             int sent = co_await loop.engine().send_all(client_fd,
                 std::string_view(reinterpret_cast<const char*>(chunk->data()), chunk->size()));
@@ -576,24 +607,58 @@ core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::
                 Http1Serializer::serialize_headers(res, header_out);
                 (void)(co_await tls_stream.write_plaintext(header_out.data(), header_out.size()));
                 if (req.method() != Method::HEAD && res.file_size() > 0) {
-                    try {
-                        storage::File local_file;
-                        storage::File* active_file = res.file_handle().get();
-                        if (!active_file) {
-                            local_file = co_await storage::File::open(res.file_path(), storage::OpenMode::ReadOnly);
-                            active_file = &local_file;
-                        }
-                        storage::FileReadStream stream(*active_file, 64 * 1024, 0, static_cast<int64_t>(res.file_size()));
-                        while (auto chunk = co_await stream.next_chunk()) {
-                            int written = co_await tls_stream.write_plaintext(
-                                reinterpret_cast<const char*>(chunk->data()), chunk->size());
-                            if (written <= 0) {
-                                keep_alive = false;
-                                break;
+                    if (!res.file_handle()) {
+#if defined(_WIN32)
+                        int file_fd = ::_open(res.file_path().c_str(), _O_RDONLY | _O_BINARY);
+                        if (file_fd < 0) {
+                            keep_alive = false;
+                        } else {
+                            char buf[65536];
+                            size_t remaining = res.file_size();
+                            while (remaining > 0) {
+                                size_t to_read = std::min(remaining, sizeof(buf));
+                                int n = ::_read(file_fd, buf, static_cast<unsigned int>(to_read));
+                                if (n <= 0) { keep_alive = false; break; }
+                                int written = co_await tls_stream.write_plaintext(buf, static_cast<size_t>(n));
+                                if (written <= 0) { keep_alive = false; break; }
+                                remaining -= static_cast<size_t>(n);
                             }
+                            ::_close(file_fd);
                         }
-                    } catch (...) {
-                        keep_alive = false;
+#else
+                        int file_fd = ::open(res.file_path().c_str(), O_RDONLY | O_CLOEXEC);
+                        if (file_fd < 0) {
+                            keep_alive = false;
+                        } else {
+                            char buf[65536];
+                            size_t remaining = res.file_size();
+                            off_t offset = 0;
+                            while (remaining > 0) {
+                                size_t to_read = std::min(remaining, sizeof(buf));
+                                ssize_t n = ::pread(file_fd, buf, to_read, offset);
+                                if (n <= 0) { keep_alive = false; break; }
+                                int written = co_await tls_stream.write_plaintext(buf, static_cast<size_t>(n));
+                                if (written <= 0) { keep_alive = false; break; }
+                                offset += n;
+                                remaining -= static_cast<size_t>(n);
+                            }
+                            ::close(file_fd);
+                        }
+#endif
+                    } else {
+                        try {
+                            storage::FileReadStream stream(*res.file_handle(), 64 * 1024, 0, static_cast<int64_t>(res.file_size()));
+                            while (auto chunk = co_await stream.next_chunk()) {
+                                int written = co_await tls_stream.write_plaintext(
+                                    reinterpret_cast<const char*>(chunk->data()), chunk->size());
+                                if (written <= 0) {
+                                    keep_alive = false;
+                                    break;
+                                }
+                            }
+                        } catch (...) {
+                            keep_alive = false;
+                        }
                     }
                 }
             } else if (res.is_sse()) {

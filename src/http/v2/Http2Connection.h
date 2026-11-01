@@ -164,6 +164,7 @@ private:
     std::string outbound_buf_;
     std::string alt_svc_;
     bool closed_{false};
+    bool is_flushing_{false};
     uint32_t rst_count_{0};
     uint32_t rst_burst_limit_{100};
     int32_t max_remote_stream_id_{0};
