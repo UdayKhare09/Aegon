@@ -32,9 +32,18 @@ class HeaderMap {
 public:
     static constexpr size_t INLINE_CAPACITY = 32;
 
+    enum Flags : uint8_t {
+        FLAG_NONE              = 0,
+        FLAG_CONTENT_LENGTH    = 1 << 0,
+        FLAG_CONTENT_TYPE      = 1 << 1,
+        FLAG_DATE              = 1 << 2,
+        FLAG_TRANSFER_ENCODING = 1 << 3,
+    };
+
     HeaderMap() = default;
 
     void add(std::string_view name, std::string_view value) {
+        update_flags(name);
         if (size_ < INLINE_CAPACITY) {
             inline_headers_[size_++] = {name, value};
         } else {
@@ -46,6 +55,7 @@ public:
     }
 
     void set(std::string_view name, std::string_view value) {
+        update_flags(name);
         // Look in inline headers first
         for (size_t i = 0; i < size_; ++i) {
             if (iequals(inline_headers_[i].name, name)) {
@@ -60,10 +70,22 @@ public:
                 return;
             }
         }
-        add(name, value);
+        if (size_ < INLINE_CAPACITY) {
+            inline_headers_[size_++] = {name, value};
+        } else {
+            if (heap_headers_.empty()) {
+                heap_headers_.reserve(16);
+            }
+            heap_headers_.push_back({name, value});
+        }
     }
 
     [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const noexcept {
+        if (name.size() == 14 && iequals(name, "Content-Length") && !has_content_length()) return std::nullopt;
+        if (name.size() == 4 && iequals(name, "Date") && !has_date()) return std::nullopt;
+        if (name.size() == 17 && iequals(name, "Transfer-Encoding") && !has_transfer_encoding()) return std::nullopt;
+        if (name.size() == 12 && iequals(name, "Content-Type") && !has_content_type()) return std::nullopt;
+
         for (size_t i = 0; i < size_; ++i) {
             if (iequals(inline_headers_[i].name, name)) {
                 return inline_headers_[i].value;
@@ -78,8 +100,17 @@ public:
     }
 
     [[nodiscard]] bool contains(std::string_view name) const noexcept {
+        if (name.size() == 14 && iequals(name, "Content-Length")) return has_content_length();
+        if (name.size() == 4 && iequals(name, "Date")) return has_date();
+        if (name.size() == 17 && iequals(name, "Transfer-Encoding")) return has_transfer_encoding();
+        if (name.size() == 12 && iequals(name, "Content-Type")) return has_content_type();
         return get(name).has_value();
     }
+
+    [[nodiscard]] bool has_content_length() const noexcept { return (flags_ & FLAG_CONTENT_LENGTH) != 0; }
+    [[nodiscard]] bool has_content_type() const noexcept { return (flags_ & FLAG_CONTENT_TYPE) != 0; }
+    [[nodiscard]] bool has_date() const noexcept { return (flags_ & FLAG_DATE) != 0; }
+    [[nodiscard]] bool has_transfer_encoding() const noexcept { return (flags_ & FLAG_TRANSFER_ENCODING) != 0; }
 
     [[nodiscard]] size_t size() const noexcept {
         return size_ + heap_headers_.size();
@@ -110,6 +141,9 @@ public:
                 ++it;
             }
         }
+        if (removed) {
+            recompute_flags();
+        }
         return removed;
     }
 
@@ -120,6 +154,7 @@ public:
     void clear() noexcept {
         size_ = 0;
         heap_headers_.clear();
+        flags_ = FLAG_NONE;
     }
 
     // Iterator support
@@ -156,9 +191,32 @@ public:
     [[nodiscard]] ConstIterator end() const noexcept { return ConstIterator{*this, size()}; }
 
 private:
+    void update_flags(std::string_view name) noexcept {
+        if (name.size() == 14 && iequals(name, "Content-Length")) {
+            flags_ |= FLAG_CONTENT_LENGTH;
+        } else if (name.size() == 12 && iequals(name, "Content-Type")) {
+            flags_ |= FLAG_CONTENT_TYPE;
+        } else if (name.size() == 4 && iequals(name, "Date")) {
+            flags_ |= FLAG_DATE;
+        } else if (name.size() == 17 && iequals(name, "Transfer-Encoding")) {
+            flags_ |= FLAG_TRANSFER_ENCODING;
+        }
+    }
+
+    void recompute_flags() noexcept {
+        flags_ = FLAG_NONE;
+        for (size_t i = 0; i < size_; ++i) {
+            update_flags(inline_headers_[i].name);
+        }
+        for (const auto& h : heap_headers_) {
+            update_flags(h.name);
+        }
+    }
+
     std::array<HeaderEntry, INLINE_CAPACITY> inline_headers_{};
     size_t size_{0};
     std::vector<HeaderEntry> heap_headers_{};
+    uint8_t flags_{FLAG_NONE};
 };
 
 } // namespace aegon::http

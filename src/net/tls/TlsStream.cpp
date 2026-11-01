@@ -68,7 +68,7 @@ TlsStream& TlsStream::operator=(TlsStream&& other) noexcept {
 }
 
 core::Task<bool> TlsStream::flush_outbound() {
-    char out_buf[65536];
+    char out_buf[4096];
     while (BIO_pending(out_bio_) > 0) {
         int n = BIO_read(out_bio_, out_buf, sizeof(out_buf));
         if (n > 0) {
@@ -193,8 +193,6 @@ bool TlsStream::try_enable_ktls_tx() {
 }
 
 core::Task<bool> TlsStream::handshake() {
-    char net_in[16384];
-
     while (!SSL_is_init_finished(ssl_)) {
         int ret = SSL_do_handshake(ssl_);
 
@@ -210,11 +208,18 @@ core::Task<bool> TlsStream::handshake() {
 
         int err = SSL_get_error(ssl_, ret);
         if (err == SSL_ERROR_WANT_READ) {
-            int n = co_await loop_->engine().recv(client_fd_, net_in, sizeof(net_in));
-            if (n <= 0) {
+            auto recv_res = co_await loop_->engine().recv_provided(client_fd_, loop_->buffer_pool().bgid());
+            if (recv_res.bytes == -ENOBUFS) {
+                co_await loop_->engine().timeout(100'000ULL);
+                continue;
+            }
+            if (recv_res.bytes <= 0) {
                 co_return false;
             }
-            BIO_write(in_bio_, net_in, n);
+
+            auto slice = loop_->buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
+            BIO_write(in_bio_, slice.data(), static_cast<int>(slice.size()));
+            loop_->buffer_pool().return_buffer(recv_res.bid);
         } else if (err == SSL_ERROR_WANT_WRITE) {
             if (!co_await flush_outbound()) {
                 co_return false;
@@ -230,8 +235,6 @@ core::Task<bool> TlsStream::handshake() {
 }
 
 core::Task<int> TlsStream::read_plaintext(void* buf, size_t max_len) {
-    char net_in[16384];
-
     while (true) {
         int ret = SSL_read(ssl_, buf, static_cast<int>(max_len));
         if (ret > 0) {
@@ -244,11 +247,18 @@ core::Task<int> TlsStream::read_plaintext(void* buf, size_t max_len) {
         }
 
         if (err == SSL_ERROR_WANT_READ) {
-            int n = co_await loop_->engine().recv(client_fd_, net_in, sizeof(net_in));
-            if (n <= 0) {
-                co_return n;
+            auto recv_res = co_await loop_->engine().recv_provided(client_fd_, loop_->buffer_pool().bgid());
+            if (recv_res.bytes == -ENOBUFS) {
+                co_await loop_->engine().timeout(100'000ULL);
+                continue;
             }
-            BIO_write(in_bio_, net_in, n);
+            if (recv_res.bytes <= 0) {
+                co_return 0; // EOF
+            }
+
+            auto slice = loop_->buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
+            BIO_write(in_bio_, slice.data(), static_cast<int>(slice.size()));
+            loop_->buffer_pool().return_buffer(recv_res.bid);
         } else if (err == SSL_ERROR_WANT_WRITE) {
             if (!co_await flush_outbound()) {
                 co_return -1;

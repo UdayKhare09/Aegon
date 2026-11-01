@@ -250,7 +250,6 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, core::os_socket_t li
                 // Break inner loop to re-arm multishot accept stream.
                 break;
             }
-#if !defined(__linux__)
             if (config_.tcp.nodelay) {
                 int nodelay = 1;
                 ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
@@ -277,7 +276,6 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, core::os_socket_t li
                 }
 #endif
             }
-#endif
             if (is_tls && tls_ctx_) {
                 loop.spawn(handle_tls_connection(loop, accept_res.fd, port));
             } else {

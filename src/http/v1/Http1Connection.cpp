@@ -189,9 +189,9 @@ core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, c
 core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                                       H2UpgradeCallback on_h2_upgrade) {
     std::string req_accum;
-    req_accum.reserve(16384);
+    req_accum.reserve(4096);
     std::string resp_batch;
-    resp_batch.reserve(65536);
+    resp_batch.reserve(4096);
     bool first_packet = true;
     Request req;
     Response res;
@@ -470,9 +470,9 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
 
 core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::string_view alt_svc_hdr) {
     std::string req_accum;
-    req_accum.reserve(16384);
+    req_accum.reserve(4096);
     std::string resp_batch;
-    resp_batch.reserve(65536);
+    resp_batch.reserve(4096);
     char read_buf[8192];
     Request req;
     Response res;

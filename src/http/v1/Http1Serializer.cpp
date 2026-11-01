@@ -5,55 +5,10 @@ namespace aegon::http::v1 {
 
 void Http1Serializer::append_headers(const Response& res, std::string& out) {
     if (out.capacity() - out.size() < 256) [[unlikely]] {
-        out.reserve(std::max(out.capacity() * 2, out.size() + 512));
+        out.reserve(out.size() + 256);
     }
 
-    const auto& headers = res.headers();
-
-    // Fast-path Tier 1: Standard 200 OK response with 0 linear header scans
-    if (res.status() == StatusCode::Ok && !res.is_chunked() && !res.is_sse() && !res.has_file()) [[likely]] {
-        std::string_view b = res.body();
-        size_t needed = 128 + b.size();
-        for (const auto& h : headers) {
-            needed += h.name.size() + h.value.size() + 4;
-        }
-        if (out.capacity() - out.size() < needed) [[unlikely]] {
-            out.reserve(std::max(out.capacity() * 2, out.size() + needed + 512));
-        }
-
-        out.append("HTTP/1.1 200 OK\r\n");
-        out.append(get_http_date_header());
-
-        bool has_cl = false;
-        bool has_date = false;
-        for (const auto& h : headers) {
-            if (iequals(h.name, "Content-Length")) has_cl = true;
-            else if (iequals(h.name, "Date")) has_date = true;
-            out.append(h.name);
-            out.append(": ");
-            out.append(h.value);
-            out.append("\r\n");
-        }
-
-        if (!has_cl) {
-            out.append("Content-Length: ");
-            size_t len = b.size();
-            if (len < 10) {
-                out.push_back(static_cast<char>('0' + len));
-                out.append("\r\n\r\n");
-            } else {
-                char len_buf[24];
-                auto [lptr, _] = std::to_chars(len_buf, len_buf + 24, len);
-                out.append(len_buf, lptr - len_buf);
-                out.append("\r\n\r\n");
-            }
-        } else {
-            out.append("\r\n");
-        }
-        return;
-    }
-
-    // Fast status line lookup for other status codes
+    // Fast status line lookup
     switch (res.status()) {
         case StatusCode::Ok:
             out.append("HTTP/1.1 200 OK\r\n");
@@ -88,18 +43,19 @@ void Http1Serializer::append_headers(const Response& res, std::string& out) {
         }
     }
 
+    const auto& headers = res.headers();
     bool no_content_body = should_suppress_content_length(res.status());
 
     if (res.is_sse()) {
         // SSE over H1: chunked framing, no Content-Length
-        if (!headers.contains("Transfer-Encoding")) {
+        if (!headers.has_transfer_encoding()) {
             out.append("Transfer-Encoding: chunked\r\n");
         }
     } else if (res.is_chunked()) {
-        if (!headers.contains("Transfer-Encoding")) {
+        if (!headers.has_transfer_encoding()) {
             out.append("Transfer-Encoding: chunked\r\n");
         }
-    } else if (!no_content_body && !headers.contains("Content-Length")) {
+    } else if (!no_content_body && !headers.has_content_length()) {
         out.append("Content-Length: ");
         size_t len = res.has_file() ? res.file_size() : res.body().size();
         if (len < 10) {
@@ -114,7 +70,7 @@ void Http1Serializer::append_headers(const Response& res, std::string& out) {
         }
     }
 
-    if (!headers.contains("Date") && static_cast<uint16_t>(res.status()) >= 200) {
+    if (!headers.has_date() && static_cast<uint16_t>(res.status()) >= 200) {
         out.append(get_http_date_header());
     }
 
@@ -129,6 +85,10 @@ void Http1Serializer::append_headers(const Response& res, std::string& out) {
 }
 
 void Http1Serializer::append_response(const Response& res, std::string& out) {
+    size_t needed = 256 + (res.has_file() ? 0 : res.body().size());
+    if (out.capacity() - out.size() < needed) [[unlikely]] {
+        out.reserve(out.size() + needed);
+    }
     append_headers(res, out);
 
     if (res.is_chunked()) {
