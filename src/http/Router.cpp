@@ -106,6 +106,7 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                 return;
             }
         }
+        rel = decoded_rel;
 
         // 1. Fast lexical checks on both raw and URL-decoded path segments
         if (rel.find("..") != std::string_view::npos ||
@@ -183,7 +184,8 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
             }
 
             if (!found_in_cache) {
-                if (!options.cache_in_memory && st.st_size > 64 * 1024) {
+                if ((!options.cache_in_memory && st.st_size > 64 * 1024) ||
+                    (options.cache_in_memory && static_cast<size_t>(st.st_size) > options.max_cache_file_size)) {
                     if (fd >= 0) {
 #if defined(_WIN32)
                         ::_close(fd);
@@ -202,6 +204,10 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                         .content_type = std::string(content_type),
                         .content_encoding = std::string(encoding)
                     };
+                    if (options.cache_in_memory) {
+                        std::unique_lock lock(*mtx);
+                        (*cache)[file_path] = entry;
+                    }
                 } else {
                     if (fd < 0) {
 #if defined(_WIN32)

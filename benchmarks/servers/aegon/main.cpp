@@ -244,10 +244,7 @@ int main(int argc, char* argv[]) {
     };
     for (const auto& sp : static_paths) {
         if (std::filesystem::exists(sp) && std::filesystem::is_directory(sp)) {
-            StaticFilesOptions opts;
-            opts.precompressed = true;
-            opts.cache_in_memory = false;
-            server.router().static_files("/static", sp, opts);
+            server.router().static_files("/static", sp);
             break;
         }
     }

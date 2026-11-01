@@ -10,6 +10,9 @@
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/sendfile.h>
+#include <sys/mman.h>
+#include <poll.h>
 #include <unistd.h>
 #endif
 #include <cerrno>
@@ -87,132 +90,100 @@ core::Task<bool> Http1Connection::stream_file(core::EventLoop& loop, core::os_so
     if (file_size == 0) co_return true;
 
 #if !defined(_WIN32)
-    if (!file_handle) {
-        if (co_await stream_file_zero_copy(loop, client_fd, file_path, file_size)) {
+    int file_fd = -1;
+    bool should_close_fd = false;
+    if (file_handle && file_handle->is_valid()) {
+        file_fd = file_handle->fd();
+    } else if (!file_path.empty()) {
+        file_fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (file_fd >= 0) should_close_fd = true;
+    }
+
+    if (file_fd >= 0) {
+        off_t offset = 0;
+        size_t remaining = file_size;
+        bool ok = true;
+        while (remaining > 0) {
+            size_t to_send = std::min<size_t>(remaining, 1024 * 1024);
+            ssize_t sent = ::sendfile(client_fd, file_fd, &offset, to_send);
+            if (sent > 0) {
+                remaining -= static_cast<size_t>(sent);
+            } else if (sent < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    (void)co_await loop.engine().poll(client_fd, POLLOUT);
+                } else if (errno == EINTR) {
+                    continue;
+                } else {
+                    ok = false;
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        if (should_close_fd) {
+            ::close(file_fd);
+        }
+        if (ok && remaining == 0) {
             co_return true;
         }
     }
 #endif
 
-    if (!file_handle) {
-#if defined(_WIN32)
-        int file_fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
-        if (file_fd < 0) co_return false;
-        char buf[65536];
-        size_t remaining = file_size;
-        bool ok = true;
-        while (remaining > 0) {
-            size_t to_read = std::min(remaining, sizeof(buf));
-            int n = ::_read(file_fd, buf, static_cast<unsigned int>(to_read));
-            if (n <= 0) { ok = false; break; }
-            int sent = co_await loop.engine().send_all(client_fd, std::string_view(buf, static_cast<size_t>(n)));
-            if (sent <= 0) { ok = false; break; }
-            remaining -= static_cast<size_t>(n);
+    if (file_handle) {
+        try {
+            storage::FileReadStream stream(*file_handle, 64 * 1024, 0, static_cast<int64_t>(file_size));
+            while (auto chunk = co_await stream.next_chunk()) {
+                int sent = co_await loop.engine().send_all(client_fd,
+                    std::string_view(reinterpret_cast<const char*>(chunk->data()), chunk->size()));
+                if (sent <= 0) co_return false;
+            }
+            co_return true;
+        } catch (...) {
+            co_return false;
         }
-        ::_close(file_fd);
-        co_return ok;
-#else
-        int file_fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-        if (file_fd < 0) co_return false;
-        char buf[65536];
-        size_t remaining = file_size;
-        off_t offset = 0;
-        bool ok = true;
-        while (remaining > 0) {
-            size_t to_read = std::min(remaining, sizeof(buf));
-            ssize_t n = ::pread(file_fd, buf, to_read, offset);
-            if (n <= 0) { ok = false; break; }
-            int sent = co_await loop.engine().send_all(client_fd, std::string_view(buf, static_cast<size_t>(n)));
-            if (sent <= 0) { ok = false; break; }
-            offset += n;
-            remaining -= static_cast<size_t>(n);
-        }
-        ::close(file_fd);
-        co_return ok;
-#endif
     }
-
-    try {
-        storage::FileReadStream stream(*file_handle, 64 * 1024, 0, static_cast<int64_t>(file_size));
-        while (auto chunk = co_await stream.next_chunk()) {
-            int sent = co_await loop.engine().send_all(client_fd,
-                std::string_view(reinterpret_cast<const char*>(chunk->data()), chunk->size()));
-            if (sent <= 0) co_return false;
-        }
-        co_return true;
-    } catch (...) {
-        co_return false;
-    }
-}
-
-core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, core::os_socket_t client_fd,
-                                                        const std::string& file_path, size_t file_size) {
-    if (file_size == 0) co_return true;
 
 #if defined(_WIN32)
     int file_fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
     if (file_fd < 0) co_return false;
-
-    constexpr size_t CHUNK_SIZE = 65536;
-    std::string buf(CHUNK_SIZE, '\0');
+    char buf[65536];
     size_t remaining = file_size;
     bool ok = true;
-
     while (remaining > 0) {
-        size_t to_read = std::min(remaining, CHUNK_SIZE);
-        int n_read = ::_read(file_fd, buf.data(), static_cast<unsigned int>(to_read));
-        if (n_read <= 0) {
-            ok = false;
-            break;
-        }
-        int sent = co_await loop.engine().send(client_fd, buf.data(), static_cast<size_t>(n_read));
-        if (sent <= 0) {
-            ok = false;
-            break;
-        }
-        remaining -= static_cast<size_t>(sent);
+        size_t to_read = std::min(remaining, sizeof(buf));
+        int n = ::_read(file_fd, buf, static_cast<unsigned int>(to_read));
+        if (n <= 0) { ok = false; break; }
+        int sent = co_await loop.engine().send_all(client_fd, std::string_view(buf, static_cast<size_t>(n)));
+        if (sent <= 0) { ok = false; break; }
+        remaining -= static_cast<size_t>(n);
     }
     ::_close(file_fd);
     co_return ok;
 #else
-    int file_fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (file_fd < 0) co_return false;
-
-    int pipefd[2];
-    if (::pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) < 0) {
-        (void)(co_await loop.engine().close(file_fd));
-        co_return false;
-    }
-
-    int64_t in_off = 0;
+    int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) co_return false;
+    char buf[65536];
     size_t remaining = file_size;
-    constexpr unsigned int CHUNK_SIZE = 32768;
+    off_t offset = 0;
     bool ok = true;
-
     while (remaining > 0) {
-        unsigned int to_splice = static_cast<unsigned int>(std::min<size_t>(remaining, CHUNK_SIZE));
-        // 1. Splice file -> pipe[1] (disk page cache to kernel pipe buffer)
-        int n1 = co_await loop.engine().splice(file_fd, in_off, pipefd[1], -1, to_splice, 0);
-        if (n1 <= 0) {
-            ok = false;
-            break;
-        }
-        in_off += n1;
-
-        // 2. Splice pipe[0] -> socket_fd (kernel pipe buffer to network socket buffer)
-        int n2 = co_await loop.engine().splice(pipefd[0], -1, client_fd, -1, static_cast<unsigned int>(n1), 0);
-        if (n2 <= 0) {
-            ok = false;
-            break;
-        }
-        remaining -= static_cast<size_t>(n2);
+        size_t to_read = std::min(remaining, sizeof(buf));
+        ssize_t n = ::pread(fd, buf, to_read, offset);
+        if (n <= 0) { ok = false; break; }
+        int sent = co_await loop.engine().send_all(client_fd, std::string_view(buf, static_cast<size_t>(n)));
+        if (sent <= 0) { ok = false; break; }
+        offset += n;
+        remaining -= static_cast<size_t>(n);
     }
-
-    ::close(pipefd[0]);
-    ::close(pipefd[1]);
-    (void)(co_await loop.engine().close(file_fd));
+    ::close(fd);
     co_return ok;
 #endif
+}
+
+core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, core::os_socket_t client_fd,
+                                                        const std::string& file_path, size_t file_size) {
+    return stream_file(loop, client_fd, file_path, file_size, nullptr);
 }
 
 core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
@@ -607,57 +578,93 @@ core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::
                 Http1Serializer::serialize_headers(res, header_out);
                 (void)(co_await tls_stream.write_plaintext(header_out.data(), header_out.size()));
                 if (req.method() != Method::HEAD && res.file_size() > 0) {
-                    if (!res.file_handle()) {
-#if defined(_WIN32)
-                        int file_fd = ::_open(res.file_path().c_str(), _O_RDONLY | _O_BINARY);
-                        if (file_fd < 0) {
-                            keep_alive = false;
-                        } else {
-                            char buf[65536];
+                    bool served = false;
+#if !defined(_WIN32)
+                    int file_fd = -1;
+                    bool should_close_fd = false;
+                    if (res.file_handle() && res.file_handle()->is_valid()) {
+                        file_fd = res.file_handle()->fd();
+                    } else if (!res.file_path().empty()) {
+                        file_fd = ::open(res.file_path().c_str(), O_RDONLY | O_CLOEXEC);
+                        if (file_fd >= 0) should_close_fd = true;
+                    }
+
+                    if (file_fd >= 0) {
+                        void* mapped = ::mmap(nullptr, res.file_size(), PROT_READ, MAP_SHARED, file_fd, 0);
+                        if (should_close_fd) ::close(file_fd);
+                        if (mapped != MAP_FAILED) {
+                            ::madvise(mapped, res.file_size(), MADV_SEQUENTIAL | MADV_WILLNEED);
+                            const char* p = static_cast<const char*>(mapped);
                             size_t remaining = res.file_size();
+                            size_t off = 0;
                             while (remaining > 0) {
-                                size_t to_read = std::min(remaining, sizeof(buf));
-                                int n = ::_read(file_fd, buf, static_cast<unsigned int>(to_read));
-                                if (n <= 0) { keep_alive = false; break; }
-                                int written = co_await tls_stream.write_plaintext(buf, static_cast<size_t>(n));
-                                if (written <= 0) { keep_alive = false; break; }
-                                remaining -= static_cast<size_t>(n);
-                            }
-                            ::_close(file_fd);
-                        }
-#else
-                        int file_fd = ::open(res.file_path().c_str(), O_RDONLY | O_CLOEXEC);
-                        if (file_fd < 0) {
-                            keep_alive = false;
-                        } else {
-                            char buf[65536];
-                            size_t remaining = res.file_size();
-                            off_t offset = 0;
-                            while (remaining > 0) {
-                                size_t to_read = std::min(remaining, sizeof(buf));
-                                ssize_t n = ::pread(file_fd, buf, to_read, offset);
-                                if (n <= 0) { keep_alive = false; break; }
-                                int written = co_await tls_stream.write_plaintext(buf, static_cast<size_t>(n));
-                                if (written <= 0) { keep_alive = false; break; }
-                                offset += n;
-                                remaining -= static_cast<size_t>(n);
-                            }
-                            ::close(file_fd);
-                        }
-#endif
-                    } else {
-                        try {
-                            storage::FileReadStream stream(*res.file_handle(), 64 * 1024, 0, static_cast<int64_t>(res.file_size()));
-                            while (auto chunk = co_await stream.next_chunk()) {
-                                int written = co_await tls_stream.write_plaintext(
-                                    reinterpret_cast<const char*>(chunk->data()), chunk->size());
+                                size_t chunk_len = std::min<size_t>(remaining, 65536);
+                                int written = co_await tls_stream.write_plaintext(p + off, chunk_len);
                                 if (written <= 0) {
                                     keep_alive = false;
                                     break;
                                 }
+                                off += static_cast<size_t>(written);
+                                remaining -= static_cast<size_t>(written);
                             }
-                        } catch (...) {
-                            keep_alive = false;
+                            ::munmap(mapped, res.file_size());
+                            served = true;
+                        }
+                    }
+#endif
+                    if (!served) {
+                        if (!res.file_handle()) {
+#if defined(_WIN32)
+                            int file_fd = ::_open(res.file_path().c_str(), _O_RDONLY | _O_BINARY);
+                            if (file_fd < 0) {
+                                keep_alive = false;
+                            } else {
+                                char buf[65536];
+                                size_t remaining = res.file_size();
+                                while (remaining > 0) {
+                                    size_t to_read = std::min(remaining, sizeof(buf));
+                                    int n = ::_read(file_fd, buf, static_cast<unsigned int>(to_read));
+                                    if (n <= 0) { keep_alive = false; break; }
+                                    int written = co_await tls_stream.write_plaintext(buf, static_cast<size_t>(n));
+                                    if (written <= 0) { keep_alive = false; break; }
+                                    remaining -= static_cast<size_t>(n);
+                                }
+                                ::_close(file_fd);
+                            }
+#else
+                            int file_fd = ::open(res.file_path().c_str(), O_RDONLY | O_CLOEXEC);
+                            if (file_fd < 0) {
+                                keep_alive = false;
+                            } else {
+                                char buf[65536];
+                                size_t remaining = res.file_size();
+                                off_t offset = 0;
+                                while (remaining > 0) {
+                                    size_t to_read = std::min(remaining, sizeof(buf));
+                                    ssize_t n = ::pread(file_fd, buf, to_read, offset);
+                                    if (n <= 0) { keep_alive = false; break; }
+                                    int written = co_await tls_stream.write_plaintext(buf, static_cast<size_t>(n));
+                                    if (written <= 0) { keep_alive = false; break; }
+                                    offset += n;
+                                    remaining -= static_cast<size_t>(n);
+                                }
+                                ::close(file_fd);
+                            }
+#endif
+                        } else {
+                            try {
+                                storage::FileReadStream stream(*res.file_handle(), 64 * 1024, 0, static_cast<int64_t>(res.file_size()));
+                                while (auto chunk = co_await stream.next_chunk()) {
+                                    int written = co_await tls_stream.write_plaintext(
+                                        reinterpret_cast<const char*>(chunk->data()), chunk->size());
+                                    if (written <= 0) {
+                                        keep_alive = false;
+                                        break;
+                                    }
+                                }
+                            } catch (...) {
+                                keep_alive = false;
+                            }
                         }
                     }
                 }

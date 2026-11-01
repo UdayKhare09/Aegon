@@ -69,9 +69,17 @@ struct Http2Stream {
     bool dispatched{false};
 
     // File streaming state
-    std::deque<std::string> file_chunks;
+    const char* file_data{nullptr};
+    size_t file_size{0};
+    size_t file_offset{0};
+    void* mmap_base{nullptr};
+    size_t mmap_size{0};
     bool is_file{false};
     bool file_eof{false};
+
+    Http2Stream();
+    ~Http2Stream();
+    void cleanup_mmap() noexcept;
 };
 
 using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
@@ -147,10 +155,9 @@ private:
     core::Task<void> push_grpc_frame(Http2Stream* stream, std::string frame);
 
     /**
-     * @brief Asynchronously stream disk file into nghttp2 DATA frames with backpressure.
+     * @brief Set up zero-copy mmap-backed file streaming response for HTTP/2.
      */
-    core::Task<void> stream_file_h2(int32_t stream_id, std::string file_path, size_t file_size,
-                                    std::shared_ptr<storage::File> file_handle = nullptr);
+    void setup_file_response(Http2Stream* stream);
 
     core::EventLoop& loop_;
     core::os_socket_t client_fd_;
@@ -162,9 +169,11 @@ private:
     std::vector<int32_t> pending_dispatch_;
     OutputSender sender_{nullptr};
     std::string outbound_buf_;
+    std::string send_buf_;
     std::string alt_svc_;
     bool closed_{false};
     bool is_flushing_{false};
+    bool flush_again_{false};
     uint32_t rst_count_{0};
     uint32_t rst_burst_limit_{100};
     int32_t max_remote_stream_id_{0};

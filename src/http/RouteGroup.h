@@ -11,6 +11,7 @@ namespace aegon::http {
 struct StaticFilesOptions {
     bool precompressed{true};
     bool cache_in_memory{true};
+    size_t max_cache_file_size{4 * 1024 * 1024}; // 4 MB threshold for caching content in RAM
     std::string index_file{"index.html"};
 
     // SPA & HTML5 History Mode Fallback

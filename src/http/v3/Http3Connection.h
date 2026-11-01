@@ -82,10 +82,17 @@ struct Http3Stream {
     bool sse_eof{false};                // true after handler returns
 
     // File streaming state
-    std::string file_buf;
+    const char* file_data{nullptr};
+    size_t file_size{0};
     size_t file_offset{0};
+    void* mmap_base{nullptr};
+    size_t mmap_size{0};
     bool is_file{false};
     bool file_eof{false};
+
+    Http3Stream() = default;
+    ~Http3Stream();
+    void cleanup_mmap() noexcept;
 };
 
 class Http3Connection {
@@ -167,10 +174,9 @@ private:
     core::Task<void> dispatch_pending_requests();
 
     /**
-     * @brief Asynchronously stream disk file into nghttp3 DATA frames.
+     * @brief Set up zero-copy mmap-backed file streaming response for HTTP/3.
      */
-    core::Task<void> stream_file_h3(int64_t stream_id, std::string file_path, size_t file_size,
-                                    std::shared_ptr<storage::File> file_handle = nullptr);
+    void setup_file_response(Http3Stream* stream);
 
     core::EventLoop& loop_;
     core::os_socket_t udp_fd_{core::INVALID_OS_SOCKET};
