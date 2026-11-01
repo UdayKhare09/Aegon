@@ -85,9 +85,10 @@ void Http1Serializer::append_headers(const Response& res, std::string& out) {
 }
 
 void Http1Serializer::append_response(const Response& res, std::string& out) {
-    size_t needed = 256 + (res.has_file() ? 0 : res.body().size());
+    size_t body_sz = res.has_file() ? 0 : res.body().size();
+    size_t needed = 256 + body_sz;
     if (out.capacity() - out.size() < needed) [[unlikely]] {
-        out.reserve(out.size() + needed);
+        out.reserve(std::max(out.size() + needed, out.capacity() * 2));
     }
     append_headers(res, out);
 

@@ -105,21 +105,27 @@ core::Task<void> QuicServer::run_receive_loop() {
 
 core::Task<void> QuicServer::run_timer_loop() {
     while (running_) {
-        co_await loop_.engine().timeout(10'000'000ULL); // 10ms tick for loss recovery
+        if (connections_.empty()) {
+            co_await loop_.engine().timeout(1'000'000'000ULL); // 1s when idle / no active QUIC connections
+        } else {
+            co_await loop_.engine().timeout(10'000'000ULL); // 10ms tick for loss recovery
+        }
         if (!running_) break;
 
-        uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (!connections_.empty()) {
+            uint64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
 
-        for (auto it = connections_.begin(); it != connections_.end();) {
-            if (!it->second || it->second->is_closed()) {
-                it = connections_.erase(it);
-                continue;
+            for (auto it = connections_.begin(); it != connections_.end();) {
+                if (!it->second || it->second->is_closed()) {
+                    it = connections_.erase(it);
+                    continue;
+                }
+                if (it->second->get_expiry() <= now) {
+                    it->second->handle_expiry();
+                }
+                ++it;
             }
-            if (it->second->get_expiry() <= now) {
-                it->second->handle_expiry();
-            }
-            ++it;
         }
     }
 }

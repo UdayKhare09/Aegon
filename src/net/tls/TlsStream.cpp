@@ -68,16 +68,15 @@ TlsStream& TlsStream::operator=(TlsStream&& other) noexcept {
 }
 
 core::Task<bool> TlsStream::flush_outbound() {
-    char out_buf[4096];
-    while (BIO_pending(out_bio_) > 0) {
-        int n = BIO_read(out_bio_, out_buf, sizeof(out_buf));
-        if (n > 0) {
-            int sent = co_await loop_->engine().send_all(
-                client_fd_,
-                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(out_buf), static_cast<size_t>(n)));
-            if (sent != n) {
-                co_return false;
-            }
+    char* data = nullptr;
+    long len = BIO_get_mem_data(out_bio_, &data);
+    if (len > 0 && data) {
+        int sent = co_await loop_->engine().send_all(
+            client_fd_,
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data), static_cast<size_t>(len)));
+        (void)BIO_reset(out_bio_);
+        if (sent != len) {
+            co_return false;
         }
     }
     co_return true;

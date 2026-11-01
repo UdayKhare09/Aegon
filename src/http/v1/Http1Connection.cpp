@@ -470,10 +470,10 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
 
 core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::string_view alt_svc_hdr) {
     std::string req_accum;
-    req_accum.reserve(4096);
+    req_accum.reserve(16384);
     std::string resp_batch;
-    resp_batch.reserve(4096);
-    char read_buf[8192];
+    resp_batch.reserve(16384);
+    char read_buf[16384];
     Request req;
     Response res;
     Context ctx(req, res, services_);

@@ -120,10 +120,16 @@ void Http3Server::prune_connections() {
 
 core::Task<void> Http3Server::run_timer_loop() {
     while (running_) {
-        co_await loop_.engine().timeout(10'000'000ULL); // 10ms tick for RFC 9002 loss detection & PTO
+        if (connections_.empty()) {
+            co_await loop_.engine().timeout(1'000'000'000ULL); // 1s when idle / no active H3 connections
+        } else {
+            co_await loop_.engine().timeout(10'000'000ULL); // 10ms tick for RFC 9002 loss detection & PTO
+        }
         if (!running_) break;
-        check_expiries();
-        prune_connections();
+        if (!connections_.empty()) {
+            check_expiries();
+            prune_connections();
+        }
     }
 }
 
