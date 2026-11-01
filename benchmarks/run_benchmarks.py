@@ -53,6 +53,34 @@ GCANNON_BIN = shutil.which("gcannon") or os.path.expanduser("~/.local/bin/gcanno
 ALL_PROTOCOLS = ["h1_plain", "h1_tls", "h2", "h3", "ws"]
 
 # ==============================================================================
+# Hardware Topology & Full CPU Thread Allocation
+# ==============================================================================
+# Optimal allocation for 6-core / 12-thread AMD Ryzen CPU (Core 0: 0,6; Core 1: 1,7; etc.):
+# Physical Cores 0 & 1 -> CPUs 0, 1, 6, 7 (4 server threads)
+# Physical Cores 2, 3, 4, 5 -> CPUs 2, 3, 4, 5, 8, 9, 10, 11 (8 client threads)
+TOTAL_CPUS = os.cpu_count() or 4
+if TOTAL_CPUS >= 12:
+    DEFAULT_SERVER_CORES = "0,1,6,7"
+    DEFAULT_CLIENT_CORES = "2,3,4,5,8,9,10,11"
+    DEFAULT_SERVER_THREADS = 4
+    DEFAULT_CLIENT_THREADS = 8
+elif TOTAL_CPUS >= 8:
+    DEFAULT_SERVER_CORES = "0,1,4,5"
+    DEFAULT_CLIENT_CORES = "2,3,6,7"
+    DEFAULT_SERVER_THREADS = 4
+    DEFAULT_CLIENT_THREADS = 4
+elif TOTAL_CPUS >= 4:
+    DEFAULT_SERVER_CORES = "0,1"
+    DEFAULT_CLIENT_CORES = "2,3"
+    DEFAULT_SERVER_THREADS = 2
+    DEFAULT_CLIENT_THREADS = 2
+else:
+    DEFAULT_SERVER_CORES = "0"
+    DEFAULT_CLIENT_CORES = "0"
+    DEFAULT_SERVER_THREADS = 1
+    DEFAULT_CLIENT_THREADS = 1
+
+# ==============================================================================
 # Central Server Configuration & Benchmark Subscriptions
 # ==============================================================================
 # Add, configure, or adjust servers here. The runner automatically discovers
@@ -71,7 +99,7 @@ SERVERS_CONFIG: Dict[str, Dict[str, Any]] = {
             "ws": 18080,
         },
         "subscribes": {
-            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static"],
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static", "limited-conn"],
             "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo", "static"],
             "h2":       ["baseline", "pipeline", "json", "delay", "echo", "static"],
             "h3":       ["baseline", "pipeline", "json", "delay", "echo", "static"],
@@ -90,7 +118,7 @@ SERVERS_CONFIG: Dict[str, Dict[str, Any]] = {
             "ws": 18090,
         },
         "subscribes": {
-            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static"],
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static", "limited-conn"],
             "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo", "static"],
             "h2":       ["baseline", "pipeline", "json", "delay", "echo", "static"],
             "h3":       ["baseline", "pipeline", "json", "delay", "echo", "static"],
@@ -108,7 +136,7 @@ SERVERS_CONFIG: Dict[str, Dict[str, Any]] = {
             "ws": 18085,
         },
         "subscribes": {
-            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static"],
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static", "limited-conn"],
             "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo", "static"],
             "h2":       ["baseline", "pipeline", "json", "delay", "echo", "static"],
             "ws":       ["echo", "pipeline", "limited-conn"],
@@ -124,7 +152,7 @@ SERVERS_CONFIG: Dict[str, Dict[str, Any]] = {
             "ws": 18095,
         },
         "subscribes": {
-            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static"],
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static", "limited-conn"],
             "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo", "static"],
             "ws":       ["echo", "pipeline", "limited-conn"],
         },
@@ -140,7 +168,7 @@ SERVERS_CONFIG: Dict[str, Dict[str, Any]] = {
             "ws": 18100,
         },
         "subscribes": {
-            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static"],
+            "h1_plain": ["baseline", "pipeline", "json", "delay", "echo", "static", "limited-conn"],
             "h1_tls":   ["baseline", "pipeline", "json", "delay", "echo", "static"],
             "h2":       ["baseline", "pipeline", "json", "delay", "echo", "static"],
             "ws":       ["echo", "pipeline", "limited-conn"],
@@ -181,6 +209,11 @@ HTTP_WORKLOADS: Dict[str, Dict[str, str]] = {
         "method": "GET",
         "path": "/static/reset.css",
         "desc": "Static File Serving",
+    },
+    "limited-conn": {
+        "method": "RAW",
+        "path": "/",
+        "desc": "Short-Lived (10 req/conn)",
     },
 }
 
@@ -327,7 +360,12 @@ def parse_h2load_output(output: str) -> Dict[str, Any]:
 
 def parse_gcannon_json(output: str) -> Dict[str, Any]:
     try:
-        data = json.loads(output)
+        start = output.find('{')
+        end = output.rfind('}')
+        if start != -1 and end != -1:
+            data = json.loads(output[start:end+1])
+        else:
+            data = json.loads(output)
         lat = data.get("latency_us", {})
         return {
             "requests": data.get("requests", 0),
@@ -353,6 +391,10 @@ def parse_gcannon_json(output: str) -> Dict[str, Any]:
 class BenchmarkRunner:
     def __init__(self, args):
         self.args = args
+        self.server_cores = DEFAULT_SERVER_CORES
+        self.client_cores = DEFAULT_CLIENT_CORES
+        self.server_threads = DEFAULT_SERVER_THREADS
+        self.client_threads = DEFAULT_CLIENT_THREADS
         self.active_processes: Dict[str, subprocess.Popen] = {}
         self.results: Dict[str, Any] = {}
 
@@ -378,15 +420,15 @@ class BenchmarkRunner:
         key_file = os.path.join(SCRIPT_DIR, "certs", "server.key")
 
         cmd = [
-            "taskset", "-c", self.args.server_cores,
+            "taskset", "-c", self.server_cores,
             bin_path,
-            "2",
+            str(self.server_threads),
             str(base_port),
             cert_file,
             key_file,
         ]
 
-        print(f"  [Server] Launching {cfg['name']} on Cores {self.args.server_cores} (base port {base_port})...")
+        print(f"  [Server] Launching {cfg['name']} on Cores {self.server_cores} ({self.server_threads} threads, base port {base_port})...")
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.active_processes[server_key] = proc
 
@@ -419,14 +461,52 @@ class BenchmarkRunner:
     def execute_test(self, server_key: str, protocol: str, workload_name: str, duration: int) -> Dict[str, Any]:
         cfg = SERVERS_CONFIG[server_key]
         port = cfg["ports"][protocol]
-        cores = self.args.client_cores
+        cores = self.client_cores
         conns = self.args.concurrency
-        threads = self.args.threads
+        threads = self.client_threads
 
         lua_echo = os.path.join(SCRIPT_DIR, "requests", "post_echo.lua")
         echo_bin = os.path.join(SCRIPT_DIR, "requests", "echo_payload.bin")
 
         if protocol == "h1_plain":
+            if workload_name == "limited-conn":
+                raw_files = [
+                    os.path.join(SCRIPT_DIR, "requests", "get.raw"),
+                    os.path.join(SCRIPT_DIR, "requests", "post_cl.raw"),
+                    os.path.join(SCRIPT_DIR, "requests", "post_chunked.raw"),
+                ]
+                has_raw = all(os.path.exists(f) for f in raw_files)
+                if has_raw:
+                    url = f"http://127.0.0.1:{port}"
+                    cmd = [
+                        "taskset", "-c", cores,
+                        GCANNON_BIN,
+                        url,
+                        "--raw", ",".join(raw_files),
+                        "-c", str(conns),
+                        "-t", str(threads),
+                        "-d", f"{duration}s",
+                        "-p", "1",
+                        "-r", "10",
+                        "--json",
+                    ]
+                else:
+                    wl = HTTP_WORKLOADS[workload_name]
+                    url = f"http://127.0.0.1:{port}/baseline?a=13&b=42"
+                    cmd = [
+                        "taskset", "-c", cores,
+                        GCANNON_BIN,
+                        url,
+                        "-c", str(conns),
+                        "-t", str(threads),
+                        "-d", f"{duration}s",
+                        "-p", "1",
+                        "-r", "10",
+                        "--json",
+                    ]
+                res = subprocess.run(cmd, capture_output=True, text=True)
+                return parse_gcannon_json(res.stdout)
+
             wl = HTTP_WORKLOADS[workload_name]
             url = f"http://127.0.0.1:{port}{wl['path']}"
             cmd = ["taskset", "-c", cores, WRK_BIN, f"-t{threads}", f"-c{conns}", f"-d{duration}s", "--latency"]
@@ -518,8 +598,8 @@ class BenchmarkRunner:
         print("=" * 80)
         print(f" Protocols:       {', '.join(protocols)}")
         print(f" Servers:         {', '.join(server_names)} ({', '.join(servers)})")
-        print(f" Concurrency:     {self.args.concurrency} connections | {self.args.threads} client threads")
-        print(f" Core Allocation: Server -> Cores {self.args.server_cores} | Client -> Cores {self.args.client_cores}")
+        print(f" Concurrency:     {self.args.concurrency} connections | {self.client_threads} client threads")
+        print(f" Core Allocation: Server -> Cores {self.server_cores} ({self.server_threads} threads) | Client -> Cores {self.client_cores} ({self.client_threads} threads)")
         print(f" Runs Per Test:   {self.args.runs} (Duration: {self.args.duration}s, Warmup: {self.args.warmup}s)")
         print(f" Tooling:         H1 Plain/TLS: wrk | H2: h2load | H3: h2load --h3 | WS: gcannon")
         print("=" * 80 + "\n")
@@ -698,8 +778,8 @@ class BenchmarkRunner:
         lines = [
             f"# {title}",
             "",
-            f"- **Server Hardware**: Physical Cores {self.args.server_cores} (2 worker threads)",
-            f"- **Client Hardware**: Physical Cores {self.args.client_cores} ({self.args.threads} threads, {self.args.concurrency} conns)",
+            f"- **Server Hardware**: Cores {self.server_cores} ({self.server_threads} worker threads)",
+            f"- **Client Hardware**: Cores {self.client_cores} ({self.client_threads} worker threads, {self.args.concurrency} conns)",
             f"- **Duration**: {self.args.duration}s per test | Runs: {self.args.runs}",
             "",
             "| " + " | ".join(headers) + " |",
@@ -754,12 +834,6 @@ def main():
                         help="Warmup duration in seconds before measurement (default: 2)")
     parser.add_argument("-c", "--concurrency", type=int, default=100,
                         help="Client concurrency / connections (default: 100)")
-    parser.add_argument("-t", "--threads", type=int, default=4,
-                        help="Client worker threads (default: 4)")
-    parser.add_argument("--server-cores", default="0,1",
-                        help="CPU affinity for servers (default: '0,1')")
-    parser.add_argument("--client-cores", default="2,3,4,5",
-                        help="CPU affinity for client load generators (default: '2,3,4,5')")
     parser.add_argument("--no-manage-servers", dest="manage_servers", action="store_false", default=True,
                         help="Do not auto-start/stop servers (assumes servers are already running)")
     parser.add_argument("--config", default=None,
