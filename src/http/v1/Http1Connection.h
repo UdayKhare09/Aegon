@@ -1,5 +1,6 @@
 #pragma once
 
+#include "http/Context.h"
 #include "http/Request.h"
 #include "http/Response.h"
 #include "http/Router.h"
@@ -38,6 +39,23 @@ public:
 
     Http1Connection(const Http1Connection&) = delete;
     Http1Connection& operator=(const Http1Connection&) = delete;
+
+    /**
+     * @brief Resets connection state for a new client file descriptor.
+     */
+    void reset(core::os_socket_t client_fd) noexcept;
+
+    /**
+     * @brief Resets connection state with new loop, socket, and router references.
+     */
+    void reset(core::EventLoop& loop, core::os_socket_t client_fd, const Router& router,
+               const ServiceRegistry* services = nullptr,
+               const ServerConfig& config = {}) noexcept;
+
+    /**
+     * @brief Cleans up connection buffers when returning to the freelist.
+     */
+    void cleanup() noexcept;
 
     /**
      * @brief Run connection loop for plaintext HTTP/1.1 on client_fd.
@@ -84,11 +102,18 @@ public:
                                                   const std::string& file_path, size_t file_size);
 
 private:
-    core::EventLoop& loop_;
-    core::os_socket_t client_fd_;
-    const Router& router_;
-    const ServiceRegistry* services_;
+    core::EventLoop* loop_{nullptr};
+    core::os_socket_t client_fd_{core::INVALID_OS_SOCKET};
+    const Router* router_{nullptr};
+    const ServiceRegistry* services_{nullptr};
     ServerConfig config_{};
+
+    // Pre-allocated recycled per-connection state buffers to eliminate malloc/free churn
+    std::string req_accum_;
+    std::string resp_batch_;
+    Request req_;
+    Response res_;
+    Context ctx_;
 };
 
 } // namespace aegon::http::v1

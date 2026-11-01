@@ -28,6 +28,11 @@
 
 namespace aegon::http {
 
+namespace {
+inline thread_local std::vector<std::unique_ptr<v1::Http1Connection>> tls_http1_pool;
+constexpr size_t MAX_HTTP1_POOL_CAPACITY = 1024;
+}
+
 Server::Server() = default;
 Server::Server(Router router) : router_(std::move(router)) {}
 Server::~Server() = default;
@@ -213,8 +218,19 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, core::os_s
     } else {
         // HTTP/1.1 over TLS (ALPN "http/1.1" or fallback)
         const std::string alt_svc_hdr = v1::Http1Connection::build_alt_svc_header(port, config_.enable_http3);
-        v1::Http1Connection h1(loop, client_fd, router_, services_.get(), config_);
-        co_await h1.run_tls(tls_stream, alt_svc_hdr);
+        std::unique_ptr<v1::Http1Connection> h1;
+        if (!tls_http1_pool.empty()) {
+            h1 = std::move(tls_http1_pool.back());
+            tls_http1_pool.pop_back();
+            h1->reset(loop, client_fd, router_, services_.get(), config_);
+        } else {
+            h1 = std::make_unique<v1::Http1Connection>(loop, client_fd, router_, services_.get(), config_);
+        }
+        co_await h1->run_tls(tls_stream, alt_svc_hdr);
+        h1->cleanup();
+        if (tls_http1_pool.size() < MAX_HTTP1_POOL_CAPACITY) {
+            tls_http1_pool.push_back(std::move(h1));
+        }
     }
 
     (void)(co_await loop.engine().shutdown(client_fd, SHUT_WR));
@@ -222,8 +238,16 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, core::os_s
 }
 
 core::Task<void> Server::handle_connection(core::EventLoop& loop, core::os_socket_t client_fd) {
-    v1::Http1Connection h1(loop, client_fd, router_, services_.get(), config_);
-    co_await h1.run(
+    std::unique_ptr<v1::Http1Connection> h1;
+    if (!tls_http1_pool.empty()) {
+        h1 = std::move(tls_http1_pool.back());
+        tls_http1_pool.pop_back();
+        h1->reset(loop, client_fd, router_, services_.get(), config_);
+    } else {
+        h1 = std::make_unique<v1::Http1Connection>(loop, client_fd, router_, services_.get(), config_);
+    }
+
+    co_await h1->run(
         [this, &loop](core::os_socket_t fd, std::string preface_data) -> core::Task<void> {
             co_await handle_http2_connection(loop, fd, std::move(preface_data));
         },
@@ -231,6 +255,11 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, core::os_socke
             co_await handle_http2_upgrade(loop, fd, std::move(req), std::move(settings), std::move(trailing));
         }
     );
+
+    h1->cleanup();
+    if (tls_http1_pool.size() < MAX_HTTP1_POOL_CAPACITY) {
+        tls_http1_pool.push_back(std::move(h1));
+    }
 }
 
 
@@ -355,6 +384,7 @@ void Server::run_event_loop(const std::vector<ListenerConfig>& active_listeners,
     for (const auto& al : thread_listeners) {
         core::close_socket(al.fd);
     }
+    tls_http1_pool.clear();
 }
 
 void Server::run() {

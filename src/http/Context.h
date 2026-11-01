@@ -49,6 +49,10 @@ public:
         grpc_inbound_ = nullptr;
     }
 
+    void set_services(const ServiceRegistry* services) noexcept {
+        services_ = services;
+    }
+
     /**
      * @brief Stores a typed value in the per-request data bag.
      */
