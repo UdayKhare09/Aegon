@@ -9,5 +9,5 @@ add_library(aegon_log
 )
 
 target_link_libraries(aegon_log PUBLIC
-    Threads::Threads
+    Aegon::Ext::Threads
 )

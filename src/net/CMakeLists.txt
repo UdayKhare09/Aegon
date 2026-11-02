@@ -16,10 +16,10 @@ add_library(aegon_net
 
 target_link_libraries(aegon_net PUBLIC
     aegon_core
-    ${AEGON_SSL_LIB}
-    ${AEGON_CRYPTO_LIB}
-    ${AEGON_NGTCP2_CRYPTO_LIB}
-    ${AEGON_NGTCP2_LIB}
+    Aegon::Ext::OpenSSL_SSL
+    Aegon::Ext::OpenSSL_Crypto
+    Aegon::Ext::ngtcp2_crypto
+    Aegon::Ext::ngtcp2
 )
 
 target_precompile_headers(aegon_net PRIVATE

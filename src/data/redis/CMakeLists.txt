@@ -11,5 +11,5 @@ add_library(aegon_redis
 
 target_link_libraries(aegon_redis PUBLIC
     aegon_net
-    ${AEGON_CRYPTO_LIB}
+    Aegon::Ext::OpenSSL_Crypto
 )

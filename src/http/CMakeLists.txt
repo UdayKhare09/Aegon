@@ -24,16 +24,12 @@ target_link_libraries(aegon_http PUBLIC
     aegon_net
     aegon_storage
     aegon_log
-    glaze::glaze
-    ${AEGON_DEFLATE_LIB}
-    ${AEGON_NGHTTP2_LIB}
-    ${AEGON_NGHTTP3_LIB}
-    ${AEGON_PROTOBUF_LIB}
+    Aegon::Ext::glaze
+    Aegon::Ext::deflate
+    Aegon::Ext::nghttp2
+    Aegon::Ext::nghttp3
+    Aegon::Ext::Protobuf
 )
-
-if(Protobuf_INCLUDE_DIRS)
-    target_include_directories(aegon_http PUBLIC ${Protobuf_INCLUDE_DIRS})
-endif()
 
 target_precompile_headers(aegon_http PRIVATE
     <vector>

@@ -13,9 +13,9 @@ add_library(aegon_core
 
 target_link_libraries(aegon_core
     PUBLIC
-        Threads::Threads
+        Aegon::Ext::Threads
     PRIVATE
-        uring
+        Aegon::Ext::uring
 )
 
 target_precompile_headers(aegon_core PRIVATE

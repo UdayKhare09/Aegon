@@ -30,10 +30,7 @@ if(AEGON_BUILD_C_ABI)
         FILES_MATCHING PATTERN "*.h"
     )
 
-    set(AEGON_C_PRIVATE_LIBS "-laegon_http -laegon_net -laegon_core -laegon_log -lnghttp3 -lngtcp2 -lngtcp2_crypto_ossl -lnghttp2 -lssl -lcrypto -lz")
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        string(APPEND AEGON_C_PRIVATE_LIBS " -luring -lpthread -lm -lstdc++")
-    endif()
+    set(AEGON_C_PRIVATE_LIBS "-laegon_http -laegon_net -laegon_core -laegon_log -lnghttp3 -lngtcp2 -lngtcp2_crypto_ossl -lnghttp2 -lssl -lcrypto -lz -luring -lpthread -lm -lstdc++")
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/aegon-c.pc.in"
         "${CMAKE_CURRENT_BINARY_DIR}/aegon-c.pc"
