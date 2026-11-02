@@ -16,6 +16,7 @@ depends=(
     'libnghttp3'
     'libdeflate'
     'glaze'
+    'protobuf'
 )
 makedepends=('cmake' 'ninja' 'gcc' 'git')
 options=('staticlibs' '!strip' '!lto')

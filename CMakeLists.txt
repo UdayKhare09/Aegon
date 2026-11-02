@@ -81,20 +81,35 @@ if(AEGON_BUILD_C_ABI AND AEGON_BUILD_C_EXAMPLES)
 endif()
 
 # ==============================================================================
-# CPack Packaging
+# CPack Packaging Configuration
 # ==============================================================================
 set(CPACK_PACKAGE_NAME              "aegon")
 set(CPACK_PACKAGE_VENDOR            "Uday Khare")
 set(CPACK_PACKAGE_CONTACT           "udaykhare77@gmail.com")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "High-Performance C++23 Asynchronous Web & Data Framework")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Ultra-High-Performance C++23 Linux Asynchronous Web & Data Framework")
+set(CPACK_PACKAGE_HOMEPAGE_URL      "https://github.com/UdayKhare09/Aegon")
 set(CPACK_PACKAGE_VERSION_MAJOR     ${AEGON_VERSION_MAJOR})
 set(CPACK_PACKAGE_VERSION_MINOR     ${AEGON_VERSION_MINOR})
 set(CPACK_PACKAGE_VERSION_PATCH     ${AEGON_VERSION_PATCH})
 set(CPACK_PACKAGE_VERSION           "${AEGON_VERSION_STRING}")
 set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 
-# Source tarball
-set(CPACK_SOURCE_GENERATOR          "TGZ")
-set(CPACK_SOURCE_IGNORE_FILES       "/\\.git/;/build/;/\\.cache/")
+# Binary packages: compressed tarballs (TGZ, TXZ), Debian (.deb), RPM (.rpm)
+set(CPACK_GENERATOR                 "TGZ;TXZ;DEB;RPM")
+
+# Debian Package (.deb)
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "${CPACK_PACKAGE_CONTACT}")
+set(CPACK_DEBIAN_PACKAGE_SECTION    "devel")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY   "optional")
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS  ON)
+
+# RPM Package (.rpm)
+set(CPACK_RPM_PACKAGE_LICENSE       "MIT")
+set(CPACK_RPM_PACKAGE_GROUP         "Development/Libraries")
+set(CPACK_RPM_PACKAGE_AUTOREQ       ON)
+
+# Source distribution tarballs
+set(CPACK_SOURCE_GENERATOR          "TGZ;TXZ")
+set(CPACK_SOURCE_IGNORE_FILES       "/\\.git/;/build/;/\\.cache/;/build-.*/")
 
 include(CPack)
