@@ -1,13 +1,9 @@
 #include "net/tcp/TcpConnector.h"
 #include "net/SocketOptions.h"
 
-#if defined(_WIN32)
-#include <ws2tcpip.h>
-#else
 #include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#endif
 
 namespace aegon::net {
 
@@ -22,13 +18,7 @@ core::Task<std::optional<TcpStream>> TcpConnector::connect(
     core::init_sockets();
     int family = addr.family();
 
-#if defined(_WIN32)
-    core::os_socket_t sock = WSASocketW(family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-#elif defined(SOCK_CLOEXEC)
     core::os_socket_t sock = ::socket(family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-#else
-    core::os_socket_t sock = ::socket(family, SOCK_STREAM, 0);
-#endif
 
     if (!core::is_valid_socket(sock)) {
         co_return std::nullopt;

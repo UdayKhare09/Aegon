@@ -37,8 +37,6 @@ void copy_server_config(aegon::http::ServerConfig& target, const aegon_server_co
         switch (cfg->engine) {
             case AEGON_ENGINE_IOURING: target.engine_type = aegon::core::EngineType::IoUring; break;
             case AEGON_ENGINE_EPOLL:   target.engine_type = aegon::core::EngineType::Epoll;   break;
-            case AEGON_ENGINE_KQUEUE:  target.engine_type = aegon::core::EngineType::Kqueue;  break;
-            case AEGON_ENGINE_IOCP:    target.engine_type = aegon::core::EngineType::Iocp;    break;
             case AEGON_ENGINE_AUTO:
             default:                   target.engine_type = aegon::core::EngineType::Auto;    break;
         }

@@ -202,11 +202,7 @@ inline std::string_view get_http_date() noexcept {
     if (now != last_time) {
         last_time = now;
         struct tm gmt;
-#if defined(_WIN32)
-        gmtime_s(&gmt, &now);
-#else
         gmtime_r(&now, &gmt);
-#endif
         date_len = strftime(date_buf, sizeof(date_buf), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
     }
     return {date_buf, date_len};
@@ -226,11 +222,7 @@ inline std::string_view get_http_date_header() noexcept {
         if (now != last_time || date_hdr_len == 0) {
             last_time = now;
             struct tm gmt;
-#if defined(_WIN32)
-            gmtime_s(&gmt, &now);
-#else
             gmtime_r(&now, &gmt);
-#endif
             std::memcpy(date_hdr_buf, "Date: ", 6);
             size_t dlen = strftime(date_hdr_buf + 6, sizeof(date_hdr_buf) - 8, "%a, %d %b %Y %H:%M:%S GMT\r\n", &gmt);
             date_hdr_len = 6 + dlen;

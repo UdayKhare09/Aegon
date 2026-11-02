@@ -8,9 +8,6 @@
 #include <vector>
 #include <thread>
 #include <sstream>
-#if defined(_WIN32)
-#include <crtdbg.h>
-#endif
 
 void test_level_parsing() {
     using namespace aegon::log;
@@ -180,12 +177,6 @@ void test_async_multithreaded_logging() {
 }
 
 int main() {
-#if defined(_WIN32)
-    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
-    _set_error_mode(_OUT_TO_STDERR);
-    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
-#endif
     std::cout << "Starting aegon_log tests..." << std::endl;
     test_level_parsing();
     test_memory_sink_filtering();

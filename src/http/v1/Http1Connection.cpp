@@ -3,18 +3,12 @@
 #include "http/websocket/WebSocketHandshake.h"
 #include "http/websocket/WebSocketConnection.h"
 #include "core/OsSocket.h"
-#if defined(_WIN32)
-#include <io.h>
-#include <fcntl.h>
-#define O_BINARY _O_BINARY
-#else
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/sendfile.h>
 #include <sys/mman.h>
 #include <poll.h>
 #include <unistd.h>
-#endif
 #include <cerrno>
 #include <algorithm>
 
@@ -143,7 +137,6 @@ core::Task<bool> Http1Connection::stream_file(core::EventLoop& loop, core::os_so
                                               std::shared_ptr<storage::File> file_handle) {
     if (file_size == 0) co_return true;
 
-#if !defined(_WIN32)
     int file_fd = -1;
     bool should_close_fd = false;
     if (file_handle && file_handle->is_valid()) {
@@ -182,7 +175,6 @@ core::Task<bool> Http1Connection::stream_file(core::EventLoop& loop, core::os_so
             co_return true;
         }
     }
-#endif
 
     if (file_handle) {
         try {
@@ -198,23 +190,6 @@ core::Task<bool> Http1Connection::stream_file(core::EventLoop& loop, core::os_so
         }
     }
 
-#if defined(_WIN32)
-    int file_fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
-    if (file_fd < 0) co_return false;
-    char buf[65536];
-    size_t remaining = file_size;
-    bool ok = true;
-    while (remaining > 0) {
-        size_t to_read = std::min(remaining, sizeof(buf));
-        int n = ::_read(file_fd, buf, static_cast<unsigned int>(to_read));
-        if (n <= 0) { ok = false; break; }
-        int sent = co_await loop.engine().send_all(client_fd, std::string_view(buf, static_cast<size_t>(n)));
-        if (sent <= 0) { ok = false; break; }
-        remaining -= static_cast<size_t>(n);
-    }
-    ::_close(file_fd);
-    co_return ok;
-#else
     int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) co_return false;
     char buf[65536];
@@ -232,7 +207,6 @@ core::Task<bool> Http1Connection::stream_file(core::EventLoop& loop, core::os_so
     }
     ::close(fd);
     co_return ok;
-#endif
 }
 
 core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, core::os_socket_t client_fd,
@@ -619,7 +593,6 @@ core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::
                 (void)(co_await tls_stream.write_plaintext(header_out.data(), header_out.size()));
                 if (req_.method() != Method::HEAD && res_.file_size() > 0) {
                     bool served = false;
-#if !defined(_WIN32)
                     int file_fd = -1;
                     bool should_close_fd = false;
                     if (res_.file_handle() && res_.file_handle()->is_valid()) {
@@ -651,27 +624,8 @@ core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::
                             served = true;
                         }
                     }
-#endif
                     if (!served) {
                         if (!res_.file_handle()) {
-#if defined(_WIN32)
-                            int file_fd = ::_open(res_.file_path().c_str(), _O_RDONLY | _O_BINARY);
-                            if (file_fd < 0) {
-                                keep_alive = false;
-                            } else {
-                                char buf[65536];
-                                size_t remaining = res_.file_size();
-                                while (remaining > 0) {
-                                    size_t to_read = std::min(remaining, sizeof(buf));
-                                    int n = ::_read(file_fd, buf, static_cast<unsigned int>(to_read));
-                                    if (n <= 0) { keep_alive = false; break; }
-                                    int written = co_await tls_stream.write_plaintext(buf, static_cast<size_t>(n));
-                                    if (written <= 0) { keep_alive = false; break; }
-                                    remaining -= static_cast<size_t>(n);
-                                }
-                                ::_close(file_fd);
-                            }
-#else
                             int file_fd = ::open(res_.file_path().c_str(), O_RDONLY | O_CLOEXEC);
                             if (file_fd < 0) {
                                 keep_alive = false;
@@ -690,7 +644,6 @@ core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::
                                 }
                                 ::close(file_fd);
                             }
-#endif
                         } else {
                             try {
                                 storage::FileReadStream stream(*res_.file_handle(), 64 * 1024, 0, static_cast<int64_t>(res_.file_size()));

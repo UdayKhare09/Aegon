@@ -211,7 +211,6 @@ core::Task<void> Http3Server::run_receive_loop() {
 
     constexpr size_t BURST_BATCH = 32;
     uint8_t burst_bufs[BURST_BATCH][2048];
-#if !defined(_WIN32)
     sockaddr_storage burst_addrs[BURST_BATCH];
     iovec burst_iovs[BURST_BATCH];
     mmsghdr burst_msgs[BURST_BATCH];
@@ -227,7 +226,6 @@ core::Task<void> Http3Server::run_receive_loop() {
         burst_msgs[i].msg_hdr.msg_controllen = 0;
         burst_msgs[i].msg_hdr.msg_flags = 0;
     }
-#endif
 
     std::array<Http3Connection*, BURST_BATCH + 1> touched;
     size_t touched_count = 0;
@@ -271,7 +269,6 @@ core::Task<void> Http3Server::run_receive_loop() {
             remote_addr, msg.msg_namelen, false);
         record_touched(first_conn);
 
-#if !defined(_WIN32)
         // Batched multi-packet burst drainage with recvmmsg (cutting syscalls by up to 90%)
         while (running_) {
             for (size_t i = 0; i < BURST_BATCH; ++i) {
@@ -296,29 +293,6 @@ core::Task<void> Http3Server::run_receive_loop() {
 
             if (count < static_cast<int>(BURST_BATCH)) break;
         }
-#else
-        // Windows non-blocking burst drainage with recvfrom
-        while (running_) {
-            int count = 0;
-            while (count < static_cast<int>(BURST_BATCH)) {
-                sockaddr_storage b_addr{};
-                int b_addr_len = sizeof(b_addr);
-                int n = ::recvfrom(udp_fd_, reinterpret_cast<char*>(burst_bufs[count]),
-                                   static_cast<int>(sizeof(burst_bufs[count])), 0,
-                                   reinterpret_cast<sockaddr*>(&b_addr), &b_addr_len);
-                if (n <= 0) break;
-                auto* c = co_await dispatch_datagram_internal(
-                    std::span<const uint8_t>(burst_bufs[count], static_cast<size_t>(n)),
-                    b_addr, static_cast<socklen_t>(b_addr_len), false);
-                record_touched(c);
-                count++;
-            }
-            if (touched_count >= 16 || count < static_cast<int>(BURST_BATCH)) {
-                flush_touched();
-            }
-            if (count < static_cast<int>(BURST_BATCH)) break;
-        }
-#endif
 
         // Flush any remaining touched connections
         flush_touched();

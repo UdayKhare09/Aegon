@@ -1,13 +1,9 @@
 #include "net/udp/UdpSocket.h"
 #include <cstring>
 
-#if defined(_WIN32)
-#include <ws2tcpip.h>
-#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
-#endif
 
 namespace aegon::net {
 
@@ -17,13 +13,7 @@ std::optional<UdpSocket> UdpSocket::bind(const SocketAddress& addr, bool reuse_p
     core::init_sockets();
     int family = addr.family();
 
-#if defined(_WIN32)
-    core::os_socket_t fd = WSASocketW(family, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-#elif defined(SOCK_CLOEXEC)
     core::os_socket_t fd = ::socket(family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_UDP);
-#else
-    core::os_socket_t fd = ::socket(family, SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
-#endif
 
     if (!core::is_valid_socket(fd)) {
         return std::nullopt;

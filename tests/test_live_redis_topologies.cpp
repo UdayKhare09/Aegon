@@ -256,9 +256,6 @@ core::Task<void> test_cluster(core::IoEngine& ring) {
 }
 
 int main() {
-#if defined(_WIN32)
-    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
-#endif
     std::cout << "=======================================================\n";
     std::cout << "   AEGON LIVE REDIS CLIENT & TOPOLOGIES TEST SUITE     \n";
     std::cout << "=======================================================\n";

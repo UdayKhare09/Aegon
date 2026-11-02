@@ -9,17 +9,11 @@
 #include "http/v3/Http3Server.h"
 #include "core/OsSocket.h"
 #include "log/Logger.h"
-#if defined(_WIN32)
-#include <io.h>
-#define R_OK 4
-#define access _access
-#else
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#endif
 #include <stdexcept>
 #include <iostream>
 #include <algorithm>
@@ -449,7 +443,6 @@ void Server::run(size_t threads) {
         workers_.emplace_back([this, i, active_listeners]() {
             try {
                 std::optional<int> core_id;
-#if defined(__linux__)
                 cpu_set_t current_mask;
                 if (pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &current_mask) == 0) {
                     std::vector<int> allowed;
@@ -460,9 +453,6 @@ void Server::run(size_t threads) {
                         core_id = allowed[i];
                     }
                 }
-#elif defined(_WIN32)
-                core_id = static_cast<int>(i % std::max(1u, std::thread::hardware_concurrency()));
-#endif
 
                 run_event_loop(active_listeners, core_id, i == 0);
             } catch (const std::exception& e) {

@@ -1,10 +1,6 @@
 #include "PostgresDriver.h"
 #include <libpq-fe.h>
-#if defined(_WIN32)
-#include "core/OsSocket.h"
-#else
 #include <poll.h>
-#endif
 #include <stdexcept>
 #include <utility>
 #include <cstdlib>
@@ -165,7 +161,6 @@ PostgresConnection::PostgresConnection(const std::string& conninfo, bool pipelin
         fd_ = core::INVALID_OS_SOCKET;
     }
 
-#if !defined(_WIN32)
     if (pipelined_ && core::EventLoop::current() != nullptr) {
         PQsetnonblocking(conn_, 1);
         if (PQenterPipelineMode(conn_) != 1) {
@@ -176,10 +171,6 @@ PostgresConnection::PostgresConnection(const std::string& conninfo, bool pipelin
         pipelined_ = false;
         PQsetnonblocking(conn_, 0);
     }
-#else
-    pipelined_ = false;
-    PQsetnonblocking(conn_, 0);
-#endif
 }
 
 PostgresConnection::~PostgresConnection() {

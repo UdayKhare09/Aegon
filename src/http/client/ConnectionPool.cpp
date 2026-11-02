@@ -131,15 +131,6 @@ ConnectionPool::acquire(const Url& url, core::EventLoop& loop) {
 
             if (conn && conn->is_valid()) {
                 if (now - conn->last_used <= config_.idle_timeout) {
-#if defined(_WIN32)
-                    // On Windows IOCP, an OS socket handle is permanently bound to the IOCP port
-                    // it was associated with at creation. If acquired by a different event loop engine,
-                    // it cannot be migrated; close it and create a fresh one for the current engine.
-                    if (conn->engine_id_ != loop.engine().id()) {
-                        conn->close();
-                        continue;
-                    }
-#endif
                     conn->set_loop(loop);
                     co_return std::move(conn);
                 }
@@ -167,19 +158,11 @@ ConnectionPool::create_connection(const Url& url, core::EventLoop& loop) {
         co_return std::unexpected(ConnectionError::DnsLookupFailed);
     }
 
-#if defined(_WIN32)
-    core::os_socket_t fd = WSASocketW(res->ai_family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-    if (!core::is_valid_socket(fd)) {
-        ::freeaddrinfo(res);
-        co_return std::unexpected(ConnectionError::SocketCreationFailed);
-    }
-#else
     core::os_socket_t fd = ::socket(res->ai_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP);
     if (!core::is_valid_socket(fd)) {
         ::freeaddrinfo(res);
         co_return std::unexpected(ConnectionError::SocketCreationFailed);
     }
-#endif
 
     int flag = 1;
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&flag), sizeof(flag));

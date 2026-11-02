@@ -18,7 +18,7 @@ namespace aegon::core {
  * Supports two operational modes:
  *  1. Kernel PBUF_RING (Linux io_uring): Linux kernel automatically selects buffers
  *     on incoming packets, zero kernel-user round trips.
- *  2. User-Space Freelist (epoll / kqueue / IOCP): Fast $O(1)$ lockless slab allocation
+ *  2. User-Space Freelist (epoll fallback): Fast $O(1)$ lockless slab allocation
  *     from pre-faulted, cache-aligned memory.
  *
  * Memory is allocated via mmap with MAP_POPULATE and MAP_HUGETLB (2 MB huge pages,
@@ -105,7 +105,7 @@ private:
     bool memory_is_mmap_{false};
     int pending_advance_{0};
 
-    // User-space freelist for epoll/kqueue/IOCP
+    // User-space freelist for epoll fallback
     std::vector<uint16_t> freelist_{};
     size_t freelist_top_{0};
 };

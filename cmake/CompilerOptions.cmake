@@ -24,10 +24,6 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "17.0")
         message(FATAL_ERROR "Aegon requires Clang 17.0 or newer for C++23 language support. Detected: ${CMAKE_CXX_COMPILER_VERSION}")
     endif()
-elseif(MSVC)
-    if(MSVC_VERSION LESS 1938)
-        message(FATAL_ERROR "Aegon requires MSVC 19.38 (Visual Studio 2022 17.8) or newer for C++23 support.")
-    endif()
 endif()
 
 # Fast compiler caching (ccache for both C and C++)
@@ -38,49 +34,31 @@ if(CCACHE_PROGRAM)
     message(STATUS "[Build Speed] ccache detected and enabled: ${CCACHE_PROGRAM}")
 endif()
 
-# Optional native CPU host tuning (-march=native / /arch:AVX2)
+# Optional native CPU host tuning (-march=native)
 option(AEGON_ENABLE_NATIVE_TUNING "Optimize binaries for host CPU (-march=native)" OFF)
 
-if(MSVC)
-    add_compile_options(
-        /std:c++latest
-        /utf-8
-        /permissive-
-        /EHsc
-        /Zc:__cplusplus
-        /W3
-        /D_CRT_SECURE_NO_WARNINGS
-        /DNOMINMAX
-        /DWIN32_LEAN_AND_MEAN
-    )
-    if(AEGON_ENABLE_NATIVE_TUNING)
-        add_compile_options(/arch:AVX2)
-        message(STATUS "[Compiler Options] Host CPU native tuning enabled (/arch:AVX2)")
-    endif()
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    add_compile_options(
-        -Wall
-        -Wextra
-        -Wpedantic
-        -Wno-missing-field-initializers
-        -Wno-missing-braces
-    )
+add_compile_options(
+    -Wall
+    -Wextra
+    -Wpedantic
+    -Wno-missing-field-initializers
+    -Wno-missing-braces
+)
 
-    if(AEGON_ENABLE_NATIVE_TUNING)
-        add_compile_options(-march=native)
-        message(STATUS "[Compiler Options] Host CPU native tuning enabled (-march=native)")
-    endif()
+if(AEGON_ENABLE_NATIVE_TUNING)
+    add_compile_options(-march=native)
+    message(STATUS "[Compiler Options] Host CPU native tuning enabled (-march=native)")
+endif()
 
-    # Ultra-fast modern linker (mold / lld)
-    find_program(MOLD_LINKER mold)
-    if(MOLD_LINKER)
-        add_link_options("-fuse-ld=mold")
-        message(STATUS "[Build Speed] Ultra-fast linker detected: mold (${MOLD_LINKER})")
-    else()
-        find_program(LLD_LINKER lld)
-        if(LLD_LINKER)
-            add_link_options("-fuse-ld=lld")
-            message(STATUS "[Build Speed] Fast linker detected: lld (${LLD_LINKER})")
-        endif()
+# Ultra-fast modern linker (mold / lld)
+find_program(MOLD_LINKER mold)
+if(MOLD_LINKER)
+    add_link_options("-fuse-ld=mold")
+    message(STATUS "[Build Speed] Ultra-fast linker detected: mold (${MOLD_LINKER})")
+else()
+    find_program(LLD_LINKER lld)
+    if(LLD_LINKER)
+        add_link_options("-fuse-ld=lld")
+        message(STATUS "[Build Speed] Fast linker detected: lld (${LLD_LINKER})")
     endif()
 endif()

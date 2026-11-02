@@ -1,29 +1,19 @@
 #include "net/SocketOptions.h"
 
-#if defined(_WIN32)
-#include <ws2tcpip.h>
-#include <mstcpip.h>
-#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <fcntl.h>
 #include <unistd.h>
-#endif
 
 namespace aegon::net {
 
 bool SocketOptions::set_nonblocking(core::os_socket_t fd, bool nonblocking) noexcept {
     if (!core::is_valid_socket(fd)) return false;
-#if defined(_WIN32)
-    u_long mode = nonblocking ? 1 : 0;
-    return ioctlsocket(fd, FIONBIO, &mode) == 0;
-#else
     int flags = ::fcntl(fd, F_GETFL, 0);
     if (flags < 0) return false;
     flags = nonblocking ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
     return ::fcntl(fd, F_SETFL, flags) == 0;
-#endif
 }
 
 bool SocketOptions::set_reuse_address(core::os_socket_t fd, bool reuse) noexcept {
@@ -57,7 +47,6 @@ bool SocketOptions::set_tcp_keepalive(core::os_socket_t fd, bool enable, int idl
     }
     if (!enable) return true;
 
-#if defined(__linux__)
 #if defined(TCP_KEEPIDLE)
     if (idle_sec > 0) {
         ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, reinterpret_cast<const char*>(&idle_sec), sizeof(idle_sec));
@@ -72,14 +61,6 @@ bool SocketOptions::set_tcp_keepalive(core::os_socket_t fd, bool enable, int idl
     if (count > 0) {
         ::setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, reinterpret_cast<const char*>(&count), sizeof(count));
     }
-#endif
-#elif defined(_WIN32)
-    struct tcp_keepalive settings{};
-    settings.onoff = 1;
-    settings.keepalivetime = static_cast<u_long>(idle_sec * 1000);
-    settings.keepaliveinterval = static_cast<u_long>(intvl_sec * 1000);
-    DWORD bytes_returned = 0;
-    WSAIoctl(fd, SIO_KEEPALIVE_VALS, &settings, sizeof(settings), nullptr, 0, &bytes_returned, nullptr, nullptr);
 #endif
     return true;
 }

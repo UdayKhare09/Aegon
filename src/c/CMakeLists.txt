@@ -32,9 +32,6 @@ set_target_properties(aegon_c_static PROPERTIES
     EXPORT_NAME c_static
     POSITION_INDEPENDENT_CODE ON
 )
-if(WIN32)
-    set_target_properties(aegon_c_static PROPERTIES OUTPUT_NAME aegon_c_static)
-endif()
 target_include_directories(aegon_c_static PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -68,10 +65,8 @@ target_include_directories(aegon_c_shared PRIVATE
     ${PROJECT_SOURCE_DIR}/src
 )
 
-if(UNIX AND NOT APPLE)
-    target_link_options(aegon_c_shared PRIVATE
-        "LINKER:--version-script=${PROJECT_SOURCE_DIR}/cmake/aegon_c.map"
-    )
-endif()
+target_link_options(aegon_c_shared PRIVATE
+    "LINKER:--version-script=${PROJECT_SOURCE_DIR}/cmake/aegon_c.map"
+)
 
 include(${PROJECT_SOURCE_DIR}/cmake/CheckCHeaders.cmake)

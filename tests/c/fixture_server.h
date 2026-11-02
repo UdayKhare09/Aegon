@@ -8,12 +8,6 @@
 #include <aegon/c/aegon.h>
 #include "check.h"
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-typedef SOCKET socket_t;
-#define CLOSE_SOCK(s) closesocket(s)
-#else
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -25,24 +19,15 @@ typedef SOCKET socket_t;
 typedef int socket_t;
 #define CLOSE_SOCK(s) close(s)
 #define INVALID_SOCKET (-1)
-#endif
 
 static inline void fixture_sleep_ms(int ms) {
-#ifdef _WIN32
-    Sleep((DWORD)ms);
-#else
     struct timespec ts;
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
     nanosleep(&ts, NULL);
-#endif
 }
 
 static inline uint16_t get_ephemeral_port(void) {
-#ifdef _WIN32
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-#endif
     socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
     CHECK(fd != INVALID_SOCKET);
 
@@ -65,10 +50,6 @@ static inline uint16_t get_ephemeral_port(void) {
 }
 
 static inline int http_exchange(uint16_t port, const char* req, char* resp, size_t max_resp) {
-#ifdef _WIN32
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-#endif
     socket_t fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd == INVALID_SOCKET) return -1;
 
@@ -105,15 +86,10 @@ static inline int http_exchange(uint16_t port, const char* req, char* resp, size
     }
 
     /* Set 2 second receive timeout */
-#ifdef _WIN32
-    DWORD tv = 2000;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
-#else
     struct timeval tv;
     tv.tv_sec = 2;
     tv.tv_usec = 0;
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-#endif
 
     size_t total_read = 0;
     while (total_read + 1 < max_resp) {

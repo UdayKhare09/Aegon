@@ -3,15 +3,9 @@
 #include "fixture_server.h"
 #include <sys/stat.h>
 
-#ifdef _WIN32
-#include <direct.h>
-#define MKDIR(d) _mkdir(d)
-#define RMDIR(d) _rmdir(d)
-#else
 #include <unistd.h>
 #define MKDIR(d) mkdir(d, 0755)
 #define RMDIR(d) rmdir(d)
-#endif
 
 static size_t test_cache_control(aegon_str_t path, bool is_fallback,
                                  char* buf, size_t buf_cap, void* ud) {

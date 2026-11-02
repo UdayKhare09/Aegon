@@ -7,9 +7,6 @@
 #include <optional>
 #include <stdexcept>
 #include <cstdlib>
-#if defined(_WIN32)
-#include <malloc.h>
-#endif
 
 namespace aegon::core {
 
@@ -21,25 +18,14 @@ namespace detail {
 struct TaskPromiseBase {
     static void* operator new(size_t size) {
         void* ptr = nullptr;
-#if defined(_WIN32)
-        ptr = _aligned_malloc(size, 64);
-        if (!ptr) {
-            throw std::bad_alloc();
-        }
-#else
         if (::posix_memalign(&ptr, 64, size) != 0) {
             throw std::bad_alloc();
         }
-#endif
         return ptr;
     }
 
     static void operator delete(void* ptr) noexcept {
-#if defined(_WIN32)
-        _aligned_free(ptr);
-#else
         ::free(ptr);
-#endif
     }
 
     std::coroutine_handle<> continuation_{nullptr};

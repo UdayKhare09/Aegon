@@ -3,19 +3,9 @@
 #include <stdexcept>
 #include <system_error>
 
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
 #include <pthread.h>
 #include <sched.h>
 #include <unistd.h>
-#endif
 
 namespace aegon::core {
 
@@ -47,7 +37,6 @@ EventLoop::~EventLoop() {
 }
 
 void EventLoop::pin_to_core(int core_id) {
-#if defined(__linux__)
     if (core_id < 0 || core_id >= CPU_SETSIZE) {
         throw std::invalid_argument("Invalid core_id: " + std::to_string(core_id));
     }
@@ -58,16 +47,6 @@ void EventLoop::pin_to_core(int core_id) {
     if (rc != 0) {
         throw std::system_error(rc, std::generic_category(), "pthread_setaffinity_np failed");
     }
-#elif defined(_WIN32)
-    if (core_id < 0 || core_id >= 64) {
-        throw std::invalid_argument("Invalid core_id: " + std::to_string(core_id));
-    }
-    DWORD_PTR mask = static_cast<DWORD_PTR>(1) << core_id;
-    if (SetThreadAffinityMask(GetCurrentThread(), mask) == 0) {
-        DWORD err = GetLastError();
-        throw std::system_error(static_cast<int>(err), std::system_category(), "SetThreadAffinityMask failed");
-    }
-#endif
 }
 
 void EventLoop::spawn(Task<void> task) {

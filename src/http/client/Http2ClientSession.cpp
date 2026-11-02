@@ -5,12 +5,10 @@
 #include <deque>
 #include <cstring>
 #include <iostream>
-#if !defined(_WIN32)
 #include <poll.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
-#endif
 #include <cctype>
 #include <algorithm>
 
@@ -140,19 +138,11 @@ bool Http2ClientSession::connect_socket(const Url& url) {
     int rc = ::getaddrinfo(host_str.c_str(), port_str.c_str(), &hints, &res);
     if (rc != 0 || !res) return false;
 
-#if defined(_WIN32)
-    fd_ = ::socket(res->ai_family, SOCK_STREAM, IPPROTO_TCP);
-    if (!core::is_valid_socket(fd_)) {
-        ::freeaddrinfo(res);
-        return false;
-    }
-#else
     fd_ = ::socket(res->ai_family, SOCK_STREAM | SOCK_CLOEXEC, IPPROTO_TCP);
     if (fd_ < 0) {
         ::freeaddrinfo(res);
         return false;
     }
-#endif
 
     int one = 1;
     ::setsockopt(fd_, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&one), sizeof(one));

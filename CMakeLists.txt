@@ -22,6 +22,14 @@ project(Aegon
     LANGUAGES C CXX
 )
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR
+        "Aegon is an ultra-high-performance Linux-first asynchronous framework.\n"
+        "It requires Linux (kernel 5.10+ recommended with io_uring and epoll support).\n"
+        "Windows and macOS are currently not supported."
+    )
+endif()
+
 include(GNUInstallDirs)
 
 # User-configurable Build Options

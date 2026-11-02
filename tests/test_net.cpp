@@ -60,11 +60,7 @@ void test_socket_options() {
     std::cout << "Testing SocketOptions...\n";
     init_sockets();
 
-#if defined(_WIN32)
-    os_socket_t s = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-#else
     os_socket_t s = ::socket(AF_INET, SOCK_STREAM, 0);
-#endif
     assert(is_valid_socket(s));
 
     assert(SocketOptions::set_nonblocking(s, true));

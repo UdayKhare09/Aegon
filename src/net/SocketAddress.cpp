@@ -62,7 +62,6 @@ SocketAddress SocketAddress::any_ipv6(uint16_t port) noexcept {
     return addr;
 }
 
-#if !defined(_WIN32)
 std::optional<SocketAddress> SocketAddress::from_unix_domain(std::string_view path) noexcept {
     if (path.empty() || path.size() >= sizeof(sockaddr_un::sun_path)) {
         return std::nullopt;
@@ -75,7 +74,6 @@ std::optional<SocketAddress> SocketAddress::from_unix_domain(std::string_view pa
     addr.len_ = static_cast<socklen_t>(sizeof(sun->sun_family) + path.size() + 1);
     return addr;
 }
-#endif
 
 uint16_t SocketAddress::port() const noexcept {
     if (is_ipv4()) {
@@ -105,13 +103,10 @@ std::string SocketAddress::ip() const {
         if (::inet_ntop(AF_INET6, &as_ipv6()->sin6_addr, buf, sizeof(buf))) {
             return std::string(buf);
         }
-    }
-#if !defined(_WIN32)
-    else if (is_unix()) {
+    } else if (is_unix()) {
         const auto* sun = reinterpret_cast<const sockaddr_un*>(&storage_);
         return std::string(sun->sun_path);
     }
-#endif
     return {};
 }
 
@@ -122,11 +117,9 @@ std::string SocketAddress::to_string() const {
     if (is_ipv6()) {
         return "[" + ip() + "]:" + std::to_string(port());
     }
-#if !defined(_WIN32)
     if (is_unix()) {
         return ip();
     }
-#endif
     return "unspecified";
 }
 
@@ -140,13 +133,11 @@ bool SocketAddress::operator==(const SocketAddress& other) const noexcept {
         return as_ipv6()->sin6_port == other.as_ipv6()->sin6_port &&
                std::memcmp(&as_ipv6()->sin6_addr, &other.as_ipv6()->sin6_addr, sizeof(in6_addr)) == 0;
     }
-#if !defined(_WIN32)
     if (is_unix()) {
         const auto* sun1 = reinterpret_cast<const sockaddr_un*>(&storage_);
         const auto* sun2 = reinterpret_cast<const sockaddr_un*>(&other.storage_);
         return std::strcmp(sun1->sun_path, sun2->sun_path) == 0;
     }
-#endif
     return false;
 }
 

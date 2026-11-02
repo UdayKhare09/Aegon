@@ -11,9 +11,7 @@
 #include <chrono>
 #include <expected>
 #include "core/OsSocket.h"
-#if !defined(_WIN32)
 #include <netdb.h>
-#endif
 
 namespace aegon::http::client {
 

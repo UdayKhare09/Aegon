@@ -57,16 +57,11 @@ public:
         size_t alloc_size = ((capacity + alignment_ - 1) / alignment_) * alignment_;
         if (alloc_size == 0) alloc_size = alignment_;
 
-#if defined(_WIN32)
-        ptr_ = _aligned_malloc(alloc_size, alignment_);
-        if (!ptr_) throw std::bad_alloc();
-#else
         void* p = nullptr;
         if (::posix_memalign(&p, alignment_, alloc_size) != 0 || !p) {
             throw std::bad_alloc();
         }
         ptr_ = p;
-#endif
         capacity_ = alloc_size;
         size_ = 0;
     }
@@ -108,11 +103,7 @@ public:
 private:
     void release() noexcept {
         if (ptr_) {
-#if defined(_WIN32)
-            _aligned_free(ptr_);
-#else
             ::free(ptr_);
-#endif
             ptr_ = nullptr;
         }
         size_ = 0;

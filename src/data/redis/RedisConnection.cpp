@@ -1,8 +1,5 @@
 #include "RedisConnection.h"
 #include "net/tcp/TcpConnector.h"
-#if defined(_WIN32)
-#include <ws2tcpip.h>
-#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -10,7 +7,6 @@
 #include <netdb.h>
 #include <unistd.h>
 #include <fcntl.h>
-#endif
 #include <cstring>
 
 namespace aegon::data::redis {

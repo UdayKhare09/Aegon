@@ -293,9 +293,6 @@ core::Task<void> run_all_tests(core::IoEngine& ring) {
 }
 
 int main() {
-#if defined(_WIN32)
-    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
-#endif
     core::EventLoop loop(256);
 
     bool completed = false;

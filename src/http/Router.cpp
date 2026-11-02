@@ -2,20 +2,9 @@
 #include "core/OsSocket.h"
 #include <sys/stat.h>
 #include <fcntl.h>
-#if defined(_WIN32)
-#include <io.h>
-#define O_BINARY _O_BINARY
-#ifndef S_ISREG
-#define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
-#endif
-#ifndef O_CLOEXEC
-#define O_CLOEXEC 0
-#endif
-#else
 #include <unistd.h>
 #ifndef O_BINARY
 #define O_BINARY 0
-#endif
 #endif
 #include <shared_mutex>
 #include <mutex>
@@ -31,11 +20,7 @@ namespace detail {
 inline std::string format_http_date(time_t t) {
     char buf[36];
     struct tm tm_buf;
-#if defined(_WIN32)
-    if (gmtime_s(&tm_buf, &t) == 0) {
-#else
     if (gmtime_r(&t, &tm_buf)) {
-#endif
         if (strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &tm_buf)) {
             return std::string(buf);
         }
@@ -135,28 +120,9 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                 if (::stat(file_path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
                     return false;
                 }
-#if defined(__linux__)
                 current_mtime = st.st_mtime;
                 current_nsec = st.st_mtim.tv_nsec;
-#elif defined(_WIN32)
-                current_mtime = st.st_mtime;
-                current_nsec = 0;
-#else
-                current_mtime = st.st_mtime;
-                current_nsec = 0;
-#endif
             } else {
-#if defined(_WIN32)
-                fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
-                if (fd < 0) return false;
-                struct _stat64 st_win{};
-                if (::_fstat64(fd, &st_win) != 0 || !(st_win.st_mode & _S_IFREG)) {
-                    ::_close(fd);
-                    return false;
-                }
-                current_mtime = static_cast<time_t>(st_win.st_mtime);
-                st.st_size = static_cast<off_t>(st_win.st_size);
-#else
                 fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
                 if (fd < 0) return false;
                 if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
@@ -165,7 +131,6 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                 }
                 current_mtime = st.st_mtime;
                 current_nsec = st.st_mtim.tv_nsec;
-#endif
             }
 
             std::string_view content_type = Response::infer_mime_type(file_path);
@@ -187,11 +152,7 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                 if ((!options.cache_in_memory && st.st_size > 64 * 1024) ||
                     (options.cache_in_memory && static_cast<size_t>(st.st_size) > options.max_cache_file_size)) {
                     if (fd >= 0) {
-#if defined(_WIN32)
-                        ::_close(fd);
-#else
                         ::close(fd);
-#endif
                         fd = -1;
                     }
                     entry = CachedStaticFile{
@@ -210,27 +171,16 @@ Router& Router::static_files(std::string_view prefix, std::string_view directory
                     }
                 } else {
                     if (fd < 0) {
-#if defined(_WIN32)
-                        fd = ::_open(file_path.c_str(), _O_RDONLY | _O_BINARY);
-#else
                         fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
-#endif
                         if (fd < 0) return false;
                     }
 
                     std::string data;
                     data.resize(static_cast<size_t>(st.st_size));
-#if defined(_WIN32)
-                    int n = ::_read(fd, data.data(), static_cast<unsigned int>(data.size()));
-                    ::_close(fd);
-                    fd = -1;
-                    if (n != static_cast<int>(data.size())) return false;
-#else
                     ssize_t n = ::pread(fd, data.data(), data.size(), 0);
                     ::close(fd);
                     fd = -1;
                     if (n != static_cast<ssize_t>(data.size())) return false;
-#endif
 
                     entry = CachedStaticFile{
                         .mtime = current_mtime,

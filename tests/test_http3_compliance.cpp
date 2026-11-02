@@ -10,11 +10,6 @@
 #include <thread>
 #include <chrono>
 #include "core/OsSocket.h"
-
-#if defined(_WIN32)
-#define popen _popen
-#define pclose _pclose
-#endif
 #include <cstring>
 
 #define TEST_CHECK(expr) do { \
@@ -122,13 +117,8 @@ void test_rfc9000_version_negotiation() {
     TEST_CHECK(sent == sizeof(packet));
 
     // Wait for Version Negotiation reply
-#if defined(_WIN32)
-    DWORD timeout_ms = 2000;
-    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
-#else
     timeval tv{.tv_sec = 2, .tv_usec = 0};
     setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-#endif
 
     uint8_t reply[1500]{};
     sockaddr_storage reply_from{};

@@ -4,12 +4,6 @@
 /* Symbol visibility. Define AEGON_C_STATIC when linking libaegon_c statically. */
 #if defined(AEGON_C_STATIC)
 #  define AEGON_C_API
-#elif defined(_WIN32)
-#  if defined(AEGON_C_BUILDING)           /* set only while compiling libaegon_c itself */
-#    define AEGON_C_API __declspec(dllexport)
-#  else
-#    define AEGON_C_API __declspec(dllimport)
-#  endif
 #else
 #  define AEGON_C_API __attribute__((visibility("default")))
 #endif

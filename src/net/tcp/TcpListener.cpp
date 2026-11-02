@@ -1,12 +1,8 @@
 #include "net/tcp/TcpListener.h"
 
-#if defined(_WIN32)
-#include <ws2tcpip.h>
-#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
-#endif
 
 namespace aegon::net {
 
@@ -16,13 +12,7 @@ std::optional<TcpListener> TcpListener::bind(const SocketAddress& addr, const Tc
     core::init_sockets();
     int family = addr.family();
 
-#if defined(_WIN32)
-    core::os_socket_t fd = WSASocketW(family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-#elif defined(SOCK_CLOEXEC)
     core::os_socket_t fd = ::socket(family, SOCK_STREAM | SOCK_CLOEXEC, 0);
-#else
-    core::os_socket_t fd = ::socket(family, SOCK_STREAM, 0);
-#endif
 
     if (!core::is_valid_socket(fd)) {
         return std::nullopt;

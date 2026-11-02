@@ -4,10 +4,8 @@
 #include "data/cache/CacheBackend.h"
 #include "core/EventLoop.h"
 
-#if !defined(_WIN32)
 #include <sys/eventfd.h>
 #include <unistd.h>
-#endif
 #include <stdexcept>
 
 namespace aegon::data::memory {
@@ -122,31 +120,6 @@ private:
             co_return ResultT{};
         }
 
-#if defined(_WIN32)
-        MemRequest req;
-        setup_fn(req);
-
-        struct MemStoreAwaiter : core::IoAwaiter {
-            core::IoEngine& engine;
-            MemRequest& request;
-            MemStore& store;
-
-            MemStoreAwaiter(core::IoEngine& e, MemRequest& r, MemStore& s) noexcept
-                : engine(e), request(r), store(s) {}
-
-            void submit() noexcept override {
-                request.on_complete = [this]() {
-                    engine.post_completion(this, 0);
-                };
-                store.submit(&request);
-            }
-        };
-
-        MemStoreAwaiter aw{loop->engine(), req, *store_};
-        co_await aw;
-
-        co_return extract_fn(req);
-#else
         // Create eventfd for this request on Linux
         int efd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
         if (efd < 0) [[unlikely]] {
@@ -167,7 +140,6 @@ private:
 
         ::close(efd);
         co_return extract_fn(req);
-#endif
     }
 
     std::shared_ptr<MemStore> store_;

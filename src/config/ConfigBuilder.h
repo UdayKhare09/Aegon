@@ -12,14 +12,9 @@
 #include <unordered_map>
 #include <expected>
 #include <cctype>
-#if defined(_WIN32)
-#include <stdlib.h>
-#define aegon_environ _environ
-#else
 #include <unistd.h>
 extern char** environ;
 #define aegon_environ environ
-#endif
 
 namespace aegon::config {
 

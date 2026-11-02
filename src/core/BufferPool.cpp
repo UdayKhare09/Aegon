@@ -3,22 +3,8 @@
 #include <system_error>
 #include <cstring>
 #include <string>
-
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#else
 #include <sys/mman.h>
-#endif
-
-#if defined(__linux__)
 #include <liburing.h>
-#endif
 
 namespace aegon::core {
 
@@ -33,14 +19,6 @@ void BufferPool::init_freelist() {
 void BufferPool::allocate_memory() {
     total_payload_ = static_cast<size_t>(entries_) * buffer_size_;
 
-#if defined(_WIN32)
-    void* mem_ptr = VirtualAlloc(nullptr, total_payload_, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!mem_ptr) {
-        throw std::bad_alloc();
-    }
-    memory_ = static_cast<uint8_t*>(mem_ptr);
-    memory_is_mmap_ = true;
-#else
     // 1. mmap + MAP_POPULATE + MAP_HUGETLB (2 MB huge pages, pre-faulted)
     void* mem_ptr = mmap(nullptr, total_payload_,
                          PROT_READ | PROT_WRITE,
@@ -65,7 +43,6 @@ void BufferPool::allocate_memory() {
         memory_ = static_cast<uint8_t*>(mem_ptr);
         memory_is_mmap_ = false;
     }
-#endif
 }
 
 BufferPool::BufferPool(uint16_t bgid, uint16_t entries, size_t buffer_size)
@@ -141,15 +118,11 @@ void BufferPool::unregister_from_io_uring() {
 BufferPool::~BufferPool() {
     unregister_from_io_uring();
     if (memory_) {
-#if defined(_WIN32)
-        VirtualFree(memory_, 0, MEM_RELEASE);
-#else
         if (memory_is_mmap_) {
             munmap(memory_, total_payload_);
         } else {
             free(memory_);
         }
-#endif
         memory_ = nullptr;
     }
 }
@@ -186,11 +159,7 @@ BufferPool& BufferPool::operator=(BufferPool&& other) noexcept {
         unregister_from_io_uring();
         if (memory_) {
             if (memory_is_mmap_) {
-#if defined(_WIN32)
-                VirtualFree(memory_, 0, MEM_RELEASE);
-#else
                 munmap(memory_, total_payload_);
-#endif
             } else {
                 free(memory_);
             }

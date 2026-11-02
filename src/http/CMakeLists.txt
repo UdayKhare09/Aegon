@@ -34,9 +34,6 @@ target_link_libraries(aegon_http PUBLIC
 if(Protobuf_INCLUDE_DIRS)
     target_include_directories(aegon_http PUBLIC ${Protobuf_INCLUDE_DIRS})
 endif()
-if(WIN32)
-    target_link_libraries(aegon_http PUBLIC ws2_32)
-endif()
 
 target_precompile_headers(aegon_http PRIVATE
     <vector>

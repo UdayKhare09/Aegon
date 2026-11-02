@@ -4,11 +4,9 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
-#if !defined(_WIN32)
 #include <poll.h>
 #include <unistd.h>
 #include <netdb.h>
-#endif
 #include <openssl/rand.h>
 
 namespace aegon::http::client {
@@ -165,21 +163,11 @@ bool Http3ClientSession::init_quic(const Url& url) {
     int rc = ::getaddrinfo(host_str.c_str(), port_str.c_str(), &hints, &res);
     if (rc != 0 || !res) return false;
 
-#if defined(_WIN32)
-    udp_fd_ = WSASocketW(res->ai_family, SOCK_DGRAM, IPPROTO_UDP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-    if (!core::is_valid_socket(udp_fd_)) {
-        ::freeaddrinfo(res);
-        return false;
-    }
-    u_long mode = 1;
-    ioctlsocket(udp_fd_, FIONBIO, &mode);
-#else
     udp_fd_ = ::socket(res->ai_family, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_UDP);
     if (!core::is_valid_socket(udp_fd_)) {
         ::freeaddrinfo(res);
         return false;
     }
-#endif
 
     if (::connect(udp_fd_, res->ai_addr, static_cast<socklen_t>(res->ai_addrlen)) != 0) {
         ::freeaddrinfo(res);
@@ -712,11 +700,7 @@ core::Task<Response> Http3ClientSession::execute(std::shared_ptr<RequestState> s
         if (n > 0) {
             process_datagram(pkt_buf, static_cast<size_t>(n));
             while (true) {
-#if defined(_WIN32)
-                ssize_t n2 = ::recv(udp_fd_, reinterpret_cast<char*>(pkt_buf), static_cast<int>(sizeof(pkt_buf)), 0);
-#else
                 ssize_t n2 = ::recv(udp_fd_, pkt_buf, sizeof(pkt_buf), MSG_DONTWAIT);
-#endif
                 if (n2 <= 0) break;
                 process_datagram(pkt_buf, static_cast<size_t>(n2));
             }

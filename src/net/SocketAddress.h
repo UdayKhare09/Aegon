@@ -7,14 +7,10 @@
 #include <cstdint>
 #include <cstring>
 
-#if defined(_WIN32)
-#include <ws2tcpip.h>
-#else
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#endif
 
 namespace aegon::net {
 
@@ -44,9 +40,7 @@ public:
     [[nodiscard]] static SocketAddress any_ipv4(uint16_t port) noexcept;
     [[nodiscard]] static SocketAddress any_ipv6(uint16_t port) noexcept;
 
-#if !defined(_WIN32)
     [[nodiscard]] static std::optional<SocketAddress> from_unix_domain(std::string_view path) noexcept;
-#endif
 
     void assign(const sockaddr* sa, socklen_t len) noexcept {
         if (!sa || len == 0) {
@@ -66,11 +60,7 @@ public:
     [[nodiscard]] bool is_ipv4() const noexcept { return storage_.ss_family == AF_INET; }
     [[nodiscard]] bool is_ipv6() const noexcept { return storage_.ss_family == AF_INET6; }
     [[nodiscard]] bool is_unix() const noexcept {
-#if !defined(_WIN32)
         return storage_.ss_family == AF_UNIX;
-#else
-        return false;
-#endif
     }
     [[nodiscard]] bool is_valid() const noexcept { return storage_.ss_family != AF_UNSPEC; }
 

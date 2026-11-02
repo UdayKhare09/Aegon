@@ -24,9 +24,7 @@ class BufferPool;
 enum class EngineType {
     Auto,     // Automatically probe and select the best available backend
     IoUring,  // Linux io_uring (Linux 6.1+ preferred)
-    Epoll,    // Linux epoll (universal Linux fallback)
-    Kqueue,   // macOS / BSD kqueue
-    Iocp      // Windows I/O Completion Ports
+    Epoll     // Linux epoll (universal Linux fallback)
 };
 
 /**
@@ -67,9 +65,6 @@ struct RecvResult {
  * Zero heap allocation: awaiters live on the coroutine stack frame.
  */
 struct IoAwaiter {
-#if defined(_WIN32)
-    OVERLAPPED overlapped{};
-#endif
     std::coroutine_handle<> continuation{nullptr};
     int32_t result{0};
     uint32_t flags{0};
@@ -103,10 +98,6 @@ struct AcceptAwaiter : IoAwaiter {
     os_socket_t listen_fd{INVALID_OS_SOCKET};
     sockaddr_storage addr{};
     socklen_t addr_len{sizeof(sockaddr_storage)};
-#if defined(_WIN32)
-    os_socket_t client_sock{INVALID_OS_SOCKET};
-    alignas(8) uint8_t accept_buf[(sizeof(sockaddr_storage) + 16) * 2]{};
-#endif
 
     AcceptAwaiter(IoEngine& e, os_socket_t fd) noexcept : engine(e), listen_fd(fd) {}
     void submit() noexcept override;
@@ -117,10 +108,6 @@ struct RecvProvidedAwaiter : IoAwaiter {
     IoEngine& engine;
     os_socket_t socket_fd{INVALID_OS_SOCKET};
     uint16_t bgid{0};
-#if defined(_WIN32)
-    WSABUF wsa_buf{};
-    uint16_t allocated_bid{0};
-#endif
 
     RecvProvidedAwaiter(IoEngine& e, os_socket_t fd, uint16_t b) noexcept
         : engine(e), socket_fd(fd), bgid(b) {}
@@ -134,9 +121,6 @@ struct RecvAwaiter : IoAwaiter {
     void* buf{nullptr};
     size_t len{0};
     int flags_arg{0};
-#if defined(_WIN32)
-    WSABUF wsa_buf{};
-#endif
 
     RecvAwaiter(IoEngine& e, os_socket_t fd, void* b, size_t l, int fl = 0) noexcept
         : engine(e), socket_fd(fd), buf(b), len(l), flags_arg(fl) {}
@@ -149,9 +133,6 @@ struct SendAwaiter : IoAwaiter {
     os_socket_t socket_fd{INVALID_OS_SOCKET};
     const void* buf{nullptr};
     size_t len{0};
-#if defined(_WIN32)
-    WSABUF wsa_buf{};
-#endif
 
     SendAwaiter(IoEngine& e, os_socket_t fd, const void* b, size_t l) noexcept
         : engine(e), socket_fd(fd), buf(b), len(l) {}
@@ -169,9 +150,6 @@ struct SendZcAwaiter : IoAwaiter {
     int bytes_sent{0};
     bool send_completed{false};
     bool notif_received{false};
-#if defined(_WIN32)
-    WSABUF wsa_buf{};
-#endif
 
     SendZcAwaiter(IoEngine& e, os_socket_t fd, const void* b, size_t l, int zc_fl = 0, int buf_idx = -1) noexcept
         : engine(e), socket_fd(fd), buf(b), len(l), zc_flags(zc_fl), fixed_buf_idx(buf_idx) {}
@@ -272,10 +250,6 @@ struct RecvmsgAwaiter : IoAwaiter {
     IoEngine& engine;
     os_socket_t socket_fd{INVALID_OS_SOCKET};
     msghdr* msg;
-#if defined(_WIN32)
-    WSABUF wsa_buf{};
-    INT from_len{0};
-#endif
 
     RecvmsgAwaiter(IoEngine& e, os_socket_t fd, msghdr* m) noexcept
         : engine(e), socket_fd(fd), msg(m) {}
@@ -350,10 +324,6 @@ public:
         bool use_direct{false};
         std::deque<AcceptResult> backlog{};
         AcceptResult current_result{};
-#if defined(_WIN32)
-        os_socket_t client_sock{INVALID_OS_SOCKET};
-        alignas(8) uint8_t accept_buf[(sizeof(sockaddr_storage) + 16) * 2]{};
-#endif
 
         StreamState(IoEngine& e, os_socket_t fd, bool direct = false) noexcept
             : engine(e), listen_fd(fd), use_direct(direct) {}
@@ -420,10 +390,6 @@ public:
         bool cancelled{false};
         std::deque<RecvResult> backlog{};
         RecvResult current_result{};
-#if defined(_WIN32)
-        WSABUF wsa_buf{};
-        uint16_t allocated_bid{0};
-#endif
 
         StreamState(IoEngine& e, os_socket_t fd, uint16_t b) noexcept
             : engine(e), socket_fd(fd), bgid(b) {}

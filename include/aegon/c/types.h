@@ -129,11 +129,9 @@ typedef enum aegon_samesite {
  * I/O engine preference — mirrors aegon::core::EngineType
  * ------------------------------------------------------------------------- */
 typedef enum aegon_engine {
-    AEGON_ENGINE_AUTO    = 0,   /* probe best available (io_uring -> epoll / IOCP) */
-    AEGON_ENGINE_IOURING = 1,   /* Linux only; AEGON_ERR_UNSUPPORTED elsewhere */
-    AEGON_ENGINE_EPOLL   = 2,   /* Linux fallback */
-    AEGON_ENGINE_KQUEUE  = 3,   /* reserved (not yet implemented in Aegon) */
-    AEGON_ENGINE_IOCP    = 4    /* Windows */
+    AEGON_ENGINE_AUTO    = 0,   /* probe best available (io_uring -> epoll) */
+    AEGON_ENGINE_IOURING = 1,   /* Linux io_uring */
+    AEGON_ENGINE_EPOLL   = 2    /* Linux epoll fallback */
 } aegon_engine_t;
 
 AEGON_C_END

@@ -22,10 +22,6 @@ target_link_libraries(aegon_net PUBLIC
     ${AEGON_NGTCP2_LIB}
 )
 
-if(WIN32)
-    target_link_libraries(aegon_net PUBLIC ws2_32)
-endif()
-
 target_precompile_headers(aegon_net PRIVATE
     <vector>
     <string>

@@ -9,13 +9,9 @@
 #include <cstring>
 #include <iostream>
 #include <fstream>
-#if defined(_WIN32)
-#include <windows.h>
-#else
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
-#endif
 
 namespace aegon::http::v2 {
 
@@ -71,11 +67,7 @@ Http2Stream::~Http2Stream() {
 
 void Http2Stream::cleanup_mmap() noexcept {
     if (mmap_base && mmap_base != MAP_FAILED) {
-#if defined(_WIN32)
-        UnmapViewOfFile(mmap_base);
-#else
         ::munmap(mmap_base, mmap_size);
-#endif
         mmap_base = nullptr;
         file_data = nullptr;
         mmap_size = 0;
@@ -987,35 +979,12 @@ void Http2Connection::setup_file_response(Http2Stream* stream) {
     if (stream->res.file_handle() && stream->res.file_handle()->is_valid()) {
         file_fd = stream->res.file_handle()->fd();
     } else if (!stream->res.file_path().empty()) {
-#if defined(_WIN32)
-        // Handled below for Windows
-#else
         file_fd = ::open(stream->res.file_path().c_str(), O_RDONLY | O_CLOEXEC);
         if (file_fd >= 0) {
             should_close_fd = true;
         }
-#endif
     }
 
-#if defined(_WIN32)
-    HANDLE hFile = CreateFileA(stream->res.file_path().c_str(), GENERIC_READ, FILE_SHARE_READ,
-                               NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        HANDLE hMap = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-        CloseHandle(hFile);
-        if (hMap) {
-            void* mapped = MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, fsize);
-            CloseHandle(hMap);
-            if (mapped) {
-                stream->mmap_base = mapped;
-                stream->mmap_size = fsize;
-                stream->file_data = static_cast<const char*>(mapped);
-                submit_response(stream);
-                return;
-            }
-        }
-    }
-#else
     if (file_fd >= 0) {
         void* mapped = ::mmap(nullptr, fsize, PROT_READ, MAP_SHARED, file_fd, 0);
         if (should_close_fd) {
@@ -1030,7 +999,6 @@ void Http2Connection::setup_file_response(Http2Stream* stream) {
             return;
         }
     }
-#endif
 
     // Fallback: read file content into Response body
     if (!stream->res.file_path().empty()) {

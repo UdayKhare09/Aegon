@@ -9,20 +9,10 @@
 #include <atomic>
 #include <fstream>
 #include "core/OsSocket.h"
-#if defined(_WIN32)
-#ifndef strncasecmp
-#define strncasecmp _strnicmp
-#endif
-#ifndef strcasecmp
-#define strcasecmp _stricmp
-#endif
-#include <windows.h>
-#else
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <netinet/udp.h>
-#endif
 #include <openssl/rand.h>
 
 #ifndef UDP_SEGMENT
@@ -46,11 +36,7 @@ Http3Stream::~Http3Stream() {
 
 void Http3Stream::cleanup_mmap() noexcept {
     if (mmap_base && mmap_base != MAP_FAILED) {
-#if defined(_WIN32)
-        UnmapViewOfFile(mmap_base);
-#else
         ::munmap(mmap_base, mmap_size);
-#endif
         mmap_base = nullptr;
         file_data = nullptr;
         mmap_size = 0;
@@ -827,37 +813,12 @@ void Http3Connection::setup_file_response(Http3Stream* stream) {
     if (stream->res.file_handle() && stream->res.file_handle()->is_valid()) {
         file_fd = stream->res.file_handle()->fd();
     } else if (!stream->res.file_path().empty()) {
-#if defined(_WIN32)
-        // Handled below for Windows
-#else
         file_fd = ::open(stream->res.file_path().c_str(), O_RDONLY | O_CLOEXEC);
         if (file_fd >= 0) {
             should_close_fd = true;
         }
-#endif
     }
 
-#if defined(_WIN32)
-    HANDLE hFile = CreateFileA(stream->res.file_path().c_str(), GENERIC_READ, FILE_SHARE_READ,
-                               NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        HANDLE hMap = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-        CloseHandle(hFile);
-        if (hMap) {
-            void* mapped = MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, fsize);
-            CloseHandle(hMap);
-            if (mapped) {
-                stream->mmap_base = mapped;
-                stream->mmap_size = fsize;
-                stream->file_data = static_cast<const char*>(mapped);
-                submit_response(stream);
-                nghttp3_conn_resume_stream(h3conn_, stream->stream_id);
-                flush_outbound();
-                return;
-            }
-        }
-    }
-#else
     if (file_fd >= 0) {
         void* mapped = ::mmap(nullptr, fsize, PROT_READ, MAP_SHARED, file_fd, 0);
         if (should_close_fd) {
@@ -874,7 +835,6 @@ void Http3Connection::setup_file_response(Http3Stream* stream) {
             return;
         }
     }
-#endif
 
     // Fallback: read file content into Response body
     if (!stream->res.file_path().empty()) {
@@ -935,34 +895,6 @@ bool Http3Connection::flush_outbound() {
                              reinterpret_cast<const ngtcp2_sockaddr*>(&remote_addr_), remote_addr_len_, nullptr);
 
     constexpr size_t BATCH_SIZE = 64;
-#if defined(_WIN32)
-    struct FlushBuffers {
-        alignas(64) uint8_t packet_bufs[BATCH_SIZE][1500];
-        iovec iovs[BATCH_SIZE];
-    };
-    static thread_local FlushBuffers fb;
-    size_t batch_count = 0;
-
-    auto flush_batch = [&]() -> bool {
-        if (batch_count == 0) return true;
-        for (size_t k = 0; k < batch_count; ++k) {
-            int sent = ::sendto(udp_fd_, reinterpret_cast<const char*>(fb.iovs[k].iov_base),
-                                static_cast<int>(fb.iovs[k].iov_len), 0,
-                                reinterpret_cast<const sockaddr*>(&remote_addr_), remote_addr_len_);
-            if (sent < 0) {
-                int err = WSAGetLastError();
-                if (err == WSAEWOULDBLOCK) {
-                    batch_count = 0;
-                    return true;
-                }
-                batch_count = 0;
-                return false;
-            }
-        }
-        batch_count = 0;
-        return true;
-    };
-#else
     struct FlushBuffers {
         alignas(64) uint8_t packet_bufs[BATCH_SIZE][1500];
         iovec iovs[BATCH_SIZE];
@@ -1044,7 +976,6 @@ bool Http3Connection::flush_outbound() {
         batch_count = 0;
         return true;
     };
-#endif
 
     const uint64_t now_ts = get_timestamp_ns();
     bool write_more = false;
