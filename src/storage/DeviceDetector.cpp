@@ -1,5 +1,4 @@
 #include "storage/DeviceDetector.h"
-#include "log/Logger.h"
 
 #include <sys/stat.h>
 #include <fcntl.h>

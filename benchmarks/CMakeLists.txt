@@ -5,7 +5,7 @@
 if(TARGET aegon_http)
     add_executable(bench_aegon servers/aegon/main.cpp)
     target_include_directories(bench_aegon PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(bench_aegon PRIVATE aegon_http aegon_core aegon_memory)
+    target_link_libraries(bench_aegon PRIVATE aegon_http aegon_core)
 
     add_custom_command(TARGET bench_aegon POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

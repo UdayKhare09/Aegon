@@ -1,7 +1,6 @@
 #if defined(_WIN32)
 
 #include "core/engine/IocpEngine.h"
-#include "log/Logger.h"
 #include <system_error>
 #include <cstring>
 
@@ -20,7 +19,6 @@ FnPtr load_wsa_extension(SOCKET s, GUID guid) {
                       &fn, sizeof(fn),
                       &bytes, nullptr, nullptr);
     if (rc != 0 || !fn) {
-        log::error("[IocpEngine] Failed to load Winsock extension function: {}", WSAGetLastError());
         return nullptr;
     }
     return fn;
@@ -31,7 +29,6 @@ FnPtr load_wsa_extension(SOCKET s, GUID guid) {
 IocpEngine::IocpEngine(const EngineConfig& config, BufferPool* pool)
     : buffer_pool_(pool) {
     init_iocp(config.entries);
-    log::debug("[IocpEngine] Initialized Windows IOCP backend");
 }
 
 IocpEngine::~IocpEngine() {
@@ -48,7 +45,6 @@ void IocpEngine::init_iocp(uint32_t /*entries*/) {
     iocp_ = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 1);
     if (!iocp_) {
         DWORD err = GetLastError();
-        log::error("[IocpEngine] CreateIoCompletionPort failed: {}", err);
         throw std::system_error(static_cast<int>(err), std::system_category(), "CreateIoCompletionPort failed");
     }
 
@@ -62,7 +58,6 @@ void IocpEngine::load_extension_functions() {
         dummy = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
     }
     if (dummy == INVALID_SOCKET) {
-        log::error("[IocpEngine] Failed to create probe socket for extensions: {}", WSAGetLastError());
         return;
     }
 
@@ -124,10 +119,6 @@ int IocpEngine::submit_and_wait(uint32_t /*min_complete*/) {
     );
 
     if (!ok) {
-        DWORD err = GetLastError();
-        if (err != WAIT_TIMEOUT) {
-            log::warn("[IocpEngine] GetQueuedCompletionStatusEx failed: {}", err);
-        }
         completed_count_ = 0;
     }
 

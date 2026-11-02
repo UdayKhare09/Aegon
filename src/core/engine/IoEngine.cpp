@@ -1,6 +1,5 @@
 #include "core/engine/IoEngine.h"
 #include "core/BufferPool.h"
-#include "log/Logger.h"
 #include <cstring>
 #include <cerrno>
 
@@ -378,8 +377,7 @@ std::unique_ptr<IoEngine> IoEngine::create(const EngineConfig& config) {
     // AutoProbe: attempt IoUringEngine, fall back to EpollEngine on failure
     try {
         return std::make_unique<IoUringEngine>(config, nullptr);
-    } catch (const std::exception& e) {
-        log::warn("[IoEngine] io_uring init failed ({}). Falling back to epoll engine.", e.what());
+    } catch (const std::exception&) {
         return std::make_unique<EpollEngine>(config, nullptr);
     }
 #else
@@ -404,8 +402,7 @@ std::unique_ptr<IoEngine> IoEngine::create(const EngineConfig& config, BufferPoo
     // AutoProbe: attempt IoUringEngine, fall back to EpollEngine on failure
     try {
         return std::make_unique<IoUringEngine>(config, &buffer_pool);
-    } catch (const std::exception& e) {
-        log::warn("[IoEngine] io_uring init failed ({}). Falling back to epoll engine.", e.what());
+    } catch (const std::exception&) {
         return std::make_unique<EpollEngine>(config, &buffer_pool);
     }
 #else

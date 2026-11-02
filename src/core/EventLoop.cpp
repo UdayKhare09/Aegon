@@ -1,5 +1,5 @@
 #include "core/EventLoop.h"
-#include "log/Logger.h"
+#include <cstdio>
 #include <stdexcept>
 #include <system_error>
 
@@ -28,8 +28,6 @@ EventLoop* EventLoop::current() noexcept {
 EventLoop::EventLoop(const EngineConfig& config, uint16_t pbuf_entries, size_t buffer_size)
     : buffer_pool_(DEFAULT_BGID, pbuf_entries, buffer_size),
       engine_(IoEngine::create(config, buffer_pool_)) {
-    log::debug("[EventLoop] Created event loop: engine={}, pbuf_entries={}, buf_size={}",
-               engine_->name(), pbuf_entries, buffer_size);
 }
 
 EventLoop::EventLoop(uint32_t entries, uint16_t pbuf_entries, size_t buffer_size)
@@ -37,8 +35,6 @@ EventLoop::EventLoop(uint32_t entries, uint16_t pbuf_entries, size_t buffer_size
     EngineConfig cfg;
     cfg.entries = entries;
     engine_ = IoEngine::create(cfg, buffer_pool_);
-    log::debug("[EventLoop] Created event loop: engine={}, entries={}, pbuf_entries={}, buf_size={}",
-               engine_->name(), entries, pbuf_entries, buffer_size);
 }
 
 EventLoop::~EventLoop() {
@@ -62,7 +58,6 @@ void EventLoop::pin_to_core(int core_id) {
     if (rc != 0) {
         throw std::system_error(rc, std::generic_category(), "pthread_setaffinity_np failed");
     }
-    log::debug("[EventLoop] Pinned thread to CPU core {}", core_id);
 #elif defined(_WIN32)
     if (core_id < 0 || core_id >= 64) {
         throw std::invalid_argument("Invalid core_id: " + std::to_string(core_id));
@@ -72,7 +67,6 @@ void EventLoop::pin_to_core(int core_id) {
         DWORD err = GetLastError();
         throw std::system_error(static_cast<int>(err), std::system_category(), "SetThreadAffinityMask failed");
     }
-    log::debug("[EventLoop] Pinned thread to CPU core {}", core_id);
 #endif
 }
 
@@ -105,15 +99,14 @@ void EventLoop::drain_post_queue() {
         try {
             fn();
         } catch (const std::exception& e) {
-            log::error("[EventLoop] Uncaught exception in posted task: {}", e.what());
+            std::fprintf(stderr, "[EventLoop] Uncaught exception in posted task: %s\n", e.what());
         } catch (...) {
-            log::error("[EventLoop] Uncaught unknown exception in posted task");
+            std::fprintf(stderr, "[EventLoop] Uncaught unknown exception in posted task\n");
         }
     }
 }
 
 void EventLoop::stop() noexcept {
-    log::debug("[EventLoop] Stop requested");
     running_.store(false, std::memory_order_release);
     if (engine_) {
         engine_->wakeup();
@@ -132,8 +125,6 @@ void EventLoop::run() {
     } guard(this);
 
     running_.store(true, std::memory_order_release);
-    log::debug("[EventLoop] Starting event loop (engine={}, root tasks={})",
-               engine_->name(), tasks_.size());
 
     while (running_.load(std::memory_order_acquire)) {
         drain_post_queue();
@@ -151,9 +142,9 @@ void EventLoop::run() {
                 try {
                     t.result();
                 } catch (const std::exception& e) {
-                    log::error("[EventLoop] Uncaught exception in root task: {}", e.what());
+                    std::fprintf(stderr, "[EventLoop] Uncaught exception in root task: %s\n", e.what());
                 } catch (...) {
-                    log::error("[EventLoop] Uncaught unknown exception in root task");
+                    std::fprintf(stderr, "[EventLoop] Uncaught unknown exception in root task\n");
                 }
                 return true;
             }
@@ -171,7 +162,6 @@ void EventLoop::run() {
     }
 
     running_.store(false, std::memory_order_release);
-    log::debug("[EventLoop] Event loop finished");
 }
 
 } // namespace aegon::core

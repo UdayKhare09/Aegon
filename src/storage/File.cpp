@@ -1,7 +1,6 @@
 #include "storage/File.h"
 #include "core/EventLoop.h"
 #include "core/engine/IoEngine.h"
-#include "log/Logger.h"
 
 #include <fcntl.h>
 #include <unistd.h>

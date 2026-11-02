@@ -1,6 +1,5 @@
 #include "core/engine/IoUringEngine.h"
 #include "core/BufferPool.h"
-#include "log/Logger.h"
 #include <unistd.h>
 #include <cstring>
 #include <system_error>
@@ -25,13 +24,9 @@ void IoUringEngine::init(const EngineConfig& config) {
     uint32_t entries = config.entries > 0 ? config.entries : 4096;
     int ret = io_uring_queue_init_params(entries, &ring_, &params);
     if (ret != 0) {
-        log::error("[IoUringEngine] io_uring_queue_init_params failed (entries={}, ret={}): {}",
-                   entries, ret, std::strerror(-ret));
         throw std::system_error(-ret, std::generic_category(), "io_uring_queue_init_params failed");
     }
     initialized_ = true;
-    log::debug("[IoUringEngine] Initialized ring fd={}, entries={}, flags={:#x}",
-               ring_.ring_fd, entries, params.flags);
 
     (void)io_uring_ring_dontfork(&ring_);
     (void)io_uring_register_ring_fd(&ring_);
@@ -152,11 +147,7 @@ struct io_uring_sqe* IoUringEngine::acquire_sqe() noexcept {
 
 int IoUringEngine::submit_and_wait(uint32_t min_complete) {
     if (!initialized_) return -1;
-    int ret = io_uring_submit_and_wait(&ring_, min_complete);
-    if (ret < 0 && ret != -EINTR && ret != -EBUSY) [[unlikely]] {
-        log::error("[IoUringEngine] io_uring_submit_and_wait failed: {}", std::strerror(-ret));
-    }
-    return ret;
+    return io_uring_submit_and_wait(&ring_, min_complete);
 }
 
 size_t IoUringEngine::process_completions() noexcept {
@@ -427,12 +418,10 @@ bool IoUringEngine::register_direct_fds(unsigned count) noexcept {
     std::vector<int> files(count, -1);
     int ret = io_uring_register_files(&ring_, files.data(), count);
     if (ret != 0) {
-        log::warn("[IoUringEngine] io_uring_register_files (count={}) failed: {}", count, std::strerror(-ret));
         return false;
     }
     files_registered_ = true;
     direct_fd_slots_  = count;
-    log::debug("[IoUringEngine] Registered direct file table with {} slots", count);
     return true;
 }
 

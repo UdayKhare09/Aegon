@@ -1,8 +1,8 @@
 #include "core/BufferPool.h"
-#include "log/Logger.h"
 #include <cstdlib>
 #include <system_error>
 #include <cstring>
+#include <string>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -71,14 +71,11 @@ void BufferPool::allocate_memory() {
 BufferPool::BufferPool(uint16_t bgid, uint16_t entries, size_t buffer_size)
     : bgid_(bgid), entries_(entries), buffer_size_(buffer_size) {
     if ((entries & (entries - 1)) != 0 || entries == 0) {
-        log::error("[BufferPool] BufferPool entries must be a power of 2, got {}", entries);
-        throw std::invalid_argument("BufferPool entries must be a power of 2");
+        throw std::invalid_argument("BufferPool entries must be a power of 2: " + std::to_string(entries));
     }
 
     allocate_memory();
     init_freelist();
-    log::debug("[BufferPool] Initialized user-mode pool bgid={}: entries={}, buf_size={} B, total_payload={} KB",
-               bgid_, entries_, buffer_size_, total_payload_ / 1024);
 }
 
 BufferPool::BufferPool(struct io_uring* ring, uint16_t bgid, uint16_t entries,
@@ -99,14 +96,12 @@ void BufferPool::register_with_io_uring(struct io_uring* ring, bool register_buf
         buf_ring_ = io_uring_setup_buf_ring(ring_, entries_, bgid_, 0, &ret);
         if (buf_ring_) break;
         if ((ret == -ENOMEM || ret == -EPERM) && entries_ > 1) {
-            log::warn("[BufferPool] io_uring_setup_buf_ring returned {}, halving entries to {}", ret, entries_ / 2);
             entries_ /= 2;
         } else {
             break;
         }
     }
     if (!buf_ring_) {
-        log::warn("[BufferPool] io_uring_setup_buf_ring failed: {}, falling back to user-space freelist", std::strerror(-ret));
         return;
     }
 
@@ -123,7 +118,6 @@ void BufferPool::register_with_io_uring(struct io_uring* ring, bool register_buf
         io_uring_buf_ring_add(buf_ring_, buf, static_cast<unsigned int>(buffer_size_), i, mask, i);
     }
     io_uring_buf_ring_advance(buf_ring_, entries_);
-    log::debug("[BufferPool] Attached to io_uring bgid={}: registered={}", bgid_, buffers_registered_);
 #else
     (void)ring;
     (void)register_buffers;

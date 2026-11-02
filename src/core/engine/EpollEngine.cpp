@@ -1,7 +1,6 @@
 #include "core/engine/EpollEngine.h"
 #include "core/BufferPool.h"
 #include "core/ThreadPool.h"
-#include "log/Logger.h"
 
 #include <unistd.h>
 #include <fcntl.h>
@@ -78,7 +77,6 @@ void EpollEngine::init(const EngineConfig& config) {
     epfd_ = ::epoll_create1(EPOLL_CLOEXEC);
     if (epfd_ < 0) {
         int err = errno;
-        log::error("[EpollEngine] epoll_create1 failed: {}", std::strerror(err));
         throw std::system_error(err, std::generic_category(), "epoll_create1 failed");
     }
 
@@ -91,12 +89,8 @@ void EpollEngine::init(const EngineConfig& config) {
         struct epoll_event ev{};
         ev.events = EPOLLIN;
         ev.data.fd = wakeup_fd_;
-        if (::epoll_ctl(epfd_, EPOLL_CTL_ADD, wakeup_fd_, &ev) != 0) {
-            log::warn("[EpollEngine] Failed to add wakeup_fd to epoll: {}", std::strerror(errno));
-        }
+        (void)::epoll_ctl(epfd_, EPOLL_CTL_ADD, wakeup_fd_, &ev);
     }
-
-    log::debug("[EpollEngine] Initialized epoll fd={}, event buffer={}", epfd_, ep_events_.size());
 }
 
 void EpollEngine::register_buffer_pool(BufferPool& pool, bool /*register_buffers*/) {
@@ -139,8 +133,6 @@ void EpollEngine::add_interest(int fd, uint32_t event_flag, IoAwaiter* aw, Inter
     if (::epoll_ctl(epfd_, op, fd, &ev) != 0) {
         if (op == EPOLL_CTL_ADD && errno == EEXIST) {
             (void)::epoll_ctl(epfd_, EPOLL_CTL_MOD, fd, &ev);
-        } else {
-            log::warn("[EpollEngine] epoll_ctl op={} fd={} failed: {}", op, fd, std::strerror(errno));
         }
     }
 }
@@ -454,7 +446,6 @@ int EpollEngine::submit_and_wait(uint32_t min_complete) {
 
     int nfds = ::epoll_wait(epfd_, ep_events_.data(), static_cast<int>(ep_events_.size()), timeout_ms);
     if (nfds < 0 && errno != EINTR) {
-        log::error("[EpollEngine] epoll_wait failed: {}", std::strerror(errno));
         return -errno;
     }
 
