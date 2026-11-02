@@ -11,7 +11,7 @@
 namespace aegon::http::middleware {
 
 struct CompressOptions {
-    int level{5};                // 1 = fastest, 12 = maximum (default 5 for optimal speed vs compression ratio)
+    int level{1};                // 1 = fastest, 12 = maximum (default 1 for maximum throughput)
     size_t min_size{256};        // Don't compress bodies smaller than this threshold (in bytes)
     bool gzip{true};             // Enable gzip compression (RFC 1952)
     bool deflate{true};          // Enable deflate compression (RFC 1950)
