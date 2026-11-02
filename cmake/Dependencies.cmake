@@ -39,7 +39,19 @@ endif()
 # ------------------------------------------------------------------------------
 # 3. Serialization: Glaze
 # ------------------------------------------------------------------------------
-find_package(glaze REQUIRED)
+find_package(glaze QUIET)
+if(NOT TARGET glaze::glaze)
+    include(FetchContent)
+    message(STATUS "[Dependency] glaze not found on system; acquiring via FetchContent (v9.1.0)...")
+    FetchContent_Declare(
+        glaze
+        GIT_REPOSITORY https://github.com/stephenberry/glaze.git
+        GIT_TAG        v9.1.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(glaze)
+endif()
+
 if(NOT TARGET Aegon::Ext::glaze)
     add_library(Aegon::Ext::glaze INTERFACE IMPORTED)
     target_link_libraries(Aegon::Ext::glaze INTERFACE glaze::glaze)
