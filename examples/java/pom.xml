@@ -6,7 +6,7 @@
 
     <groupId>com.teamzemo</groupId>
     <artifactId>aegon-java-examples</artifactId>
-    <version>0.2.1</version>
+    <version>0.3.2</version>
     <packaging>jar</packaging>
 
     <name>Aegon Java Examples</name>
@@ -21,7 +21,7 @@
         <dependency>
             <groupId>com.teamzemo</groupId>
             <artifactId>aegon-java</artifactId>
-            <version>0.2.1</version>
+            <version>0.3.2</version>
         </dependency>
     </dependencies>
 

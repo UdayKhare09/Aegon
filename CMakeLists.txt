@@ -5,8 +5,8 @@ cmake_minimum_required(VERSION 3.20)
 # ==============================================================================
 
 set(AEGON_VERSION_MAJOR 0)
-set(AEGON_VERSION_MINOR 2)
-set(AEGON_VERSION_PATCH 1)
+set(AEGON_VERSION_MINOR 3)
+set(AEGON_VERSION_PATCH 2)
 set(AEGON_VERSION_STRING "${AEGON_VERSION_MAJOR}.${AEGON_VERSION_MINOR}.${AEGON_VERSION_PATCH}")
 
 # Disallow in-source builds to prevent root directory pollution
@@ -94,8 +94,13 @@ set(CPACK_PACKAGE_VERSION_PATCH     ${AEGON_VERSION_PATCH})
 set(CPACK_PACKAGE_VERSION           "${AEGON_VERSION_STRING}")
 set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 
-# Binary packages: compressed tarballs (TGZ, TXZ), Debian (.deb), RPM (.rpm)
-set(CPACK_GENERATOR                 "TGZ;TXZ;DEB;RPM")
+# Binary packages: compressed tarballs (TGZ, TXZ), Debian (.deb), RPM (.rpm if rpmbuild is available)
+find_program(RPMBUILD_EXECUTABLE rpmbuild)
+if(RPMBUILD_EXECUTABLE)
+    set(CPACK_GENERATOR "TGZ;TXZ;DEB;RPM")
+else()
+    set(CPACK_GENERATOR "TGZ;TXZ;DEB")
+endif()
 
 # Debian Package (.deb)
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "${CPACK_PACKAGE_CONTACT}")

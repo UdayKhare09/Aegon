@@ -1,9 +1,9 @@
 # Maintainer: Uday Khare <udaykhare77@gmail.com>
 pkgname=aegon
-pkgver=0.2.1
+pkgver=0.3.2
 pkgrel=1
 pkgdesc="High-Performance C++23 Asynchronous Web & Data Framework"
-arch=('x86_64')
+arch=('x86_64' 'aarch64')
 url="https://github.com/UdayKhare09/Aegon"
 license=('MIT')
 depends=(

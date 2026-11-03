@@ -11,14 +11,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Utility responsible for discovering, extracting, and loading the native Aegon C library ({@code libaegon_c.so} / {@code aegon_c.dll}).
+ * Utility responsible for discovering, extracting, and loading the native Aegon C library ({@code libaegon_c.so}).
  *
  * <p>Lookup strategy:
  * <ol>
  *   <li>System property {@code aegon.library.path}</li>
- *   <li>Workspace build directory (e.g. {@code build/libaegon_c.so} or {@code ../../build/libaegon_c.so})</li>
+ *   <li>Workspace build directory (e.g. {@code build/src/c/libaegon_c.so})</li>
  *   <li>Standard {@code java.library.path} and OS system paths (via {@link System#loadLibrary(String)})</li>
- *   <li>Bundled native library inside the JAR classpath under {@code /native/<os>-<arch>/}</li>
+ *   <li>Bundled native library inside the JAR classpath under {@code /native/linux-<arch>/}</li>
  * </ol>
  */
 public final class NativeLibraryLoader {
@@ -57,15 +57,17 @@ public final class NativeLibraryLoader {
         }
 
         // 2. Search local build / development paths
-        String os = System.getProperty("os.name", "").toLowerCase();
-        String libFileName = os.contains("win") ? "aegon_c.dll"
-                : (os.contains("mac") || os.contains("darwin") ? "libaegon_c.dylib" : "libaegon_c.so");
+        String libFileName = "libaegon_c.so";
 
         List<String> probePaths = List.of(
                 libFileName,
+                "build/src/c/" + libFileName,
                 "build/" + libFileName,
+                "../build/src/c/" + libFileName,
                 "../build/" + libFileName,
+                "../../build/src/c/" + libFileName,
                 "../../build/" + libFileName,
+                "../../../build/src/c/" + libFileName,
                 "../../../build/" + libFileName,
                 "/usr/local/lib/" + libFileName,
                 "/usr/lib/" + libFileName
@@ -94,9 +96,8 @@ public final class NativeLibraryLoader {
 
         // 4. Try extracting from classpath resources
         String arch = System.getProperty("os.arch", "").toLowerCase();
-        String normalizedOs = os.contains("win") ? "windows" : (os.contains("mac") ? "macos" : "linux");
         String normalizedArch = (arch.contains("x86_64") || arch.contains("amd64")) ? "x86_64" : (arch.contains("aarch64") || arch.contains("arm64") ? "aarch64" : arch);
-        String resourcePath = "/native/" + normalizedOs + "-" + normalizedArch + "/" + libFileName;
+        String resourcePath = "/native/linux-" + normalizedArch + "/" + libFileName;
 
         try (InputStream in = NativeLibraryLoader.class.getResourceAsStream(resourcePath)) {
             if (in != null) {
@@ -110,7 +111,7 @@ public final class NativeLibraryLoader {
 
         throw new UnsatisfiedLinkError(
                 "Failed to locate and load native Aegon C library (" + libFileName + "). " +
-                "Please ensure libaegon_c.so / aegon_c.dll is in java.library.path or specify -Daegon.library.path=/path/to/" + libFileName
+                "Please ensure libaegon_c.so is in java.library.path or specify -Daegon.library.path=/path/to/" + libFileName
         );
     }
 }

@@ -11,13 +11,44 @@
 #include <immintrin.h>
 #endif
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 namespace aegon::core::simd {
+
+namespace detail {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+inline uint32_t neon_movemask_u8(uint8x16_t input) noexcept {
+    const uint8x16_t bitmask = {
+        0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
+        0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80
+    };
+    uint8x16_t masked = vandq_u8(input, bitmask);
+#if defined(__aarch64__)
+    uint8_t lo = vaddv_u8(vget_low_u8(masked));
+    uint8_t hi = vaddv_u8(vget_high_u8(masked));
+    return static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 8);
+#else
+    uint8x8_t lo = vget_low_u8(masked);
+    uint8x8_t hi = vget_high_u8(masked);
+    uint16x4_t sum_lo = vpaddl_u8(lo);
+    uint16x4_t sum_hi = vpaddl_u8(hi);
+    uint32x2_t s_lo = vpaddl_u16(sum_lo);
+    uint32x2_t s_hi = vpaddl_u16(sum_hi);
+    uint64x1_t f_lo = vpaddl_u32(s_lo);
+    uint64x1_t f_hi = vpaddl_u32(s_hi);
+    return static_cast<uint32_t>(vget_lane_u64(f_lo, 0)) | (static_cast<uint32_t>(vget_lane_u64(f_hi, 0)) << 8);
+#endif
+}
+#endif
+} // namespace detail
 
 /**
  * @brief Hardware-accelerated string and buffer scanning primitives with tiered fallbacks:
  * Tier 1: AVX-512BW / AVX-512VL (64 bytes/cycle with dedicated k-mask registers)
  * Tier 2: AVX2 + BMI2 (32 bytes/cycle with movemask + tzcnt)
- * Tier 3: SSE4.2 (16 bytes/cycle)
+ * Tier 3: SSE4.2 (x86_64) / ARM NEON (aarch64) (16 bytes/cycle)
  * Tier 4: Portable SWAR / Scalar fallback
  */
 class SimdString {
@@ -67,6 +98,17 @@ public:
             __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
             __m128i cmp = _mm_cmpeq_epi8(chunk, target);
             uint32_t mask = static_cast<uint32_t>(_mm_movemask_epi8(cmp));
+            if (mask != 0) {
+                return pos + i + std::countr_zero(mask);
+            }
+        }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        const uint8x16_t target = vdupq_n_u8(static_cast<uint8_t>(c));
+        size_t i = 0;
+        for (; i + 16 <= len; i += 16) {
+            uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i));
+            uint8x16_t cmp = vceqq_u8(chunk, target);
+            uint32_t mask = detail::neon_movemask_u8(cmp);
             if (mask != 0) {
                 return pos + i + std::countr_zero(mask);
             }
@@ -137,6 +179,21 @@ public:
             __m128i cmp_cr = _mm_cmpeq_epi8(chunk_cr, cr);
             __m128i cmp_lf = _mm_cmpeq_epi8(chunk_lf, lf);
             uint32_t mask = static_cast<uint32_t>(_mm_movemask_epi8(_mm_and_si128(cmp_cr, cmp_lf)));
+            if (mask != 0) {
+                return pos + i + std::countr_zero(mask);
+            }
+        }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        const uint8x16_t cr = vdupq_n_u8(static_cast<uint8_t>('\r'));
+        const uint8x16_t lf = vdupq_n_u8(static_cast<uint8_t>('\n'));
+        size_t i = 0;
+        for (; i + 17 <= len; i += 16) {
+            uint8x16_t chunk_cr = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i));
+            uint8x16_t chunk_lf = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i + 1));
+            uint8x16_t cmp_cr = vceqq_u8(chunk_cr, cr);
+            uint8x16_t cmp_lf = vceqq_u8(chunk_lf, lf);
+            uint8x16_t cmp = vandq_u8(cmp_cr, cmp_lf);
+            uint32_t mask = detail::neon_movemask_u8(cmp);
             if (mask != 0) {
                 return pos + i + std::countr_zero(mask);
             }
@@ -220,6 +277,23 @@ public:
             __m128i m0 = _mm_and_si128(_mm_cmpeq_epi8(c0, cr), _mm_cmpeq_epi8(c1, lf));
             __m128i m1 = _mm_and_si128(_mm_cmpeq_epi8(c2, cr), _mm_cmpeq_epi8(c3, lf));
             uint32_t mask = static_cast<uint32_t>(_mm_movemask_epi8(_mm_and_si128(m0, m1)));
+            if (mask != 0) {
+                return pos + i + std::countr_zero(mask);
+            }
+        }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        const uint8x16_t cr = vdupq_n_u8(static_cast<uint8_t>('\r'));
+        const uint8x16_t lf = vdupq_n_u8(static_cast<uint8_t>('\n'));
+        size_t i = 0;
+        for (; i + 19 <= len; i += 16) {
+            uint8x16_t c0 = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i));
+            uint8x16_t c1 = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i + 1));
+            uint8x16_t c2 = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i + 2));
+            uint8x16_t c3 = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i + 3));
+            uint8x16_t m0 = vandq_u8(vceqq_u8(c0, cr), vceqq_u8(c1, lf));
+            uint8x16_t m1 = vandq_u8(vceqq_u8(c2, cr), vceqq_u8(c3, lf));
+            uint8x16_t cmp = vandq_u8(m0, m1);
+            uint32_t mask = detail::neon_movemask_u8(cmp);
             if (mask != 0) {
                 return pos + i + std::countr_zero(mask);
             }
@@ -357,6 +431,31 @@ public:
                 }
             }
         }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        size_t i = 0;
+        if (len >= 16) {
+            const uint8x16_t c_A = vdupq_n_u8('A');
+            const uint8x16_t c_Z = vdupq_n_u8('Z');
+            const uint8x16_t to_lower = vdupq_n_u8(32);
+
+            for (; i + 16 <= len; i += 16) {
+                uint8x16_t v1 = vld1q_u8(reinterpret_cast<const uint8_t*>(p1 + i));
+                uint8x16_t v2 = vld1q_u8(reinterpret_cast<const uint8_t*>(p2 + i));
+
+                uint8x16_t is_u1 = vandq_u8(vcgeq_u8(v1, c_A), vcleq_u8(v1, c_Z));
+                uint8x16_t is_u2 = vandq_u8(vcgeq_u8(v2, c_A), vcleq_u8(v2, c_Z));
+
+                v1 = vorrq_u8(v1, vandq_u8(is_u1, to_lower));
+                v2 = vorrq_u8(v2, vandq_u8(is_u2, to_lower));
+
+                uint8x16_t cmp = vceqq_u8(v1, v2);
+#if defined(__aarch64__)
+                if (vminvq_u8(cmp) != 0xFF) return false;
+#else
+                if ((detail::neon_movemask_u8(cmp) & 0xFFFF) != 0xFFFF) return false;
+#endif
+            }
+        }
 #else
         size_t i = 0;
 #endif
@@ -421,7 +520,26 @@ public:
             if (ptr[i] == '%' || ptr[i] == '+') return true;
         }
         return false;
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        const uint8x16_t pct = vdupq_n_u8(static_cast<uint8_t>('%'));
+        const uint8x16_t plus = vdupq_n_u8(static_cast<uint8_t>('+'));
+        size_t i = 0;
+        for (; i + 16 <= len; i += 16) {
+            uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i));
+            uint8x16_t cmp = vorrq_u8(vceqq_u8(chunk, pct), vceqq_u8(chunk, plus));
+#if defined(__aarch64__)
+            if (vmaxvq_u8(cmp) != 0) return true;
 #else
+            if (detail::neon_movemask_u8(cmp) != 0) return true;
+#endif
+        }
+        for (; i < len; ++i) {
+            if (ptr[i] == '%' || ptr[i] == '+') return true;
+        }
+        return false;
+#else
+        (void)len;
+        (void)ptr;
         for (char c : sv) {
             if (c == '%' || c == '+') return true;
         }
@@ -498,6 +616,20 @@ public:
             __m128i valid = _mm_and_si128(is_gt, is_lt);
             if ((_mm_movemask_epi8(valid) & 0xFFFF) != 0xFFFF) return false;
         }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        const uint8x16_t low = vdupq_n_u8(0x20);
+        const uint8x16_t high = vdupq_n_u8(0x7F);
+        for (; i + 16 <= len; i += 16) {
+            uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i));
+            uint8x16_t is_gt = vcgtq_u8(chunk, low);
+            uint8x16_t is_lt = vcltq_u8(chunk, high);
+            uint8x16_t valid = vandq_u8(is_gt, is_lt);
+#if defined(__aarch64__)
+            if (vminvq_u8(valid) != 0xFF) return false;
+#else
+            if ((detail::neon_movemask_u8(valid) & 0xFFFF) != 0xFFFF) return false;
+#endif
+        }
 #endif
 
         for (; i < len; ++i) {
@@ -548,6 +680,26 @@ public:
             __m128i bad = _mm_or_si128(_mm_or_si128(is_cr, is_del), bad_ctl);
             if ((_mm_movemask_epi8(bad) & 0xFFFF) != 0) return false;
         }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        const uint8x16_t cr = vdupq_n_u8(static_cast<uint8_t>('\r'));
+        const uint8x16_t del = vdupq_n_u8(0x7F);
+        const uint8x16_t tab = vdupq_n_u8(static_cast<uint8_t>('\t'));
+        const uint8x16_t ctl_limit = vdupq_n_u8(0x20);
+
+        for (; i + 16 <= len; i += 16) {
+            uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i));
+            uint8x16_t is_cr = vceqq_u8(chunk, cr);
+            uint8x16_t is_del = vceqq_u8(chunk, del);
+            uint8x16_t is_tab = vceqq_u8(chunk, tab);
+            uint8x16_t is_ctl = vcltq_u8(chunk, ctl_limit);
+            uint8x16_t bad_ctl = vbicq_u8(is_ctl, is_tab);
+            uint8x16_t bad = vorrq_u8(vorrq_u8(is_cr, is_del), bad_ctl);
+#if defined(__aarch64__)
+            if (vmaxvq_u8(bad) != 0) return false;
+#else
+            if ((detail::neon_movemask_u8(bad) & 0xFFFF) != 0) return false;
+#endif
+        }
 #endif
 
         for (; i < len; ++i) {
@@ -590,6 +742,23 @@ public:
             __m128i is_lf = _mm_cmpeq_epi8(chunk, lf);
             __m128i bad = _mm_or_si128(_mm_or_si128(is_z, is_cr), is_lf);
             if ((_mm_movemask_epi8(bad) & 0xFFFF) != 0) return false;
+        }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        const uint8x16_t zero = vdupq_n_u8(0);
+        const uint8x16_t cr = vdupq_n_u8(static_cast<uint8_t>('\r'));
+        const uint8x16_t lf = vdupq_n_u8(static_cast<uint8_t>('\n'));
+
+        for (; i + 16 <= len; i += 16) {
+            uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(ptr + i));
+            uint8x16_t is_z = vceqq_u8(chunk, zero);
+            uint8x16_t is_cr = vceqq_u8(chunk, cr);
+            uint8x16_t is_lf = vceqq_u8(chunk, lf);
+            uint8x16_t bad = vorrq_u8(vorrq_u8(is_z, is_cr), is_lf);
+#if defined(__aarch64__)
+            if (vmaxvq_u8(bad) != 0) return false;
+#else
+            if ((detail::neon_movemask_u8(bad) & 0xFFFF) != 0) return false;
+#endif
         }
 #endif
 

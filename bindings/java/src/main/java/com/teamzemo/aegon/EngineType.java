@@ -5,7 +5,7 @@ package com.teamzemo.aegon;
  */
 public enum EngineType {
     /**
-     * Probes and selects the highest-performance engine supported by the OS (io_uring -> epoll -> IOCP).
+     * Probes and selects the highest-performance engine supported by the OS (io_uring -> epoll).
      */
     AUTO(0),
 
@@ -17,17 +17,7 @@ public enum EngineType {
     /**
      * Standard Linux epoll edge-triggered reactor engine.
      */
-    EPOLL(2),
-
-    /**
-     * BSD / macOS kqueue (reserved).
-     */
-    KQUEUE(3),
-
-    /**
-     * Windows I/O Completion Ports (IOCP).
-     */
-    IOCP(4);
+    EPOLL(2);
 
     private final int nativeCode;
 

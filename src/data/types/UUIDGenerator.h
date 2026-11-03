@@ -10,6 +10,8 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
 #endif
 
 namespace aegon::data::types {
@@ -280,6 +282,20 @@ public:
     [[nodiscard]] static inline UUID v4() noexcept {
 #if defined(__AVX2__)
         return detail::tl_v4_buf.next();
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        UUID uuid;
+        uint64x2_t rnd = { detail::tl_rng.next_u64(), detail::tl_rng.next_u64() };
+        const uint8x16_t and_mask = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0xFF,
+            0x3F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+        };
+        const uint8x16_t or_mask = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00,
+            0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        };
+        uint8x16_t res = vorrq_u8(vandq_u8(vreinterpretq_u8_u64(rnd), and_mask), or_mask);
+        vst1q_u8(uuid.data.data(), res);
+        return uuid;
 #else
         UUID uuid;
         uint64_t w0 = detail::tl_rng.next_u64();
@@ -372,6 +388,24 @@ public:
             __m256i uuid01 = _mm256_unpacklo_epi64(rnd_a, rnd_b);
             __m256i result = _mm256_or_si256(_mm256_and_si256(uuid01, and_mask), or_mask);
             _mm256_storeu_si256(reinterpret_cast<__m256i*>(&out[i]), result);
+        }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+        const uint8x16_t and_mask = {
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0xFF,
+            0x3F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+        };
+        const uint8x16_t or_mask = {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00,
+            0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        };
+
+        for (; i + 2 <= n; i += 2) {
+            uint64x2_t rnd_a = { detail::tl_rng.next_u64(), detail::tl_rng.next_u64() };
+            uint64x2_t rnd_b = { detail::tl_rng.next_u64(), detail::tl_rng.next_u64() };
+            uint8x16_t res_a = vorrq_u8(vandq_u8(vreinterpretq_u8_u64(rnd_a), and_mask), or_mask);
+            uint8x16_t res_b = vorrq_u8(vandq_u8(vreinterpretq_u8_u64(rnd_b), and_mask), or_mask);
+            vst1q_u8(out[i].data.data(), res_a);
+            vst1q_u8(out[i + 1].data.data(), res_b);
         }
 #endif
 

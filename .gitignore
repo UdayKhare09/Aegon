@@ -27,6 +27,7 @@ dependency-reduced-pom.xml
 scratch
 
 # Packaging build artifacts
+dist/
 *.pkg.tar.*
 packaging/arch/pkg/
 packaging/arch/src/

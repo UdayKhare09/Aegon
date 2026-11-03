@@ -24,7 +24,7 @@ public class NativeLoadTest {
         MemorySegment verStrPtr = (MemorySegment) CoreFfi.MH_aegon_version_string.invokeExact();
         String verStr = FfiSupport.readCString(verStrPtr);
         assertNotNull(verStr);
-        assertTrue(verStr.startsWith("0.2"), "Version string should start with 0.2, got: " + verStr);
+        assertTrue(verStr.startsWith("0.3"), "Version string should start with 0.3, got: " + verStr);
     }
 
     @Test

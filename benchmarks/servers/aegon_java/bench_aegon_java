@@ -10,9 +10,12 @@ if [ ! -f "${JAR_PATH}" ]; then
     mvn -f "${SCRIPT_DIR}/pom.xml" package -DskipTests
 fi
 
-LIB_PATH="${ROOT_DIR}/build/libaegon_c.so"
+LIB_PATH="${ROOT_DIR}/build/src/c/libaegon_c.so"
 if [ ! -f "${LIB_PATH}" ]; then
-    LIB_PATH="${ROOT_DIR}/build/libaegon_c.so.0.2.1"
+    LIB_PATH="${ROOT_DIR}/build/libaegon_c.so"
+fi
+if [ ! -f "${LIB_PATH}" ]; then
+    LIB_PATH="${ROOT_DIR}/build/src/c/libaegon_c.so.0.3.2"
 fi
 
 exec java \

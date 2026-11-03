@@ -74,7 +74,7 @@ public final class QuickstartServer {
             // Running on a dedicated Project Loom Virtual Thread!
             // Safe to execute blocking DB queries, file I/O, or remote HTTP calls:
             Thread.sleep(10);
-            ctx.json(new Greeting("Hello from Virtual Thread!", "0.2.1", System.currentTimeMillis()));
+            ctx.json(new Greeting("Hello from Virtual Thread!", "0.3.2", System.currentTimeMillis()));
         });
 
         router.postAsync("/api/v1/users", ctx -> {

@@ -6,7 +6,7 @@
 
     <groupId>com.teamzemo</groupId>
     <artifactId>aegon-java</artifactId>
-    <version>0.2.1</version>
+    <version>0.3.2</version>
     <packaging>jar</packaging>
 
     <name>Aegon Java</name>
@@ -18,7 +18,55 @@
         <maven.compiler.release>22</maven.compiler.release>
         <fastjson2.version>2.0.53</fastjson2.version>
         <junit.version>5.11.3</junit.version>
+        <native.platform>linux-x86_64</native.platform>
     </properties>
+
+    <profiles>
+        <profile>
+            <id>arch-x86_64</id>
+            <activation>
+                <os>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.platform>linux-x86_64</native.platform>
+            </properties>
+        </profile>
+        <profile>
+            <id>arch-x86_64-alt</id>
+            <activation>
+                <os>
+                    <arch>x86_64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.platform>linux-x86_64</native.platform>
+            </properties>
+        </profile>
+        <profile>
+            <id>arch-aarch64</id>
+            <activation>
+                <os>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.platform>linux-aarch64</native.platform>
+            </properties>
+        </profile>
+        <profile>
+            <id>arch-arm64</id>
+            <activation>
+                <os>
+                    <arch>arm64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.platform>linux-aarch64</native.platform>
+            </properties>
+        </profile>
+    </profiles>
 
     <dependencies>
         <!-- Fastjson2: SIMD-accelerated high performance JSON serializer/deserializer -->
@@ -52,9 +100,9 @@
                         </goals>
                         <configuration>
                             <target>
-                                <mkdir dir="${project.build.outputDirectory}/native/linux-x86_64"/>
-                                <copy file="${project.basedir}/../../build/libaegon_c.so.0.2.1"
-                                      tofile="${project.build.outputDirectory}/native/linux-x86_64/libaegon_c.so"
+                                <mkdir dir="${project.build.outputDirectory}/native/${native.platform}"/>
+                                <copy file="${project.basedir}/../../build/src/c/libaegon_c.so"
+                                      tofile="${project.build.outputDirectory}/native/${native.platform}/libaegon_c.so"
                                       failonerror="false"/>
                             </target>
                         </configuration>
@@ -79,7 +127,7 @@
                 <configuration>
                     <argLine>--enable-native-access=ALL-UNNAMED</argLine>
                     <systemPropertyVariables>
-                        <aegon.library.path>${project.basedir}/../../build/libaegon_c.so</aegon.library.path>
+                        <aegon.library.path>${project.basedir}/../../build/src/c/libaegon_c.so</aegon.library.path>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

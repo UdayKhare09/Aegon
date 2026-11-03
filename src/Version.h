@@ -9,10 +9,10 @@
  */
 
 #define AEGON_VERSION_MAJOR 0
-#define AEGON_VERSION_MINOR 2
-#define AEGON_VERSION_PATCH 1
+#define AEGON_VERSION_MINOR 3
+#define AEGON_VERSION_PATCH 2
 #define AEGON_VERSION_PRERELEASE ""
-#define AEGON_VERSION_STRING "0.2.1"
+#define AEGON_VERSION_STRING "0.3.2"
 
 /**
  * @brief Helper macro for compile-time version checks:

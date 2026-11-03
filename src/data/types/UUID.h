@@ -16,6 +16,8 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
 #endif
 
 namespace aegon::data::types {
@@ -222,6 +224,35 @@ struct alignas(16) UUID {
         uint32_t c28_31 = _mm_cvtsi128_si32(_mm_srli_si128(ascii_1, 12));
         std::memcpy(out + 32, &c28_31, 4);
 
+#elif defined(__aarch64__)
+        uint8x16_t raw = vld1q_u8(data.data());
+        uint8x16_t hi = vshrq_n_u8(raw, 4);
+        uint8x16_t lo = vandq_u8(raw, vdupq_n_u8(0x0F));
+
+        uint8x16_t nibbles_0 = vzip1q_u8(hi, lo);
+        uint8x16_t nibbles_1 = vzip2q_u8(hi, lo);
+
+        uint8x16_t hex_lut = vld1q_u8(reinterpret_cast<const uint8_t*>(detail::HEX_DIGITS_LOWER));
+        uint8x16_t ascii_0 = vqtbl1q_u8(hex_lut, nibbles_0);
+        uint8x16_t ascii_1 = vqtbl1q_u8(hex_lut, nibbles_1);
+
+        vst1_u8(reinterpret_cast<uint8_t*>(out), vget_low_u8(ascii_0));
+        out[8] = '-';
+
+        vst1_lane_u32(reinterpret_cast<uint32_t*>(out + 9), vreinterpret_u32_u8(vget_high_u8(ascii_0)), 0);
+        out[13] = '-';
+
+        vst1_lane_u32(reinterpret_cast<uint32_t*>(out + 14), vreinterpret_u32_u8(vget_high_u8(ascii_0)), 1);
+        out[18] = '-';
+
+        vst1_lane_u32(reinterpret_cast<uint32_t*>(out + 19), vreinterpret_u32_u8(vget_low_u8(ascii_1)), 0);
+        out[23] = '-';
+
+        uint8x8_t mid1 = vext_u8(vget_low_u8(ascii_1), vget_high_u8(ascii_1), 4);
+        vst1_u8(reinterpret_cast<uint8_t*>(out + 24), mid1);
+
+        vst1_lane_u32(reinterpret_cast<uint32_t*>(out + 32), vreinterpret_u32_u8(vget_high_u8(ascii_1)), 1);
+
 #else
         size_t out_idx = 0;
         for (size_t i = 0; i < 16; ++i) {
@@ -396,7 +427,7 @@ namespace aegon::data {
 using types::UUID;
 } // namespace aegon::data
 
-// Hardware-accelerated std::hash specialization using SSE4.2 CRC32 instructions
+// Hardware-accelerated std::hash specialization using SSE4.2 / ARM CRC32 instructions
 template <>
 struct std::hash<aegon::data::types::UUID> {
     [[nodiscard]] size_t operator()(const aegon::data::types::UUID& uuid) const noexcept {
@@ -404,6 +435,9 @@ struct std::hash<aegon::data::types::UUID> {
 #if defined(__SSE4_2__)
         uint64_t h = _mm_crc32_u64(0x429562UL, ptr[0]);
         return static_cast<size_t>(_mm_crc32_u64(h, ptr[1]));
+#elif defined(__ARM_FEATURE_CRC32)
+        uint32_t h = __builtin_arm_crc32cd(0x429562U, ptr[0]);
+        return static_cast<size_t>(__builtin_arm_crc32cd(h, ptr[1]));
 #else
         uint64_t h = ptr[0] ^ (ptr[1] + 0x9e3779b97f4a7c15ULL + (ptr[0] << 6) + (ptr[0] >> 2));
         return static_cast<size_t>(h);

@@ -8,9 +8,38 @@
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <immintrin.h>
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
 #endif
 
 namespace aegon::http::simd {
+
+namespace detail {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+inline uint32_t neon_movemask_u8(uint8x16_t input) noexcept {
+    const uint8x16_t bitmask = {
+        0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
+        0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80
+    };
+    uint8x16_t masked = vandq_u8(input, bitmask);
+#if defined(__aarch64__)
+    uint8_t lo = vaddv_u8(vget_low_u8(masked));
+    uint8_t hi = vaddv_u8(vget_high_u8(masked));
+    return static_cast<uint32_t>(lo) | (static_cast<uint32_t>(hi) << 8);
+#else
+    uint8x8_t lo = vget_low_u8(masked);
+    uint8x8_t hi = vget_high_u8(masked);
+    uint16x4_t sum_lo = vpaddl_u8(lo);
+    uint16x4_t sum_hi = vpaddl_u8(hi);
+    uint32x2_t s_lo = vpaddl_u16(sum_lo);
+    uint32x2_t s_hi = vpaddl_u16(sum_hi);
+    uint64x1_t f_lo = vpaddl_u32(s_lo);
+    uint64x1_t f_hi = vpaddl_u32(s_hi);
+    return static_cast<uint32_t>(vget_lane_u64(f_lo, 0)) | (static_cast<uint32_t>(vget_lane_u64(f_hi, 0)) << 8);
+#endif
+}
+#endif
+} // namespace detail
 
 /**
  * @brief Computes the length of the common prefix between two string_views using SIMD.
@@ -50,6 +79,17 @@ inline size_t simd_common_prefix(std::string_view a, std::string_view b) noexcep
         __m128i v2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p2 + len));
         __m128i cmp = _mm_cmpeq_epi8(v1, v2);
         uint32_t mask = static_cast<uint32_t>(_mm_movemask_epi8(cmp)) & 0xFFFFU;
+        if (mask != 0xFFFFU) {
+            return len + std::countr_zero((~mask) & 0xFFFFU);
+        }
+        len += 16;
+    }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+    while (len + 16 <= max_len) {
+        uint8x16_t v1 = vld1q_u8(reinterpret_cast<const uint8_t*>(p1 + len));
+        uint8x16_t v2 = vld1q_u8(reinterpret_cast<const uint8_t*>(p2 + len));
+        uint8x16_t cmp = vceqq_u8(v1, v2);
+        uint32_t mask = detail::neon_movemask_u8(cmp) & 0xFFFFU;
         if (mask != 0xFFFFU) {
             return len + std::countr_zero((~mask) & 0xFFFFU);
         }
@@ -111,6 +151,17 @@ inline size_t simd_find_char(std::string_view s, char ch) noexcept {
         __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p + offset));
         __m128i cmp = _mm_cmpeq_epi8(chunk, target);
         uint32_t mask = static_cast<uint32_t>(_mm_movemask_epi8(cmp)) & 0xFFFFU;
+        if (mask != 0) {
+            return offset + std::countr_zero(mask);
+        }
+        offset += 16;
+    }
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+    const uint8x16_t target = vdupq_n_u8(static_cast<uint8_t>(ch));
+    while (offset + 16 <= size) {
+        uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(p + offset));
+        uint8x16_t cmp = vceqq_u8(chunk, target);
+        uint32_t mask = detail::neon_movemask_u8(cmp) & 0xFFFFU;
         if (mask != 0) {
             return offset + std::countr_zero(mask);
         }
