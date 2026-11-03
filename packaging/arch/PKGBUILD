@@ -25,7 +25,7 @@ build() {
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
         -DAEGON_BUILD_TESTS=OFF \
-        -DAEGON_BUILD_SAMPLES=OFF \
+        -DAEGON_BUILD_C_EXAMPLES=OFF \
         -DAEGON_BUILD_BENCHMARKS=OFF
     cmake --build "${srcdir}/build"
 }

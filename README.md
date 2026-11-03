@@ -7,15 +7,26 @@
 </p>
 
 [![C++ Standard](https://img.shields.io/badge/C%2B%2B-23-blue.svg)](https://en.cppreference.com/w/cpp/23)
+[![Version](https://img.shields.io/badge/Release-v0.3.2-blue.svg)](https://github.com/UdayKhare09/Aegon/releases)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-lightgrey.svg)]()
+[![Architecture](https://img.shields.io/badge/Arch-x86__64%20%7C%20aarch64-informational.svg)]()
+[![SIMD](https://img.shields.io/badge/SIMD-AVX--512%20%7C%20AVX2%20%7C%20NEON-success.svg)]()
 [![Async Engine](https://img.shields.io/badge/I%2FO-io__uring%20%7C%20epoll%20%7C%20IOCP-orange.svg)]()
 [![HTTP Arena H/1.1](https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h1.json)](https://http-arena.com/#type=emerging,flagship&tuned=0)
 [![HTTP Arena H/2](https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h2.json)](https://http-arena.com/#type=emerging,flagship&tuned=0)
 [![HTTP Arena WebSocket](https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/ws.json)](https://http-arena.com/#type=emerging,flagship&tuned=0)
 [![HTTP Arena H/3](https://img.shields.io/endpoint?url=https://http-arena.com/badge/aegon/h3.json)](https://http-arena.com/#type=emerging,flagship&tuned=0)
 
-Aegon is a modern, unified, thread-per-core C++23 application framework engineered for extreme throughput, low latency, and ergonomic developer experience. Featuring a compile-time **dual-mode routing engine** (seamlessly uniting zero-allocation synchronous handlers with standard C++23 `co_await` coroutines), Kernel TLS (`kTLS`) hardware offload, and native HTTP/1.1, HTTP/2, and HTTP/3 support, Aegon eliminates callback spaghetti while providing an integrated reflection-free SQL ORM with multi-tier L2 caching, a high-throughput Redis client, and an asynchronous multi-protocol HTTP client.
+Aegon is a modern, unified, thread-per-core C++23 application framework engineered for extreme throughput, sub-millisecond latency, and ergonomic developer experience across both **x86_64** and **ARM64 (aarch64)** platforms.
+
+### Key Architectural Highlights
+- **Compile-Time Dual-Mode Routing**: Seamlessly unites zero-allocation synchronous handlers with standard C++23 `co_await` coroutines.
+- **Tiered SIMD Acceleration**: Step-down vectorized processing for string operations, HTTP routing, header validation, and UUID generation supporting **AVX-512**, **AVX2**, and **SSE4.2** on x86, with **ARM NEON** parity on AArch64.
+- **Extreme Async I/O**: High-efficiency Linux `io_uring` and `epoll` engines with Kernel TLS (`kTLS`) hardware offload.
+- **Full Protocol Suite**: Native, zero-copy implementations of HTTP/1.1, HTTP/2, HTTP/3 (QUIC), and RFC 6455 WebSockets.
+- **Unified Data & Caching**: Reflection-free SQL ORM with multi-tier L2 caching and high-throughput Redis client.
+- **Polyglot & C ABI**: First-class C ABI (`libaegon_c`) with high-performance **Java 22+ Foreign Function & Memory (FFM)** bindings.
 
 ---
 
@@ -177,13 +188,48 @@ Unlike peak-throughput tests, **HttpArena Latency profiles** fix the offered loa
 
 ---
 
-## Building & Installation
+## Installation & Packaging
+
+### Pre-Built Packages (Linux x86_64)
+
+Download the latest release artifacts directly from [GitHub Releases](https://github.com/UdayKhare09/Aegon/releases):
+
+#### Arch Linux (`pacman`)
+```bash
+sudo pacman -U aegon-0.3.2-1-x86_64.pkg.tar.zst
+```
+
+#### Debian / Ubuntu (`apt` / `dpkg`)
+```bash
+sudo apt install ./aegon-0.3.2-Linux-x86_64.deb
+# or: sudo dpkg -i aegon-0.3.2-Linux-x86_64.deb
+```
+
+#### Fedora / RHEL / CentOS (`dnf` / `rpm`)
+```bash
+sudo dnf install ./aegon-0.3.2-Linux-x86_64.rpm
+# or: sudo rpm -i aegon-0.3.2-Linux-x86_64.rpm
+```
+
+#### Java 22+ (FFM Bindings)
+Include the standalone jar embedding `libaegon_c`:
+```xml
+<dependency>
+    <groupId>com.teamzemo.aegon</groupId>
+    <artifactId>aegon-java</artifactId>
+    <version>0.3.2</version>
+</dependency>
+```
+
+---
+
+## Building from Source
 
 ### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/UdayKhare09/Aegon.git
-cd aegon
+cd Aegon
 ```
 
 ### 2. Configure with CMake
@@ -192,7 +238,8 @@ cd aegon
 cmake -B build -S . \
     -DCMAKE_BUILD_TYPE=Release \
     -DAEGON_BUILD_TESTS=ON \
-    -DAEGON_BUILD_SAMPLES=ON
+    -DAEGON_BUILD_C_ABI=ON \
+    -DAEGON_BUILD_C_EXAMPLES=ON
 ```
 
 #### Build Configuration Flags
@@ -200,8 +247,9 @@ cmake -B build -S . \
 | Flag | Default | Description |
 | :--- | :---: | :--- |
 | `AEGON_BUILD_TESTS` | `ON` | Build the comprehensive CTest test suite |
-| `AEGON_BUILD_SAMPLES` | `ON` | Build reference sample services (`samples/adv`, `samples/sse`) |
-| `AEGON_BUILD_BENCHMARKS` | `ON` | Build the unified performance benchmarking suite |
+| `AEGON_BUILD_C_ABI` | `ON` | Build the shared and static C ABI wrapper libraries (`libaegon_c`) |
+| `AEGON_BUILD_C_EXAMPLES` | `OFF` | Build C ABI reference examples (`examples/c`) |
+| `AEGON_BUILD_BENCHMARKS` | `OFF` | Build the unified performance benchmarking suite |
 
 ### 3. Compile the Framework
 
