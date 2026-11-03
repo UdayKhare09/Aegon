@@ -51,7 +51,7 @@ When an incoming request arrives:
 
 ## Core Signatures & Adapters
 
-Middleware types are defined in `#include <http/Middleware.h>`. The fundamental types are:
+Middleware types are defined in `#include <aegon/http/Middleware.h>`. The fundamental types are:
 
 ```cpp
 namespace aegon::http {
@@ -120,8 +120,8 @@ Through `make_middleware()`, Aegon automatically adapts **four callable signatur
 This example measures total request execution time using `std::chrono::steady_clock`:
 
 ```cpp
-#include <http/Server.h>
-#include <http/Middleware.h>
+#include <aegon/http/Server.h>
+#include <aegon/http/Middleware.h>
 #include <chrono>
 
 using namespace aegon::http;
@@ -327,8 +327,8 @@ Aegon ships with an optimized suite of production-ready middlewares:
 
 | Middleware | Header | Description |
 | :--- | :--- | :--- |
-| [**Access Logger**](/docs/http/middlewares/access-log) | `#include <http/middleware/AccessLog.h>` | High-speed structured logging (`Combined`, `Common`, `Json`, `Custom`) with slow request detection. |
-| [**Compression**](/docs/http/middlewares/compress) | `#include <http/middleware/Compress.h>` | SIMD-accelerated dynamic HTTP response compression (`gzip`, `deflate`) using `libdeflate`. |
-| [**CORS**](/docs/http/middlewares/cors) | `#include <http/middleware/Cors.h>` | W3C Fetch specification CORS handling with origin validation, subdomain wildcards, and preflight caching. |
-| [**Security Headers**](/docs/http/middlewares/security-headers) | `#include <http/middleware/SecurityHeaders.h>` | Defense-in-depth security headers (CSP, HSTS, X-Content-Type-Options, Frame-Options, Referrer-Policy). |
-| [**Authentication & RBAC**](/docs/http/middlewares/auth) | `#include <http/middleware/Auth.h>` | Bearer, Cookie, API Key, and Basic auth extractors with compile-time type-safe RBAC role guards. |
+| [**Access Logger**](/docs/http/middlewares/access-log) | `#include <aegon/http/middleware/AccessLog.h>` | High-speed structured logging (`Combined`, `Common`, `Json`, `Custom`) with slow request detection. |
+| [**Compression**](/docs/http/middlewares/compress) | `#include <aegon/http/middleware/Compress.h>` | SIMD-accelerated dynamic HTTP response compression (`gzip`, `deflate`) using `libdeflate`. |
+| [**CORS**](/docs/http/middlewares/cors) | `#include <aegon/http/middleware/Cors.h>` | W3C Fetch specification CORS handling with origin validation, subdomain wildcards, and preflight caching. |
+| [**Security Headers**](/docs/http/middlewares/security-headers) | `#include <aegon/http/middleware/SecurityHeaders.h>` | Defense-in-depth security headers (CSP, HSTS, X-Content-Type-Options, Frame-Options, Referrer-Policy). |
+| [**Authentication & RBAC**](/docs/http/middlewares/auth) | `#include <aegon/http/middleware/Auth.h>` | Bearer, Cookie, API Key, and Basic auth extractors with compile-time type-safe RBAC role guards. |

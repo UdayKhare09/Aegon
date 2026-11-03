@@ -1,0 +1,240 @@
+---
+title: Usage & Quickstart
+description: Getting started guide to building high-performance services with Aegon using modern C++23, CMake, C ABI, or Java.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Terminal, Code2, Server, Play, Coffee } from 'lucide-react';
+
+This guide walks you through setting up your first project, building a microservice with Aegon, and running it with maximum hardware utilization.
+
+---
+
+## 1. Setting Up a C++23 CMake Project
+
+Create a new directory for your project:
+
+```bash
+mkdir aegon-demo && cd aegon-demo
+```
+
+Create a `CMakeLists.txt` file configured for C++23 and linking against Aegon:
+
+```cmake title="CMakeLists.txt"
+cmake_minimum_required(VERSION 3.20)
+project(aegon_demo CXX)
+
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find system-installed Aegon package
+find_package(Aegon CONFIG REQUIRED)
+
+# Define executable
+add_executable(my_service src/main.cpp)
+
+# Link Aegon modules (Aegon::http automatically pulls in Aegon::core and Aegon::net)
+target_link_libraries(my_service PRIVATE
+    Aegon::http
+    Aegon::core
+)
+```
+
+<Callout type="info">
+If you installed Aegon via `.deb`, `.rpm`, or Arch `.pkg.tar.zst`, CMake will find it automatically at `/usr/lib/cmake/Aegon/AegonConfig.cmake`. If installed to a custom prefix, pass `-DCMAKE_PREFIX_PATH=/custom/path`.
+</Callout>
+
+---
+
+## 2. Writing Your First Service
+
+Create `src/main.cpp`:
+
+```cpp title="src/main.cpp"
+#include <aegon/http/Server.h>
+#include <aegon/core/Task.h>
+#include <aegon/http/middleware/AccessLog.h>
+#include <aegon/http/middleware/Cors.h>
+#include <iostream>
+
+using namespace aegon;
+
+// Request DTO with compile-time reflection
+struct CreateUserRequest {
+    std::string username;
+    std::string email;
+};
+
+// Response DTO
+struct UserResponse {
+    uint64_t id;
+    std::string username;
+    std::string email;
+    std::string status;
+};
+
+int main() {
+    // 1. Initialize the HTTP Router
+    http::Router router;
+
+    // 2. Attach global middlewares
+    router.use(http::middleware::AccessLogMiddleware());
+    router.use(http::middleware::CorsMiddleware());
+
+    // 3. Ultra-Fast Synchronous Endpoint (0 heap allocations, 0 coroutine frames)
+    router.get("/health", [](http::Context& ctx) {
+        ctx.res().status(http::StatusCode::Ok).text("OK");
+    });
+
+    // 4. Coroutine-based REST Endpoint with automatic JSON binding
+    router.post("/api/v1/users", [](http::Context& ctx) -> core::Task<void> {
+        // Automatically deserialize request body; emits 400 Bad Request on parse failure
+        auto req = ctx.bind_json<CreateUserRequest>();
+        if (!req) {
+            co_return;
+        }
+
+        UserResponse res{
+            .id = 42,
+            .username = std::move(req->username),
+            .email = std::move(req->email),
+            .status = "active"
+        };
+
+        // Serialize response directly into output buffer
+        ctx.res().status(http::StatusCode::Created).json(res);
+        co_return;
+    });
+
+    // 5. Initialize Server and bind to port
+    http::Server server(std::move(router));
+    server.listen(8080, "0.0.0.0");
+
+    // Optional: Enable HTTPS / HTTP/2 / HTTP/3
+    // server.enable_tls("/path/to/cert.pem", "/path/to/key.pem");
+    // server.listen_tls(8443);
+
+    std::cout << "Starting server on http://0.0.0.0:8080\n";
+
+    // 6. Run event loop cluster pinned to all CPU cores
+    server.run(std::thread::hardware_concurrency());
+    return 0;
+}
+```
+
+---
+
+## 3. Compiling and Running
+
+Build the executable using CMake and Ninja:
+
+```bash
+cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+Run the server:
+
+```bash
+./build/my_service
+```
+
+### Test Endpoints
+
+In another terminal, test the service using `curl`:
+
+<Tabs items={["Plaintext Health Check", "JSON POST Request"]}>
+  <Tab value="Plaintext Health Check">
+    ```bash
+    curl -i http://localhost:8080/health
+    ```
+    ```http
+    HTTP/1.1 200 OK
+    content-type: text/plain
+    content-length: 2
+
+    OK
+    ```
+  </Tab>
+  <Tab value="JSON POST Request">
+    ```bash
+    curl -i -X POST http://localhost:8080/api/v1/users \
+      -H "Content-Type: application/json" \
+      -d '{"username": "uday", "email": "uday@example.com"}'
+    ```
+    ```http
+    HTTP/1.1 201 Created
+    content-type: application/json
+
+    {"id":42,"username":"uday","email":"uday@example.com","status":"active"}
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## 4. Pure C Application (C ABI)
+
+Aegon provides a first-class C ABI (`libaegon_c`), allowing developers to write high-performance servers in pure C or integrate Aegon into other programming languages.
+
+Create a `main.c` file:
+
+```c title="main.c"
+#include <aegon/c/aegon.h>
+#include <stdio.h>
+
+void handle_root(aegon_context_t* ctx) {
+    aegon_response_set_status(ctx, 200);
+    aegon_response_set_body_text(ctx, "Hello from Pure C!");
+}
+
+int main(void) {
+    aegon_router_t* router = aegon_router_create();
+    aegon_router_get(router, "/", handle_root);
+
+    aegon_server_t* server = aegon_server_create(router);
+    aegon_server_listen(server, 8080, "0.0.0.0");
+
+    printf("C server running on http://0.0.0.0:8080\n");
+    aegon_server_run(server, 4);
+
+    aegon_server_destroy(server);
+    return 0;
+}
+```
+
+Compile using `pkg-config`:
+
+```bash
+gcc main.c $(pkg-config --cflags --libs aegon-c) -o c_server
+./c_server
+```
+
+---
+
+## 5. Java 22+ Foreign Function & Memory (FFM)
+
+Aegon provides native Java bindings built on Project Panama (FFM API), achieving C-level HTTP performance inside the JVM without traditional JNI overhead:
+
+```java title="App.java"
+import com.teamzemo.aegon.AegonServer;
+import com.teamzemo.aegon.AegonRouter;
+
+public class App {
+    public static void main(String[] args) {
+        AegonRouter router = new AegonRouter();
+
+        router.get("/hello", ctx -> {
+            ctx.status(200).text("Hello from Aegon Java FFM!");
+        });
+
+        AegonServer server = new AegonServer(router);
+        server.listen(8080, "0.0.0.0");
+
+        System.out.println("Java Aegon server started on port 8080");
+        server.run(Runtime.getRuntime().availableProcessors());
+    }
+}
+```

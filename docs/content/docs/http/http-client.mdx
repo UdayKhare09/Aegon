@@ -9,8 +9,8 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 Aegon includes an asynchronous, high-performance HTTP/1.1, HTTP/2, and HTTP/3 client built on Aegon's pluggable I/O engine (Linux `io_uring`, edge-triggered `epoll`, and Windows `IOCP`) with OpenSSL 3. Designed with symmetrical developer ergonomics to Aegon's server API, `HttpClient` integrates seamlessly with C++23 coroutines, compile-time Glaze JSON reflection, persistent keep-alive connection pooling, and fluent request builders.
 
 ```cpp
-#include <http/client/HttpClient.h>
-#include <http/client/PerCoreHttpClient.h>
+#include <aegon/http/client/HttpClient.h>
+#include <aegon/http/client/PerCoreHttpClient.h>
 
 using namespace aegon::http;
 using namespace aegon::http::client;
@@ -61,7 +61,7 @@ The client engine is modular and designed for zero-allocation performance on the
 Inside any Aegon route handler or coroutine running on an `EventLoop`, calling `.send()` suspends execution until the response arrives without blocking the worker thread:
 
 ```cpp
-#include <http/client/HttpClient.h>
+#include <aegon/http/client/HttpClient.h>
 
 struct UserDto {
     uint64_t id{0};
@@ -500,7 +500,7 @@ HttpClient dev_client(ClientConfig{
 
 When running Aegon in a multi-threaded server (`server.run(N)`), sharing a single global `HttpClient` across worker threads introduces cross-thread lock contention inside the socket connection pool and violates event loop thread-affinity.
 
-Aegon provides **`PerCoreHttpClient`** (`#include <http/client/PerCoreHttpClient.h>`):
+Aegon provides **`PerCoreHttpClient`** (`#include <aegon/http/client/PerCoreHttpClient.h>`):
 
 ```
                                 PerCoreHttpClient
@@ -529,8 +529,8 @@ Aegon provides **`PerCoreHttpClient`** (`#include <http/client/PerCoreHttpClient
 ### Registration & Handler Usage
 
 ```cpp
-#include <http/Server.h>
-#include <http/client/PerCoreHttpClient.h>
+#include <aegon/http/Server.h>
+#include <aegon/http/client/PerCoreHttpClient.h>
 
 int main() {
     http::Server server;

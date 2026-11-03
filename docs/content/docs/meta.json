@@ -2,6 +2,8 @@
   "title": "Documentation",
   "pages": [
     "index",
+    "installation",
+    "usage",
     "http",
     "services",
     "data"

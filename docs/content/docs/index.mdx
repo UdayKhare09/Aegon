@@ -7,9 +7,18 @@ import { Card, Cards } from 'fumadocs-ui/components/card';
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Cpu, Globe, Zap, Layers, Compass, Braces, Rocket, Download, Server } from 'lucide-react';
 
-**Aegon** is an asynchronous, thread-per-core C++23 application and networking framework engineered from the ground up for extreme HTTP throughput, ultra-low latency, and modern developer ergonomics.
+**Aegon** is an asynchronous, thread-per-core C++23 application and networking framework engineered from the ground up for extreme HTTP throughput, ultra-low latency, and modern developer ergonomics across both **x86_64** and **ARM64 (aarch64)**.
 
 Built around standard C++ coroutines (`co_await`), Aegon provides first-class support for modern networking protocols, including HTTP/1.1 (pipelined), cleartext and TLS HTTP/2 (`h2c` and `h2`), HTTP/3 over QUIC, and full RFC 6455-compliant WebSockets.
+
+<Cards>
+  <Card title="Installation Guide" href="/docs/installation" icon={<Download />}>
+    Install pre-built packages for Arch, Ubuntu/Debian, Fedora/RHEL, or compile from source with CMake.
+  </Card>
+  <Card title="Quickstart & Usage" href="/docs/usage" icon={<Rocket />}>
+    Set up a CMake project, write high-performance REST APIs, or use pure C and Java 22+ FFM.
+  </Card>
+</Cards>
 
 ---
 
@@ -22,8 +31,8 @@ Built around standard C++ coroutines (`co_await`), Aegon provides first-class su
   <Card title="Multi-Protocol Engine" icon={<Globe />}>
     Native support for HTTP/1.1 with pipelining, HTTP/2 multiplexing, HTTP/3 over QUIC (RFC 9000 & RFC 9114), and high-throughput WebSockets.
   </Card>
-  <Card title="C++23 Coroutines" icon={<Zap />}>
-    Built on native C++23 coroutines (`core::Task<T>`) with symmetric transfer. Eliminates nested callback spaghetti while preserving non-blocking performance.
+  <Card title="Tiered SIMD Acceleration" icon={<Zap />}>
+    Step-down vectorized processing for string operations, HTTP routing, header validation, and UUID generation supporting AVX-512, AVX2, and SSE4.2 on x86, with ARM NEON parity on AArch64.
   </Card>
   <Card title="Kernel Async I/O" icon={<Layers />}>
     Pluggable kernel engines featuring Linux `io_uring` direct submission/completion rings, scalable `epoll` fallback, and Windows `IOCP`.
@@ -62,8 +71,8 @@ In fixed-rate paced latency tests (`latency-1m`), Aegon sustained 1 Million requ
 Here is a complete, working example of an Aegon HTTP service with routing, JSON request binding, and coroutines:
 
 ```cpp title="main.cpp"
-#include <http/Server.h>
-#include <core/Task.h>
+#include <aegon/http/Server.h>
+#include <aegon/core/Task.h>
 #include <iostream>
 
 using namespace aegon;

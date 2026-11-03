@@ -9,12 +9,12 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 Aegon provides a header-only, high-performance **JWT (JSON Web Token)** engine backed by OpenSSL. It offers compile-time type safety via Glaze JSON serialization, comprehensive RFC 7515/7518 algorithm support, automatic standard claim management, and built-in RFC 7517 JSON Web Key Set (JWKS) key rotation.
 
 ```cpp
-#include <http/jwt/JwtAlgorithm.h>
-#include <http/jwt/JwtSigner.h>
-#include <http/jwt/JwtVerifier.h>
-#include <http/jwt/JwtParser.h>
-#include <http/jwt/JwtDenylist.h>
-#include <http/jwt/Jwks.h>
+#include <aegon/http/jwt/JwtAlgorithm.h>
+#include <aegon/http/jwt/JwtSigner.h>
+#include <aegon/http/jwt/JwtVerifier.h>
+#include <aegon/http/jwt/JwtParser.h>
+#include <aegon/http/jwt/JwtDenylist.h>
+#include <aegon/http/jwt/Jwks.h>
 
 using namespace aegon::http::jwt;
 ```

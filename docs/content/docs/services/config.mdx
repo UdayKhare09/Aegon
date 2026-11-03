@@ -13,7 +13,7 @@ Aegon's configuration engine is designed exclusively for **YAML 1.2** and enviro
 </Callout>
 
 ```cpp
-#include <config/Config.h>
+#include <aegon/config/Config.h>
 
 using namespace aegon::config;
 ```
@@ -72,7 +72,7 @@ struct AppConfig {
 For simple services that read from a single YAML file on disk:
 
 ```cpp
-#include <config/Config.h>
+#include <aegon/config/Config.h>
 #include <iostream>
 
 using namespace aegon::config;
@@ -98,7 +98,7 @@ int main() {
 For production cloud-native applications, use `Config::builder<T>()` to chain multiple layered sources:
 
 ```cpp
-#include <config/Config.h>
+#include <aegon/config/Config.h>
 
 using namespace aegon::config;
 
@@ -199,7 +199,7 @@ auto config = Config::builder<AppConfig>()
 `DotEnv` can also be used as a standalone parser to populate process environment tables or inspect key-value configurations:
 
 ```cpp
-#include <config/DotEnv.h>
+#include <aegon/config/DotEnv.h>
 
 // 1. Parse from a string
 auto env = aegon::config::DotEnv::parse(R"(

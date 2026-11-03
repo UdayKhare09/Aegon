@@ -1,0 +1,184 @@
+---
+title: Installation
+description: Install Aegon using pre-built distribution packages for Arch Linux, Debian, Ubuntu, Fedora, and RHEL, or compile from source.
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Package, Terminal, Cpu, FileCheck } from 'lucide-react';
+
+Aegon is distributed both as pre-built native packages for major 64-bit Linux distributions and as portable tarballs. You can also easily build the framework from source using CMake and Ninja.
+
+---
+
+## Pre-Built Distribution Packages
+
+Download the latest release binaries from the [GitHub Releases](https://github.com/UdayKhare09/Aegon/releases) page:
+
+<Tabs items={["Arch Linux", "Debian / Ubuntu", "Fedora / RHEL", "Universal Tarball", "Java FFM"]}>
+  <Tab value="Arch Linux">
+    Install using `pacman`:
+    ```bash
+    sudo pacman -U aegon-0.3.2-1-x86_64.pkg.tar.zst
+    ```
+    Or build the package directly using the provided `PKGBUILD`:
+    ```bash
+    cd packaging/arch
+    makepkg -si
+    ```
+  </Tab>
+  <Tab value="Debian / Ubuntu">
+    Install using `apt` (recommended for automatic dependency resolution):
+    ```bash
+    sudo apt install ./aegon-0.3.2-Linux-x86_64.deb
+    ```
+    Alternatively, install with `dpkg`:
+    ```bash
+    sudo dpkg -i aegon-0.3.2-Linux-x86_64.deb
+    sudo apt-get install -f # resolve any missing runtime libraries
+    ```
+  </Tab>
+  <Tab value="Fedora / RHEL">
+    Install using `dnf`:
+    ```bash
+    sudo dnf install ./aegon-0.3.2-Linux-x86_64.rpm
+    ```
+    Or with `rpm`:
+    ```bash
+    sudo rpm -ivh aegon-0.3.2-Linux-x86_64.rpm
+    ```
+  </Tab>
+  <Tab value="Universal Tarball">
+    Extract to `/usr/local` or a custom prefix:
+    ```bash
+    # Extract gzip tarball
+    sudo tar -xzf aegon-0.3.2-Linux-x86_64.tar.gz -C /usr/local/
+
+    # Or extract high-compression xz tarball
+    sudo tar -xJf aegon-0.3.2-Linux-x86_64.tar.xz -C /usr/local/
+    ```
+  </Tab>
+  <Tab value="Java FFM">
+    Add the pre-packaged JAR embedding the native `libaegon_c` binary to your Maven `pom.xml`:
+    ```xml
+    <dependency>
+        <groupId>com.teamzemo.aegon</groupId>
+        <artifactId>aegon-java</artifactId>
+        <version>0.3.2</version>
+    </dependency>
+    ```
+  </Tab>
+</Tabs>
+
+### What's Installed
+
+Each distribution package installs the complete C++ framework and C ABI:
+
+| Location | Contents |
+| :--- | :--- |
+| `/usr/include/aegon/` | Complete C++23 public API and C ABI headers (`aegon/http/`, `aegon/core/`, `aegon/c/`, etc.) |
+| `/usr/lib/libaegon_c.so` | Shared dynamic C ABI wrapper (`libaegon_c.so.0.3.2`) with SONAME symlinks |
+| `/usr/lib/libaegon_*.a` | Static modular libraries (`libaegon_http.a`, `libaegon_core.a`, `libaegon_net.a`, etc.) |
+| `/usr/lib/cmake/Aegon/` | CMake target definitions (`AegonConfig.cmake`, `AegonTargets.cmake`) |
+| `/usr/lib/pkgconfig/aegon-c.pc` | `pkg-config` metadata for compiler and linker flags |
+
+---
+
+## Verifying the Installation
+
+After installing the package, verify that `pkg-config` detects Aegon:
+
+```bash
+pkg-config --modversion aegon-c
+# Output: 0.3.2
+
+pkg-config --cflags --libs aegon-c
+# Output: -I/usr/include -L/usr/lib -laegon_c
+```
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+To compile Aegon from source, ensure your development environment satisfies the following requirements:
+
+#### Compiler & Toolchain
+- **C++ Compiler**: GCC 13+, Clang 17+, or MSVC 2022 (v19.38+) with C++23 coroutine support.
+- **Build System**: CMake 3.20+ and Ninja (recommended).
+
+#### System Dependencies (Linux)
+Install the required development headers:
+
+<Tabs items={["Ubuntu / Debian", "Arch Linux", "Fedora / RHEL"]}>
+  <Tab value="Ubuntu / Debian">
+    ```bash
+    sudo apt-get update && sudo apt-get install -y \
+        build-essential cmake ninja-build git pkg-config \
+        liburing-dev libssl-dev libsqlite3-dev libpq-dev \
+        libnghttp2-dev libdeflate-dev protobuf-compiler libprotobuf-dev
+    ```
+  </Tab>
+  <Tab value="Arch Linux">
+    ```bash
+    sudo pacman -S --needed \
+        base-devel cmake ninja git pkgconf \
+        liburing openssl sqlite postgresql-libs \
+        libnghttp2 libngtcp2 libnghttp3 libdeflate glaze protobuf
+    ```
+  </Tab>
+  <Tab value="Fedora / RHEL">
+    ```bash
+    sudo dnf install -y \
+        gcc-c++ cmake ninja-build git pkgconf-pkg-config \
+        liburing-devel openssl-devel sqlite-devel libpq-devel \
+        libnghttp2-devel libdeflate-devel protobuf-devel
+    ```
+  </Tab>
+</Tabs>
+
+### Build Steps
+
+#### 1. Clone Repository
+```bash
+git clone https://github.com/UdayKhare09/Aegon.git
+cd Aegon
+```
+
+#### 2. Configure with CMake
+```bash
+cmake -B build -S . -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DAEGON_BUILD_TESTS=ON \
+    -DAEGON_BUILD_C_ABI=ON \
+    -DAEGON_BUILD_C_EXAMPLES=ON
+```
+
+#### CMake Configuration Options
+| Option | Default | Description |
+| :--- | :---: | :--- |
+| `CMAKE_BUILD_TYPE` | `Release` | Build mode (`Release`, `Debug`, `RelWithDebInfo`) |
+| `AEGON_BUILD_TESTS` | `ON` | Build the unified CTest suite and benchmark harness |
+| `AEGON_BUILD_C_ABI` | `ON` | Build the C ABI wrapper libraries (`libaegon_c.so` and `libaegon_c.a`) |
+| `AEGON_BUILD_C_EXAMPLES` | `OFF` | Build C ABI reference examples (`examples/c`) |
+| `AEGON_BUILD_BENCHMARKS` | `OFF` | Build standalone benchmark servers |
+
+#### 3. Compile
+```bash
+cmake --build build -j$(nproc)
+```
+
+#### 4. Run Tests
+```bash
+# Optional: Start Postgres & Redis containers for live integration tests
+docker compose -f docker-compose.test.yml up -d
+
+ctest --test-dir build --output-on-failure
+```
+
+#### 5. Install System-Wide
+```bash
+sudo cmake --install build
+```

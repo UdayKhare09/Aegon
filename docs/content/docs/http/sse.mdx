@@ -28,8 +28,8 @@ Server-Sent Events (SSE) provide an efficient, unidirectional HTTP streaming cha
 Upgrading a request to an SSE stream requires only calling `co_await ctx.sse()`, which returns an `SseStream`:
 
 ```cpp
-#include <http/Server.h>
-#include <http/SseStream.h>
+#include <aegon/http/Server.h>
+#include <aegon/http/SseStream.h>
 
 using namespace aegon::http;
 
@@ -263,8 +263,8 @@ curl -k -N --http3-only https://127.0.0.1:8443/events
 A primary use case for SSE is streaming generative AI or LLM output token-by-token:
 
 ```cpp
-#include <http/Server.h>
-#include <http/SseStream.h>
+#include <aegon/http/Server.h>
+#include <aegon/http/SseStream.h>
 
 using namespace aegon::http;
 

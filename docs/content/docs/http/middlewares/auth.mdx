@@ -6,13 +6,13 @@ description: Bearer, Cookie, API Key, and Basic auth extractors with compile-tim
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-Aegon provides a modular, header-only authentication and authorization subsystem in `#include <http/middleware/Auth.h>` and `#include <http/middleware/RbacGuard.h>`.
+Aegon provides a modular, header-only authentication and authorization subsystem in `#include <aegon/http/middleware/Auth.h>` and `#include <aegon/http/middleware/RbacGuard.h>`.
 
 It integrates seamlessly with Aegon's type-safe `Context` (`ctx.set<T>` and `ctx.get<T>`), enforces RFC 7807 Problem Details error responses, and validates role permissions at compile-time using C++20 concepts.
 
 ```cpp
-#include <http/middleware/Auth.h>
-#include <http/middleware/RbacGuard.h>
+#include <aegon/http/middleware/Auth.h>
+#include <aegon/http/middleware/RbacGuard.h>
 
 using namespace aegon::http::middleware;
 ```
@@ -247,11 +247,11 @@ When authorization fails (either because the principal is missing from the conte
 ## Complete End-to-End Example
 
 ```cpp
-#include <http/Server.h>
-#include <http/jwt/JwtSigner.h>
-#include <http/jwt/JwtVerifier.h>
-#include <http/middleware/Auth.h>
-#include <http/middleware/RbacGuard.h>
+#include <aegon/http/Server.h>
+#include <aegon/http/jwt/JwtSigner.h>
+#include <aegon/http/jwt/JwtVerifier.h>
+#include <aegon/http/middleware/Auth.h>
+#include <aegon/http/middleware/RbacGuard.h>
 
 using namespace aegon::http;
 using namespace aegon::http::jwt;

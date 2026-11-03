@@ -6,12 +6,12 @@ description: Declarative compile-time DTO validation with C++20 concepts, nested
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-Aegon includes a declarative compile-time validation engine (`aegon::validation::ValidationRules`) in `#include <data/validation/Validator.h>`.
+Aegon includes a declarative compile-time validation engine (`aegon::validation::ValidationRules`) in `#include <aegon/data/validation/Validator.h>`.
 
 Any struct or class implementing a `validate(ValidationRules& v) const` member function satisfies the `HasValidate<T>` C++20 concept. When binding requests via `ctx.bind_json<T>()`, `ctx.bind_query<T>()`, `ctx.bind_path<T>()`, or `ctx.bind_form<T>()`, validation is executed automatically, emitting an RFC-compliant `422 Unprocessable Entity` response with structured field error reports upon failure.
 
 ```cpp
-#include <data/validation/Validator.h>
+#include <aegon/data/validation/Validator.h>
 
 using namespace aegon::validation;
 ```
@@ -23,7 +23,7 @@ using namespace aegon::validation;
 Implement the `validate` method on your DTO struct:
 
 ```cpp
-#include <data/validation/Validator.h>
+#include <aegon/data/validation/Validator.h>
 #include <string>
 #include <optional>
 

@@ -6,10 +6,10 @@ description: Asynchronous structured access logging, slow request alerting, and 
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-Aegon provides a built-in, asynchronous **Access Log** middleware in `#include <http/middleware/AccessLog.h>`. It measures HTTP request latency, captures response status codes, extracts client IP and request headers, and formats structured telemetry emitted through Aegon's logging engine.
+Aegon provides a built-in, asynchronous **Access Log** middleware in `#include <aegon/http/middleware/AccessLog.h>`. It measures HTTP request latency, captures response status codes, extracts client IP and request headers, and formats structured telemetry emitted through Aegon's logging engine.
 
 ```cpp
-#include <http/middleware/AccessLog.h>
+#include <aegon/http/middleware/AccessLog.h>
 
 using namespace aegon::http::middleware;
 ```
@@ -196,7 +196,7 @@ When `access_log()` is active, it automatically injects a contextual `RequestLog
 Any downstream handler can retrieve it using the standard Aegon context store pattern:
 
 ```cpp
-#include <http/middleware/AccessLog.h>
+#include <aegon/http/middleware/AccessLog.h>
 
 router.post("/orders", [](http::Context& ctx) {
     // 1. Safe pointer style (nullable check)

@@ -9,7 +9,7 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 Aegon features a standalone, high-performance telemetry and logging library (`aegon_log`) engineered from the ground up for modern C++23 and Linux systems. It operates independently at the foundation of the framework, enabling structured, leveled logging across the core engine, server lifecycle, and user applications.
 
 ```cpp
-#include <log/Logger.h>
+#include <aegon/log/Logger.h>
 
 using namespace aegon::log;
 ```
@@ -30,7 +30,7 @@ using namespace aegon::log;
 ## Quick Start
 
 ```cpp
-#include <log/Logger.h>
+#include <aegon/log/Logger.h>
 #include <cstring>
 
 // Functional syntax (source location captured automatically, no macros needed!)
@@ -85,7 +85,7 @@ Calling `aegon::log::init()` is **completely optional**. If omitted, the logger 
 `init()` is thread-safe and can be configured at application startup:
 
 ```cpp
-#include <log/Logger.h>
+#include <aegon/log/Logger.h>
 
 int main() {
     // Configure high-performance asynchronous logging
@@ -115,7 +115,7 @@ Sinks implement the `ISink` interface and format/route log records to external d
 The default sink. Formats records with high-precision timestamps, levels, file basenames, and line numbers. Auto-detects whether `stdout` is a terminal to enable high-contrast ANSI colors.
 
 ```cpp
-#include <log/ConsoleSink.h>
+#include <aegon/log/ConsoleSink.h>
 
 auto console = std::make_shared<aegon::log::ConsoleSink>(aegon::log::ConsoleSinkConfig{
     .color_mode = aegon::log::ColorMode::Auto, // Auto, Always, Never
@@ -132,7 +132,7 @@ aegon::log::add_sink(console);
 Appends log records to a designated file. Automatically creates parent directories if they do not exist:
 
 ```cpp
-#include <log/FileSink.h>
+#include <aegon/log/FileSink.h>
 
 // Simple path
 aegon::log::add_sink(std::make_shared<aegon::log::FileSink>("logs/server.log"));
@@ -151,7 +151,7 @@ aegon::log::add_sink(std::make_shared<aegon::log::FileSink>(aegon::log::FileSink
 Captures log records and formatted messages in a thread-safe in-memory vector. Essential for unit tests and telemetry assertions:
 
 ```cpp
-#include <log/MemorySink.h>
+#include <aegon/log/MemorySink.h>
 #include <cassert>
 
 auto mem_sink = std::make_shared<aegon::log::MemorySink>();
@@ -167,10 +167,10 @@ assert(mem_sink->contains("Order #1001 confirmed"));
 
 ## HTTP Access Log Middleware Integration
 
-Aegon provides a built-in HTTP access logging middleware in `#include <http/middleware/AccessLog.h>` to log every inbound request across HTTP/1.1, HTTP/2, and HTTP/3.
+Aegon provides a built-in HTTP access logging middleware in `#include <aegon/http/middleware/AccessLog.h>` to log every inbound request across HTTP/1.1, HTTP/2, and HTTP/3.
 
 ```cpp
-#include <http/middleware/AccessLog.h>
+#include <aegon/http/middleware/AccessLog.h>
 
 server.router().use(aegon::http::middleware::access_log());
 ```

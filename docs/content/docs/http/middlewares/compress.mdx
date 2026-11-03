@@ -6,10 +6,10 @@ description: SIMD-accelerated dynamic HTTP response compression using libdeflate
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-Aegon provides a built-in, SIMD-accelerated **HTTP Compression** middleware in `#include <http/middleware/Compress.h>`. Powered by `libdeflate`, it leverages processor SIMD vector extensions (AVX2, SSE4.2, ARM NEON) to compress HTTP response bodies on the fly with industry-leading throughput (>1 GB/s per core) and zero per-request allocation overhead.
+Aegon provides a built-in, SIMD-accelerated **HTTP Compression** middleware in `#include <aegon/http/middleware/Compress.h>`. Powered by `libdeflate`, it leverages processor SIMD vector extensions (AVX2, SSE4.2, ARM NEON) to compress HTTP response bodies on the fly with industry-leading throughput (>1 GB/s per core) and zero per-request allocation overhead.
 
 ```cpp
-#include <http/middleware/Compress.h>
+#include <aegon/http/middleware/Compress.h>
 
 using namespace aegon::http::middleware;
 ```
@@ -101,7 +101,7 @@ ctx.res().header("Vary", "User-Agent");
 In addition to the HTTP middleware, Aegon exposes the low-level SIMD compression and decompression primitives for use in custom protocols, websocket payloads, or data pipelines:
 
 ```cpp
-#include <http/middleware/Compress.h>
+#include <aegon/http/middleware/Compress.h>
 #include <cassert>
 
 // 1. Gzip compression & decompression
