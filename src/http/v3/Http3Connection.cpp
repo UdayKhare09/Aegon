@@ -360,12 +360,52 @@ bool Http3Connection::init(const uint8_t* dcid, size_t dcidlen, const uint8_t* s
     return true;
 }
 
+void Http3Stream::recycle(int64_t id) noexcept {
+    cleanup_mmap();
+    stream_id = id;
+    req.reset();
+    req.set_version(HttpVersion::Http3);
+    res.reset();
+    path_storage.clear();
+    query_storage.clear();
+    header_storage.clear();
+    inline_arena_used = 0;
+    body_accum.clear();
+    body_offset = 0;
+    headers_total_size = 0;
+    error_status = StatusCode::Ok;
+    request_complete = false;
+    response_submitted = false;
+    headers_received = false;
+    seen_method = false;
+    seen_path = false;
+    seen_scheme = false;
+    seen_authority = false;
+    seen_regular_headers = false;
+    sse_buf.clear();
+    sse_offset = 0;
+    is_sse = false;
+    sse_eof = false;
+    file_data = nullptr;
+    file_size = 0;
+    file_offset = 0;
+    is_file = false;
+    file_eof = false;
+}
+
 Http3Stream* Http3Connection::get_or_create_stream(int64_t stream_id) {
     auto it = streams_.find(stream_id);
     if (it == streams_.end()) {
-        auto stream = std::make_unique<Http3Stream>();
-        stream->stream_id = stream_id;
-        stream->req.set_version(HttpVersion::Http3);
+        std::unique_ptr<Http3Stream> stream;
+        if (!stream_pool_.empty()) {
+            stream = std::move(stream_pool_.back());
+            stream_pool_.pop_back();
+            stream->recycle(stream_id);
+        } else {
+            stream = std::make_unique<Http3Stream>();
+            stream->stream_id = stream_id;
+            stream->req.set_version(HttpVersion::Http3);
+        }
         auto* ptr = stream.get();
         streams_.emplace(stream_id, std::move(stream));
         return ptr;
@@ -490,7 +530,14 @@ int Http3Connection::on_stream_data(int64_t stream_id, const uint8_t* data, size
 }
 
 int Http3Connection::on_stream_close(int64_t stream_id, uint64_t) {
-    streams_.erase(stream_id);
+    auto it = streams_.find(stream_id);
+    if (it != streams_.end()) {
+        if (stream_pool_.size() < 256) {
+            it->second->cleanup_mmap();
+            stream_pool_.push_back(std::move(it->second));
+        }
+        streams_.erase(it);
+    }
     return 0;
 }
 
@@ -736,8 +783,12 @@ void Http3Connection::submit_response(Http3Stream* stream) {
 core::Task<void> Http3Connection::dispatch_pending_requests() {
     if (pending_dispatch_.empty()) co_return;
 
-    auto ready = std::move(pending_dispatch_);
-    pending_dispatch_.clear();
+    // Local (the loop can suspend and dispatch be re-entered); capacity is handed back after.
+    std::vector<int64_t> ready;
+    ready.swap(pending_dispatch_);
+    if (dispatch_scratch_.capacity() > 0 && pending_dispatch_.capacity() == 0) {
+        pending_dispatch_.swap(dispatch_scratch_);
+    }
 
     for (int64_t sid : ready) {
         auto it = streams_.find(sid);
@@ -791,6 +842,10 @@ core::Task<void> Http3Connection::dispatch_pending_requests() {
         } else {
             submit_response(stream);
         }
+    }
+    ready.clear();
+    if (dispatch_scratch_.capacity() < ready.capacity()) {
+        dispatch_scratch_.swap(ready);
     }
 }
 

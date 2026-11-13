@@ -6,6 +6,8 @@
 #include <netinet/tcp.h>
 #include <linux/tls.h>
 #endif
+#include <cerrno>
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <cstdlib>
@@ -17,12 +19,113 @@ int get_tls_stream_ex_index() noexcept {
     return idx;
 }
 
+namespace {
+
+int bio_io_read(BIO* b, char* out, int len) {
+    auto* io = static_cast<TlsStream::BioIo*>(BIO_get_data(b));
+    BIO_clear_retry_flags(b);
+    if (len <= 0) return 0;
+    size_t want = static_cast<size_t>(len), n = 0;
+    if (io->carry_off < io->carry.size()) {
+        size_t k = std::min(want, io->carry.size() - io->carry_off);
+        std::memcpy(out, io->carry.data() + io->carry_off, k);
+        io->carry_off += k;
+        n += k;
+        if (io->carry_off == io->carry.size()) {
+            io->carry.clear();
+            io->carry_off = 0;
+        }
+    }
+    if (n < want && io->rx_len > 0) {
+        size_t k = std::min(want - n, io->rx_len);
+        std::memcpy(out + n, io->rx, k);
+        io->rx += k;
+        io->rx_len -= k;
+        n += k;
+    }
+    if (n == 0) {
+        BIO_set_retry_read(b);
+        return -1;
+    }
+    return static_cast<int>(n);
+}
+
+int bio_io_write(BIO* b, const char* in, int len) {
+    auto* io = static_cast<TlsStream::BioIo*>(BIO_get_data(b));
+    BIO_clear_retry_flags(b);
+    if (len <= 0) return 0;
+    if (io->tx_error) return -1;
+    if (io->tx_pending.empty()) {
+        // Straight from OpenSSL's record buffer to the socket.
+        int sent = core::IoEngine::send_now(io->fd, in, static_cast<size_t>(len));
+        if (sent == len) return len;
+        if (sent < 0 && sent != -EAGAIN && sent != -EWOULDBLOCK && sent != -EINTR) {
+            io->tx_error = true;
+            return -1;
+        }
+        size_t done = sent > 0 ? static_cast<size_t>(sent) : 0;
+        io->tx_pending.append(in + done, static_cast<size_t>(len) - done);
+        return len;
+    }
+    io->tx_pending.append(in, static_cast<size_t>(len));  // keep record order behind what is queued
+    return len;
+}
+
+long bio_io_ctrl(BIO* b, int cmd, long, void*) {
+    auto* io = static_cast<TlsStream::BioIo*>(BIO_get_data(b));
+    switch (cmd) {
+        case BIO_CTRL_FLUSH:
+        case BIO_CTRL_DUP:
+            return 1;
+        case BIO_CTRL_PENDING:
+            return io ? static_cast<long>(io->rx_len + (io->carry.size() - io->carry_off)) : 0;
+        case BIO_CTRL_WPENDING:
+            return io ? static_cast<long>(io->tx_pending.size()) : 0;
+        default:
+            return 0;
+    }
+}
+
+int bio_io_create(BIO* b) {
+    BIO_set_init(b, 1);
+    return 1;
+}
+
+int bio_io_destroy(BIO*) { return 1; }
+
+BIO_METHOD* bio_io_method() {
+    static BIO_METHOD* method = [] {
+        BIO_METHOD* m = BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK, "aegon-io");
+        BIO_meth_set_write(m, bio_io_write);
+        BIO_meth_set_read(m, bio_io_read);
+        BIO_meth_set_ctrl(m, bio_io_ctrl);
+        BIO_meth_set_create(m, bio_io_create);
+        BIO_meth_set_destroy(m, bio_io_destroy);
+        return m;
+    }();
+    return method;
+}
+
+} // namespace
+
+void TlsStream::BioIo::stash_rx() {
+    if (rx_len == 0) return;
+    if (carry_off > 0) {
+        carry.erase(0, carry_off);
+        carry_off = 0;
+    }
+    carry.append(reinterpret_cast<const char*>(rx), rx_len);
+    rx = nullptr;
+    rx_len = 0;
+}
+
 TlsStream::TlsStream(core::EventLoop& loop, core::os_socket_t client_fd, SSL_CTX* ctx)
-    : loop_(&loop), client_fd_(client_fd) {
+    : loop_(&loop), client_fd_(client_fd), io_(std::make_unique<BioIo>()) {
+    io_->fd = client_fd;
     ssl_ = SSL_new(ctx);
-    in_bio_ = BIO_new(BIO_s_mem());
-    out_bio_ = BIO_new(BIO_s_mem());
-    SSL_set_bio(ssl_, in_bio_, out_bio_);
+    BIO* bio = BIO_new(bio_io_method());
+    BIO_set_data(bio, io_.get());
+    SSL_set_bio(ssl_, bio, bio);  // one BIO for both directions; SSL owns it
     SSL_set_accept_state(ssl_);
     SSL_set_ex_data(ssl_, get_tls_stream_ex_index(), this);
 }
@@ -36,9 +139,10 @@ TlsStream::~TlsStream() {
 
 TlsStream::TlsStream(TlsStream&& other) noexcept
     : loop_(other.loop_), client_fd_(other.client_fd_),
-      ssl_(other.ssl_), in_bio_(other.in_bio_), out_bio_(other.out_bio_),
+      ssl_(other.ssl_), io_(std::move(other.io_)),
       handshake_done_(other.handshake_done_), ktls_tx_(other.ktls_tx_),
-      server_traffic_secret_(std::move(other.server_traffic_secret_)) {
+      server_traffic_secret_(std::move(other.server_traffic_secret_)),
+      rx_(std::move(other.rx_)) {
     other.ssl_ = nullptr;
     other.client_fd_ = core::INVALID_OS_SOCKET;
     if (ssl_) {
@@ -52,11 +156,11 @@ TlsStream& TlsStream::operator=(TlsStream&& other) noexcept {
         loop_ = other.loop_;
         client_fd_ = other.client_fd_;
         ssl_ = other.ssl_;
-        in_bio_ = other.in_bio_;
-        out_bio_ = other.out_bio_;
+        io_ = std::move(other.io_);
         handshake_done_ = other.handshake_done_;
         ktls_tx_ = other.ktls_tx_;
         server_traffic_secret_ = std::move(other.server_traffic_secret_);
+        rx_ = std::move(other.rx_);
 
         other.ssl_ = nullptr;
         other.client_fd_ = core::INVALID_OS_SOCKET;
@@ -67,15 +171,29 @@ TlsStream& TlsStream::operator=(TlsStream&& other) noexcept {
     return *this;
 }
 
+core::Task<int> TlsStream::send_direct(const void* buf, size_t len) {
+    int sent = core::IoEngine::send_now(client_fd_, buf, len);
+    if (sent == static_cast<int>(len)) [[likely]] {
+        co_return sent;
+    }
+    if (sent < 0 && sent != -EAGAIN && sent != -EWOULDBLOCK && sent != -EINTR) {
+        co_return sent;
+    }
+    size_t done = sent > 0 ? static_cast<size_t>(sent) : 0;
+    int rem = co_await loop_->engine().send_all(
+        client_fd_, std::span<const uint8_t>(static_cast<const uint8_t*>(buf) + done, len - done));
+    co_return rem < 0 ? rem : static_cast<int>(done) + rem;
+}
+
 core::Task<bool> TlsStream::flush_outbound() {
-    char* data = nullptr;
-    long len = BIO_get_mem_data(out_bio_, &data);
-    if (len > 0 && data) {
-        int sent = co_await loop_->engine().send_all(
-            client_fd_,
-            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data), static_cast<size_t>(len)));
-        (void)BIO_reset(out_bio_);
-        if (sent != len) {
+    // Records normally left with a direct send inside the BIO; only a backlog is sent here.
+    if (io_->tx_error) co_return false;
+    if (!io_->tx_pending.empty()) {
+        std::string pending;
+        pending.swap(io_->tx_pending);
+        int sent = co_await loop_->engine().send_all(client_fd_, std::string_view(pending));
+        if (sent != static_cast<int>(pending.size())) {
+            io_->tx_error = true;
             co_return false;
         }
     }
@@ -216,8 +334,9 @@ core::Task<bool> TlsStream::handshake() {
                 co_return false;
             }
 
+            // Handshake flights are rare: keep it simple and copy into the carry.
             auto slice = loop_->buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
-            BIO_write(in_bio_, slice.data(), static_cast<int>(slice.size()));
+            io_->carry.append(reinterpret_cast<const char*>(slice.data()), slice.size());
             loop_->buffer_pool().return_buffer(recv_res.bid);
         } else if (err == SSL_ERROR_WANT_WRITE) {
             if (!co_await flush_outbound()) {
@@ -234,37 +353,42 @@ core::Task<bool> TlsStream::handshake() {
 }
 
 core::Task<int> TlsStream::read_plaintext(void* buf, size_t max_len) {
+    int held_bid = -1;  // receive buffer OpenSSL is reading from, returned after each SSL call
     while (true) {
-        int ret = SSL_read(ssl_, buf, static_cast<int>(max_len));
-        if (ret > 0) {
-            co_return ret;
+        size_t got = 0;
+        int ok = SSL_read_ex(ssl_, buf, max_len, &got);
+        if (held_bid >= 0) {
+            io_->stash_rx();
+            loop_->buffer_pool().return_buffer(static_cast<uint16_t>(held_bid));
+            held_bid = -1;
+        }
+        if (ok == 1) {
+            co_return static_cast<int>(got);
         }
 
-        int err = SSL_get_error(ssl_, ret);
+        int err = SSL_get_error(ssl_, 0);
         if (err == SSL_ERROR_ZERO_RETURN) {
             co_return 0; // Clean TLS shutdown
         }
-
-        if (err == SSL_ERROR_WANT_READ) {
-            auto recv_res = co_await loop_->engine().recv_provided(client_fd_, loop_->buffer_pool().bgid());
-            if (recv_res.bytes == -ENOBUFS) {
-                co_await loop_->engine().timeout(100'000ULL);
-                continue;
-            }
-            if (recv_res.bytes <= 0) {
-                co_return 0; // EOF
-            }
-
-            auto slice = loop_->buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
-            BIO_write(in_bio_, slice.data(), static_cast<int>(slice.size()));
-            loop_->buffer_pool().return_buffer(recv_res.bid);
-        } else if (err == SSL_ERROR_WANT_WRITE) {
-            if (!co_await flush_outbound()) {
-                co_return -1;
-            }
-        } else {
+        // Anything OpenSSL wrote while reading (alerts, key updates) that is still queued.
+        if (!co_await flush_outbound()) {
             co_return -1;
         }
+        if (err != SSL_ERROR_WANT_READ) {
+            co_return -1;
+        }
+
+        if (!rx_) {
+            rx_.emplace(loop_->engine().recv_multishot_stream(client_fd_, loop_->buffer_pool().bgid()));
+        }
+        auto recv_res = co_await rx_->next();
+        if (recv_res.bytes <= 0 || !recv_res.buffer_valid) {
+            co_return 0; // EOF
+        }
+        auto slice = loop_->buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
+        io_->rx = slice.data();
+        io_->rx_len = slice.size();
+        held_bid = recv_res.bid;
     }
 }
 
@@ -272,22 +396,42 @@ core::Task<int> TlsStream::write_plaintext(const void* buf, size_t len) {
     if (len == 0) co_return 0;
 
     if (ktls_tx_) {
-        // kTLS TX offload: bypass OpenSSL encryption completely!
-        co_return co_await loop_->engine().send_all(
-            client_fd_,
-            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(buf), len));
+        // kTLS TX offload: the kernel encrypts on send.
+        co_return co_await send_direct(buf, len);
     }
 
-    int written = SSL_write(ssl_, buf, static_cast<int>(len));
-    if (written <= 0) {
-        co_return written;
+    size_t written = 0;
+    if (SSL_write_ex(ssl_, buf, len, &written) != 1) {
+        co_return -1;
     }
-
+    // The records already went out from inside the BIO unless the socket was full.
     if (!co_await flush_outbound()) {
         co_return -1;
     }
+    co_return static_cast<int>(written);
+}
 
-    co_return written;
+bool TlsStream::write_now(const void* buf, size_t len) {
+    if (len == 0) return true;
+    if (io_->tx_error) return false;
+    if (ktls_tx_) {
+        if (!io_->tx_pending.empty()) {
+            io_->tx_pending.append(static_cast<const char*>(buf), len);  // keep order
+            return true;
+        }
+        int sent = core::IoEngine::send_now(client_fd_, buf, len);
+        if (sent == static_cast<int>(len)) return true;
+        if (sent < 0 && sent != -EAGAIN && sent != -EWOULDBLOCK && sent != -EINTR) {
+            io_->tx_error = true;
+            return false;
+        }
+        size_t done = sent > 0 ? static_cast<size_t>(sent) : 0;
+        io_->tx_pending.append(static_cast<const char*>(buf) + done, len - done);
+        return true;
+    }
+    // Records go out from inside the BIO (direct send); the rest is queued in tx_pending.
+    size_t written = 0;
+    return SSL_write_ex(ssl_, buf, len, &written) == 1 && written == len && !io_->tx_error;
 }
 
 std::string_view TlsStream::alpn() const noexcept {

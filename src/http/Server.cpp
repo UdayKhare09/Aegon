@@ -192,6 +192,11 @@ core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, core::os_s
         };
 
         v2::Http2Connection h2(loop, client_fd, router_, services_.get(), std::move(sender), config_);
+        h2.set_direct_output(v2::DirectOutput{
+            .write = [&](std::span<const uint8_t> data) { return tls_stream.write_now(data.data(), data.size()); },
+            .pending = [&] { return tls_stream.has_pending_output(); },
+            .drain = [&]() -> core::Task<bool> { co_return co_await tls_stream.drain(); },
+        });
         if (config_.enable_http3) {
             h2.set_alt_svc("h3=\":" + std::to_string(port) + "\"; ma=86400");
         }
@@ -242,11 +247,13 @@ core::Task<void> Server::handle_connection(core::EventLoop& loop, core::os_socke
     }
 
     co_await h1->run(
-        [this, &loop](core::os_socket_t fd, std::string preface_data) -> core::Task<void> {
-            co_await handle_http2_connection(loop, fd, std::move(preface_data));
+        [this, &loop](core::os_socket_t fd, std::string preface_data, core::MultishotRecvStream stream) -> core::Task<void> {
+            co_await handle_http2_connection(loop, fd, std::move(preface_data), std::move(stream));
         },
-        [this, &loop](core::os_socket_t fd, Request req, std::string settings, std::string trailing) -> core::Task<void> {
-            co_await handle_http2_upgrade(loop, fd, std::move(req), std::move(settings), std::move(trailing));
+        [this, &loop](core::os_socket_t fd, Request req, std::string settings, std::string trailing,
+                      core::MultishotRecvStream stream) -> core::Task<void> {
+            co_await handle_http2_upgrade(loop, fd, std::move(req), std::move(settings), std::move(trailing),
+                                          std::move(stream));
         }
     );
 
@@ -269,36 +276,19 @@ core::Task<void> Server::accept_loop(core::EventLoop& loop, core::os_socket_t li
                 break;
             }
             if (accept_res.fd == core::INVALID_OS_SOCKET || accept_res.fd < 0) {
-                // Multishot accept stream disarmed (e.g. transient ECONNABORTED).
-                // Break inner loop to re-arm multishot accept stream.
+                // Multishot accept stream ended (e.g. transient ECONNABORTED): re-arm it.
+                // Out of fds or memory, re-arming at once would only spin on the same
+                // error, so give the process a moment to close some first.
+                const int err = -accept_res.fd;
+                if (err == EMFILE || err == ENFILE || err == ENOBUFS || err == ENOMEM) {
+                    (void)(co_await loop.engine().timeout(1'000'000ULL));
+                }
                 break;
             }
-            if (config_.tcp.nodelay) {
-                int nodelay = 1;
-                ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&nodelay), sizeof(nodelay));
-            }
-            if (config_.tcp.keepalive) {
-                int keepalive = 1;
-                ::setsockopt(accept_res.fd, SOL_SOCKET, SO_KEEPALIVE, reinterpret_cast<const char*>(&keepalive), sizeof(keepalive));
-#if defined(TCP_KEEPIDLE)
-                if (config_.tcp.keepidle > 0) {
-                    int keepidle = config_.tcp.keepidle;
-                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPIDLE, reinterpret_cast<const char*>(&keepidle), sizeof(keepidle));
-                }
-#endif
-#if defined(TCP_KEEPINTVL)
-                if (config_.tcp.keepintvl > 0) {
-                    int keepintvl = config_.tcp.keepintvl;
-                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPINTVL, reinterpret_cast<const char*>(&keepintvl), sizeof(keepintvl));
-                }
-#endif
-#if defined(TCP_KEEPCNT)
-                if (config_.tcp.keepcnt > 0) {
-                    int keepcnt = config_.tcp.keepcnt;
-                    ::setsockopt(accept_res.fd, IPPROTO_TCP, TCP_KEEPCNT, reinterpret_cast<const char*>(&keepcnt), sizeof(keepcnt));
-                }
-#endif
-            }
+            // TCP_NODELAY and keepalive (with its idle/interval/count) are set on the
+            // listening socket in create_listen_socket(); Linux copies them into every
+            // accepted socket, so there is no setsockopt per connection here
+            // (tests/test_net.cpp: test_accepted_socket_inherits_listener_options).
             if (is_tls && tls_ctx_) {
                 loop.spawn(handle_tls_connection(loop, accept_res.fd, port));
             } else {

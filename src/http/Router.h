@@ -117,10 +117,22 @@ public:
             chain.insert(chain.end(), group_mw.begin(), group_mw.end());
             chain.insert(chain.end(), route_mw.begin(), route_mw.end());
 
-            AsyncHandler async_chain = [local_chain = std::move(chain), target = std::move(raw)](Context& ctx) -> core::Task<void> {
-                co_await run_chain({}, local_chain, 0, target, ctx);
-            };
-            h = Handler(std::move(async_chain));
+            bool all_sync = raw.is_sync();
+            for (const auto& mw : chain) all_sync = all_sync && mw.has_sync();
+            if (all_sync) {
+                // Every step can run without waiting: serve it with no coroutine at all.
+                auto shared = std::make_shared<std::pair<std::vector<MiddlewareFn>, Handler>>(std::move(chain), std::move(raw));
+                SyncHandler sync_chain = [shared](Context& ctx) {
+                    detail::SyncChainStep first{shared->first.data(), shared->first.size(), 0, &shared->second};
+                    detail::SyncChainStep::run(&first, ctx);
+                };
+                h = Handler(std::move(sync_chain));
+            } else {
+                AsyncHandler async_chain = [local_chain = std::move(chain), target = std::move(raw)](Context& ctx) -> core::Task<void> {
+                    co_await run_chain({}, local_chain, 0, target, ctx);
+                };
+                h = Handler(std::move(async_chain));
+            }
         }
 
         h.set_streaming(is_streaming);
@@ -309,6 +321,16 @@ public:
      * middleware chain, SSE, or route not found/fallback).
      */
     [[nodiscard]] bool dispatch_sync(Request& req, Response& res, const ServiceRegistry* services, Context& ctx) const {
+        return dispatch_sync(req, res, services, ctx, nullptr);
+    }
+
+    /**
+     * @brief As above, reusing a handler the caller already matched for this request (HTTP/2
+     * matches on HEADERS to detect streaming routes), so the route is not looked up twice.
+     * `matched` must come from match() on this same request; nullptr means "match now".
+     */
+    [[nodiscard]] bool dispatch_sync(Request& req, Response& res, const ServiceRegistry* services, Context& ctx,
+                                     const Handler* matched) const {
         (void)services;
         if (req.method() == Method::OPTIONS && req.path() == "*") [[unlikely]] {
             res.status(StatusCode::Ok).header("Allow", "GET, HEAD, POST, PUT, DELETE, OPTIONS, PATCH").text("");
@@ -319,7 +341,7 @@ public:
             return false;
         }
 
-        auto match_res = match(req);
+        MatchResult match_res = matched ? MatchResult{.handler = matched, .route_found = true} : match(req);
         if (!match_res.route_found || match_res.handler == nullptr) [[unlikely]] {
             return false;
         }

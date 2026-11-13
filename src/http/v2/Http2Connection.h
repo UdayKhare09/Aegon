@@ -67,6 +67,7 @@ struct Http2Stream {
     bool grpc_eof{false};                  // true when streaming handler completes
     std::shared_ptr<grpc::GrpcInboundChannel> grpc_inbound{nullptr};
     bool dispatched{false};
+    const Handler* matched{nullptr};  // route matched on HEADERS; reused by dispatch
 
     // File streaming state
     const char* file_data{nullptr};
@@ -80,9 +81,35 @@ struct Http2Stream {
     Http2Stream();
     ~Http2Stream();
     void cleanup_mmap() noexcept;
+    // Back to a fresh stream, keeping the buffers it allocated (streams are pooled).
+    void recycle(int32_t id) noexcept;
+};
+
+// Ids of recently closed streams. Client stream ids only increase, so a direct-mapped table
+// indexed by id holds the most recent ones and a newer stream evicts the oldest: O(1), no
+// allocation (replaces an unordered_set that allocated a node per stream).
+struct RecentlyClosedStreams {
+    static constexpr size_t kSlots = 1024;
+    int32_t slots[kSlots]{};
+    void insert(int32_t id) noexcept { slots[(static_cast<uint32_t>(id) >> 1) & (kSlots - 1)] = id; }
+    [[nodiscard]] bool contains(int32_t id) const noexcept {
+        return id > 0 && slots[(static_cast<uint32_t>(id) >> 1) & (kSlots - 1)] == id;
+    }
 };
 
 using OutputSender = std::function<core::Task<int>(std::span<const uint8_t>)>;
+
+/**
+ * Optional non-suspending output (e.g. TLS): `write` sends the bytes now and returns false on
+ * a connection error; whatever the transport could not take it keeps queued, and then
+ * `pending` is true and `drain` must be awaited before the next write.
+ */
+struct DirectOutput {
+    std::function<bool(std::span<const uint8_t>)> write;
+    std::function<bool()> pending;
+    std::function<core::Task<bool>()> drain;
+    explicit operator bool() const noexcept { return static_cast<bool>(write); }
+};
 
 class Http2Connection {
 public:
@@ -118,8 +145,10 @@ public:
      * @brief Flush all outbound queued frames from nghttp2 to client socket via io_uring.
      */
     core::Task<bool> flush_outbound();
+    core::Task<bool> send_batch(std::string& buf);
 
     void set_alt_svc(std::string alt_svc) noexcept { alt_svc_ = std::move(alt_svc); }
+    void set_direct_output(DirectOutput out) noexcept { direct_ = std::move(out); }
 
     [[nodiscard]] bool wants_read() const noexcept;
     [[nodiscard]] bool wants_write() const noexcept;
@@ -167,7 +196,10 @@ private:
     nghttp2_session* session_{nullptr};
     std::unordered_map<int32_t, std::unique_ptr<Http2Stream>> streams_;
     std::vector<int32_t> pending_dispatch_;
+    std::vector<int32_t> dispatch_scratch_;               // swapped with pending_dispatch_
+    std::vector<std::unique_ptr<Http2Stream>> stream_pool_;  // closed streams, ready for reuse
     OutputSender sender_{nullptr};
+    DirectOutput direct_{};
     std::string outbound_buf_;
     std::string send_buf_;
     std::string alt_svc_;
@@ -178,7 +210,7 @@ private:
     uint32_t rst_burst_limit_{100};
     int32_t max_remote_stream_id_{0};
     uint32_t last_error_code_{0};
-    std::unordered_set<int32_t> closed_stream_ids_;
+    RecentlyClosedStreams closed_stream_ids_;
     ServerConfig config_{};
 };
 

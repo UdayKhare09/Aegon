@@ -22,8 +22,12 @@
 
 namespace aegon::http::v1 {
 
-using H2DirectCallback = std::function<core::Task<void>(core::os_socket_t client_fd, std::string preface_data)>;
-using H2UpgradeCallback = std::function<core::Task<void>(core::os_socket_t client_fd, Request req, std::string settings, std::string trailing)>;
+// Both hand over the connection's armed multishot recv stream, so no bytes are lost
+// between the HTTP/1 reader stopping and the HTTP/2 reader starting.
+using H2DirectCallback = std::function<core::Task<void>(core::os_socket_t client_fd, std::string preface_data,
+                                                        core::MultishotRecvStream stream)>;
+using H2UpgradeCallback = std::function<core::Task<void>(core::os_socket_t client_fd, Request req, std::string settings,
+                                                         std::string trailing, core::MultishotRecvStream stream)>;
 
 /**
  * @brief Manages the full lifecycle of an HTTP/1.x connection (both plaintext and TLS).
@@ -109,6 +113,10 @@ private:
     ServerConfig config_{};
 
     // Pre-allocated recycled per-connection state buffers to eliminate malloc/free churn
+    // Sends resp_batch_ (whole) and clears it: a direct send from the loop thread first,
+    // the ring only for what the socket did not take. False when the connection is gone.
+    core::Task<bool> flush_batch();
+
     std::string req_accum_;
     std::string resp_batch_;
     Request req_;

@@ -214,41 +214,91 @@ core::Task<bool> Http1Connection::stream_file_zero_copy(core::EventLoop& loop, c
     return stream_file(loop, client_fd, file_path, file_size, nullptr);
 }
 
+core::Task<bool> Http1Connection::flush_batch() {
+    if (resp_batch_.empty()) co_return true;
+    // Common case: the socket takes the whole batch now, with no ring round trip and no
+    // suspension, so the connection goes straight back to waiting on its armed recv.
+    int sent = core::IoEngine::send_now(client_fd_, resp_batch_.data(), resp_batch_.size());
+    if (sent == static_cast<int>(resp_batch_.size())) [[likely]] {
+        resp_batch_.clear();
+        co_return true;
+    }
+    if (sent < 0 && sent != -EAGAIN && sent != -EWOULDBLOCK && sent != -EINTR) {
+        resp_batch_.clear();
+        co_return false;
+    }
+    size_t done = sent > 0 ? static_cast<size_t>(sent) : 0;
+    std::string_view rest = std::string_view(resp_batch_).substr(done);
+    int rem = co_await loop_->engine().send_all(client_fd_, rest);
+    bool ok = rem == static_cast<int>(rest.size());
+    resp_batch_.clear();
+    co_return ok;
+}
+
 core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                                       H2UpgradeCallback on_h2_upgrade) {
     bool first_packet = true;
+    // Armed once; the kernel keeps receiving into provided buffers between requests.
+    auto stream = loop_->engine().recv_multishot_stream(client_fd_, loop_->buffer_pool().bgid());
+    bool keep_alive = true;
 
-    while (true) {
-        auto recv_res = co_await loop_->engine().recv_provided(client_fd_, loop_->buffer_pool().bgid());
-        if (recv_res.bytes == -ENOBUFS) {
-            co_await loop_->engine().timeout(100'000ULL);
-            continue;
-        }
-        if (recv_res.bytes <= 0) {
+    while (keep_alive) {
+        auto recv_res = co_await stream.next();
+        if (recv_res.bytes <= 0 || !recv_res.buffer_valid) {
             break;
         }
 
         auto buf_slice = loop_->buffer_pool().get_buffer(recv_res.bid, recv_res.bytes);
-        req_accum_.append(reinterpret_cast<const char*>(buf_slice.data()), buf_slice.size());
-        loop_->buffer_pool().return_buffer(recv_res.bid);
+        const std::string_view slice(reinterpret_cast<const char*>(buf_slice.data()), buf_slice.size());
 
-        bool keep_alive = true;
-        size_t req_offset = 0;
+        // Parse straight out of the provided buffer unless a partial request is carried over.
+        // Anything that suspends (an async handler, an upgrade, a file) first moves the rest
+        // of the bytes into req_accum_ (detach_from_buffer), so no provided buffer is ever
+        // held across a suspension.
+        bool in_buffer = req_accum_.empty();
+        bool buffer_held = true;
+        if (!in_buffer) {
+            req_accum_.append(slice);
+            loop_->buffer_pool().return_buffer(recv_res.bid);
+            buffer_held = false;
+        }
+        std::string_view data = in_buffer ? slice : std::string_view(req_accum_);
+        size_t off = 0;
 
-        while (req_offset < req_accum_.size()) {
-            std::string_view unparsed(req_accum_.data() + req_offset, req_accum_.size() - req_offset);
+        auto release_buffer = [&]() {
+            if (buffer_held) {
+                loop_->buffer_pool().return_buffer(recv_res.bid);
+                buffer_held = false;
+            }
+        };
+        // Moves data[off..] into req_accum_ and re-parses the current request from there,
+        // so req_ stops pointing into the provided buffer. Its length does not change.
+        auto detach_from_buffer = [&]() {
+            if (!in_buffer) return;
+            req_accum_.assign(data.substr(off));
+            release_buffer();
+            in_buffer = false;
+            data = req_accum_;
+            off = 0;
+            req_.reset();
+            size_t again = 0;
+            (void)Http1Parser::parse(data, req_, again, config_.limits);
+        };
+
+        while (off < data.size()) {
+            std::string_view unparsed = data.substr(off);
             if (first_packet) {
+                first_packet = false;
                 if (unparsed.starts_with(v2::CLIENT_PREFACE)) {
-                    first_packet = false;
-                    if (req_offset > 0) {
-                        req_accum_.erase(0, req_offset);
-                    }
+                    std::string preface(unparsed);
+                    release_buffer();
+                    req_accum_.clear();
+                    (void)co_await flush_batch();
                     if (on_h2_direct) {
-                        co_await on_h2_direct(client_fd_, std::move(req_accum_));
+                        co_await on_h2_direct(client_fd_, std::move(preface), std::move(stream));
                     }
                     co_return;
                 }
-                first_packet = false;
             }
 
             req_.reset();
@@ -258,107 +308,73 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
             if (status == ParseStatus::NeedMoreData) {
                 if (req_.expect_continue()) {
                     req_.set_expect_continue(false);
-                    (void)(co_await loop_->engine().send_all(client_fd_, "HTTP/1.1 100 Continue\r\n\r\n"));
+                    resp_batch_.append("HTTP/1.1 100 Continue\r\n\r\n");
                 }
                 break;
             }
 
             if (auto err_res = make_parse_error_response(status)) {
-                std::string out;
-                Http1Serializer::serialize_response(*err_res, out);
-                (void)(co_await loop_->engine().send_all(client_fd_, out));
+                Http1Serializer::append_response(*err_res, resp_batch_);
                 keep_alive = false;
                 break;
             }
 
             // RFC 9113 §3.2 HTTP/1.1 to HTTP/2 Cleartext Upgrade
             if (req_.is_upgrade_h2c()) {
-                if (!resp_batch_.empty()) {
-                    int sent = co_await loop_->engine().send(client_fd_, resp_batch_);
-                    if (sent != static_cast<int>(resp_batch_.size())) [[unlikely]] {
-                        if (sent > 0) {
-                            (void)(co_await loop_->engine().send_all(client_fd_, std::string_view(resp_batch_).substr(sent)));
-                        }
-                    }
-                    resp_batch_.clear();
-                }
-                std::string upgrade_res =
-                    "HTTP/1.1 101 Switching Protocols\r\n"
-                    "Connection: Upgrade\r\n"
-                    "Upgrade: h2c\r\n\r\n";
-                (void)(co_await loop_->engine().send_all(client_fd_, upgrade_res));
-                req_offset += bytes_consumed;
-                std::string trailing;
-                if (req_offset < req_accum_.size()) {
-                    trailing = req_accum_.substr(req_offset);
-                }
+                // req_ is handed to the HTTP/2 side: it must view req_accum_ (a member that
+                // outlives the upgrade), not the provided buffer.
+                detach_from_buffer();
+                resp_batch_.append("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n\r\n");
+                if (!co_await flush_batch()) break;
+                std::string trailing(data.substr(off + bytes_consumed));
                 std::string h2_settings = std::string(req_.headers().get("HTTP2-Settings").value_or(""));
                 if (on_h2_upgrade) {
-                    co_await on_h2_upgrade(client_fd_, std::move(req_), std::move(h2_settings), std::move(trailing));
+                    co_await on_h2_upgrade(client_fd_, std::move(req_), std::move(h2_settings), std::move(trailing),
+                                           std::move(stream));
                 }
                 co_return;
             }
 
             // RFC 6455 WebSocket Upgrade
             if (req_.is_websocket_upgrade()) {
+                std::optional<Response> refuse;
+                const Router::WebSocketRouteEntry* ws_entry = nullptr;
+                std::string_view key;
                 if (auto ver_res = validate_websocket_upgrade(req_)) {
-                    std::string out;
-                    Http1Serializer::serialize_response(*ver_res, out);
-                    (void)(co_await loop_->engine().send_all(client_fd_, out));
-                    keep_alive = false;
-                    break;
-                }
-
-                const auto* ws_entry = router_->find_ws(req_.path());
-                if (!ws_entry) {
+                    refuse = std::move(ver_res);
+                } else if (!(ws_entry = router_->find_ws(req_.path()))) {
                     Response not_found;
                     not_found.status(StatusCode::NotFound).text("WebSocket endpoint not found");
-                    std::string out;
-                    Http1Serializer::serialize_response(not_found, out);
-                    (void)(co_await loop_->engine().send_all(client_fd_, out));
-                    keep_alive = false;
-                    break;
-                }
-                std::string_view key = req_.sec_websocket_key();
-                if (key.empty()) {
-                    if (auto k = req_.headers().get("Sec-WebSocket-Key")) {
-                        key = *k;
+                    refuse = std::move(not_found);
+                } else {
+                    key = req_.sec_websocket_key();
+                    if (key.empty()) {
+                        if (auto k = req_.headers().get("Sec-WebSocket-Key")) key = *k;
+                    }
+                    if (key.empty()) {
+                        Response bad_res;
+                        bad_res.status(StatusCode::BadRequest).text("Missing Sec-WebSocket-Key");
+                        refuse = std::move(bad_res);
                     }
                 }
-
-                if (key.empty()) {
-                    Response bad_res;
-                    bad_res.status(StatusCode::BadRequest).text("Missing Sec-WebSocket-Key");
-                    std::string out;
-                    Http1Serializer::serialize_response(bad_res, out);
-                    (void)(co_await loop_->engine().send_all(client_fd_, out));
+                if (refuse) {
+                    Http1Serializer::append_response(*refuse, resp_batch_);
                     keep_alive = false;
                     break;
-                }
-
-                if (!resp_batch_.empty()) {
-                    int sent = co_await loop_->engine().send(client_fd_, resp_batch_);
-                    if (sent != static_cast<int>(resp_batch_.size())) [[unlikely]] {
-                        if (sent > 0) {
-                            (void)(co_await loop_->engine().send_all(client_fd_, std::string_view(resp_batch_).substr(sent)));
-                        }
-                    }
-                    resp_batch_.clear();
                 }
 
                 std::string accept_val = websocket::compute_accept_key(key);
-                std::string upgrade_res = websocket::build_handshake_response(accept_val);
-                (void)(co_await loop_->engine().send_all(client_fd_, upgrade_res));
+                resp_batch_.append(websocket::build_handshake_response(accept_val));
+                std::string trailing(data.substr(off + bytes_consumed));
+                std::string path(req_.path());
+                release_buffer();
+                req_accum_.clear();
+                if (!co_await flush_batch()) break;
 
-                std::string trailing;
-                if (req_offset + bytes_consumed < req_accum_.size()) {
-                    trailing = req_accum_.substr(req_offset + bytes_consumed);
-                }
-
-                websocket::WebSocketConnection ws_conn(*loop_, client_fd_, std::string(req_.path()),
+                websocket::WebSocketConnection ws_conn(*loop_, client_fd_, std::move(path),
                                                       ws_entry->handler, ws_entry->echo_handler,
                                                       config_.websocket);
-                co_await ws_conn.run(std::move(trailing));
+                co_await ws_conn.run(std::move(stream), std::move(trailing));
                 co_return;
             }
 
@@ -369,13 +385,13 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
             if (router_->dispatch_sync(req_, res_, services_, ctx_)) [[likely]] {
                 // Executed synchronously inline with 0 coroutines
             } else {
+                // The handler may suspend: stop referencing the provided buffer first.
+                detach_from_buffer();
                 struct SseContext {
-                    core::EventLoop& loop;
-                    core::os_socket_t client_fd;
+                    Http1Connection& conn;
                     Response& res;
-                    std::string& resp_batch;
                     bool& sse_headers_sent;
-                } sse_ctx{*loop_, client_fd_, res_, resp_batch_, sse_headers_sent};
+                } sse_ctx{*this, res_, sse_headers_sent};
 
                 SseProvider sse_provider{
                     .user_data = &sse_ctx,
@@ -383,24 +399,11 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                         auto* c = static_cast<SseContext*>(ud);
                         return [c](std::string frame) -> core::Task<void> {
                             if (!c->sse_headers_sent) {
-                                if (!c->resp_batch.empty()) {
-                                    int sent = co_await c->loop.engine().send(c->client_fd, c->resp_batch);
-                                    if (sent != static_cast<int>(c->resp_batch.size())) [[unlikely]] {
-                                        if (sent > 0) {
-                                            (void)(co_await c->loop.engine().send_all(c->client_fd, std::string_view(c->resp_batch).substr(sent)));
-                                        }
-                                    }
-                                    c->resp_batch.clear();
-                                }
-                                std::string header_out;
-                                Http1Serializer::serialize_headers(c->res, header_out);
-                                (void)(co_await c->loop.engine().send_all(c->client_fd, header_out));
+                                Http1Serializer::append_headers(c->res, c->conn.resp_batch_);
                                 c->sse_headers_sent = true;
                             }
-                            std::string chunk;
-                            chunk.reserve(frame.size() + 16);
-                            Http1Serializer::serialize_chunk(frame, chunk);
-                            co_await c->loop.engine().send_all(c->client_fd, chunk);
+                            Http1Serializer::serialize_chunk(frame, c->conn.resp_batch_);
+                            (void)co_await c->conn.flush_batch();
                         };
                     }
                 };
@@ -411,18 +414,10 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
             keep_alive = evaluate_keep_alive(req_, res_);
 
             if (res_.has_file()) {
-                if (!resp_batch_.empty()) {
-                    int sent = co_await loop_->engine().send(client_fd_, resp_batch_);
-                    if (sent != static_cast<int>(resp_batch_.size())) [[unlikely]] {
-                        if (sent <= 0) { keep_alive = false; break; }
-                        int rem = co_await loop_->engine().send_all(client_fd_, std::string_view(resp_batch_).substr(sent));
-                        if (rem != static_cast<int>(resp_batch_.size() - sent)) { keep_alive = false; break; }
-                    }
-                    resp_batch_.clear();
-                }
-                std::string header_out;
-                Http1Serializer::serialize_headers(res_, header_out);
-                (void)(co_await loop_->engine().send_all(client_fd_, header_out));
+                // Streaming the file suspends: stop referencing the provided buffer first.
+                detach_from_buffer();
+                Http1Serializer::append_headers(res_, resp_batch_);
+                if (!co_await flush_batch()) { keep_alive = false; break; }
                 if (req_.method() != Method::HEAD && res_.file_size() > 0) {
                     bool ok = co_await stream_file(*loop_, client_fd_, res_.file_path(), res_.file_size(), res_.file_handle());
                     if (!ok) {
@@ -431,72 +426,56 @@ core::Task<void> Http1Connection::run(H2DirectCallback on_h2_direct,
                     }
                 }
             } else if (res_.is_sse()) {
-                // SSE: headers were already set on res, handler streamed chunks directly.
-                // Flush headers first if not already sent (e.g. handler returned without writing).
                 if (!sse_headers_sent) {
-                    if (!resp_batch_.empty()) {
-                        int sent = co_await loop_->engine().send(client_fd_, resp_batch_);
-                        if (sent != static_cast<int>(resp_batch_.size())) [[unlikely]] {
-                            if (sent <= 0) { keep_alive = false; break; }
-                            (void)(co_await loop_->engine().send_all(client_fd_, std::string_view(resp_batch_).substr(sent)));
-                        }
-                        resp_batch_.clear();
-                    }
-                    std::string header_out;
-                    Http1Serializer::serialize_headers(res_, header_out);
-                    (void)(co_await loop_->engine().send_all(client_fd_, header_out));
+                    Http1Serializer::append_headers(res_, resp_batch_);
                     sse_headers_sent = true;
                 }
-                // Terminate chunked stream
-                (void)(co_await loop_->engine().send_all(client_fd_, "0\r\n\r\n"));
+                resp_batch_.append("0\r\n\r\n");
                 keep_alive = false;  // SSE connections close after the stream ends
+            } else if (req_.method() == Method::HEAD) {
+                Http1Serializer::append_headers(res_, resp_batch_);
             } else {
-                if (req_.method() == Method::HEAD) {
-                    Http1Serializer::append_headers(res_, resp_batch_);
-                } else {
-                    Http1Serializer::append_response(res_, resp_batch_);
-                }
+                Http1Serializer::append_response(res_, resp_batch_);
             }
 
-            req_offset += bytes_consumed;
-
+            off += bytes_consumed;
             if (!keep_alive) {
                 break;
             }
         }
 
-        if (req_offset >= req_accum_.size()) {
-            req_accum_.clear();
-        } else if (req_offset > 0) {
-            req_accum_.erase(0, req_offset);
-        }
-
-        if (!resp_batch_.empty()) {
-            int sent = co_await loop_->engine().send(client_fd_, resp_batch_);
-            if (sent != static_cast<int>(resp_batch_.size())) [[unlikely]] {
-                if (sent <= 0) break;
-                int rem = co_await loop_->engine().send_all(client_fd_, std::string_view(resp_batch_).substr(sent));
-                if (rem != static_cast<int>(resp_batch_.size() - sent)) break;
+        // Keep only an unparsed partial request; the provided buffer goes back to the ring.
+        if (in_buffer) {
+            if (off < data.size() && keep_alive) {
+                req_accum_.assign(data.substr(off));
             }
-            resp_batch_.clear();
+            release_buffer();
+        } else if (off >= req_accum_.size()) {
+            req_accum_.clear();
+        } else if (off > 0) {
+            req_accum_.erase(0, off);
         }
 
-        if (!keep_alive) {
+        if (!co_await flush_batch()) {
             break;
         }
     }
 
+    stream.cancel();
     (void)(co_await loop_->engine().close(client_fd_));
 }
 
 core::Task<void> Http1Connection::run_tls(net::tls::TlsStream& tls_stream, std::string_view alt_svc_hdr) {
-    char read_buf[16384];
+    constexpr size_t kReadChunk = 16384;  // one TLS record at most
 
     while (true) {
-        int n = co_await tls_stream.read_plaintext(read_buf, sizeof(read_buf));
+        // Decrypt straight into the request buffer's tail (no bounce through a stack buffer).
+        // resize_and_overwrite leaves the new bytes uninitialised; read_plaintext fills them.
+        const size_t old_size = req_accum_.size();
+        req_accum_.resize_and_overwrite(old_size + kReadChunk, [](char*, size_t n) { return n; });
+        int n = co_await tls_stream.read_plaintext(req_accum_.data() + old_size, kReadChunk);
+        req_accum_.resize(old_size + (n > 0 ? static_cast<size_t>(n) : 0));
         if (n <= 0) break;
-
-        req_accum_.append(read_buf, static_cast<size_t>(n));
         bool keep_alive = true;
         size_t req_offset = 0;
 

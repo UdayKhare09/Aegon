@@ -1,6 +1,11 @@
 #include "net/Net.h"
 #include "core/EventLoop.h"
 #include <cassert>
+#include <chrono>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -359,11 +364,58 @@ void test_quic_server() {
     std::cout << "QuicServer passed.\n";
 }
 
+// The server sets TCP options on its listening socket only and relies on Linux copying them
+// into every accepted socket (no setsockopt per connection). This pins that assumption.
+void test_accepted_socket_inherits_listener_options() {
+    std::cout << "Testing accepted sockets inherit listener TCP options...\n";
+    uint16_t port = 19193;
+    TcpListenConfig cfg;
+    cfg.port = port;
+    cfg.reuse_addr = true;
+    cfg.tcp_nodelay = true;
+    cfg.tcp_keepalive = true;
+    cfg.keepidle = 17;
+    cfg.keepintvl = 7;
+    cfg.keepcnt = 4;
+    auto listener = TcpListener::bind(port, "127.0.0.1", cfg);
+    assert(listener.has_value());
+
+    int c = ::socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    assert(::connect(c, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0);
+
+    int a = -1;
+    for (int i = 0; i < 1000 && a < 0; ++i) {
+        a = ::accept4(listener->native_handle(), nullptr, nullptr, SOCK_CLOEXEC);
+        if (a < 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(a >= 0);
+
+    auto get = [&](int level, int name) {
+        int v = -1;
+        socklen_t len = sizeof(v);
+        assert(::getsockopt(a, level, name, &v, &len) == 0);
+        return v;
+    };
+    assert(get(IPPROTO_TCP, TCP_NODELAY) != 0);
+    assert(get(SOL_SOCKET, SO_KEEPALIVE) != 0);
+    assert(get(IPPROTO_TCP, TCP_KEEPIDLE) == 17);
+    assert(get(IPPROTO_TCP, TCP_KEEPINTVL) == 7);
+    assert(get(IPPROTO_TCP, TCP_KEEPCNT) == 4);
+    ::close(a);
+    ::close(c);
+    std::cout << "  -> PASS\n";
+}
+
 int main() {
     std::cout << "=== Running Aegon Net Test Suite ===\n";
     test_socket_address();
     test_socket_options();
     test_tcp_listener_and_stream();
+    test_accepted_socket_inherits_listener_options();
     test_udp_socket();
     test_udp_server_and_client();
     test_tls();

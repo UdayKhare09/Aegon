@@ -33,6 +33,7 @@ public:
         file_handle_.reset();
         file_size_ = 0;
         owned_strings_.clear();
+        body_owner_.reset();
     }
 
     // Fluent setters
@@ -100,6 +101,24 @@ public:
     Response& body_view(std::string_view bv) noexcept {
         body_view_ = bv;
         body_.clear();
+        return *this;
+    }
+
+    /**
+     * Body that is a view into memory owned elsewhere (e.g. a cached static file), kept
+     * alive by `owner` until the response is reset. No copy. Header values that point
+     * into the same memory are covered by the same owner.
+     */
+    Response& body_shared(std::shared_ptr<const void> owner, std::string_view bv) noexcept {
+        body_owner_ = std::move(owner);
+        body_view_ = bv;
+        body_.clear();
+        return *this;
+    }
+
+    /** Keeps `owner` alive until the response is reset (for views held in headers). */
+    Response& retain(std::shared_ptr<const void> owner) noexcept {
+        body_owner_ = std::move(owner);
         return *this;
     }
 
@@ -289,6 +308,7 @@ private:
     std::shared_ptr<storage::File> file_handle_{nullptr};
     size_t file_size_{0};
     std::deque<std::string> owned_strings_{};
+    std::shared_ptr<const void> body_owner_{};
 };
 
 } // namespace aegon::http

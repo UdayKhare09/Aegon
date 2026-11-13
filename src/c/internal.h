@@ -1,5 +1,6 @@
 #pragma once
 
+#include "http/Middleware.h"
 #include <aegon/c/export.h>
 #include <aegon/c/types.h>
 #include <aegon/c/error.h>
@@ -64,10 +65,7 @@ struct aegon_group {
     explicit aegon_group(aegon::http::RouteGroup g) : grp(std::move(g)) {}
 };
 
-namespace aegon::http {
-using Next = std::function<core::Task<void>(Context&)>;
-using MiddlewareFn = std::function<core::Task<void>(Context&, Next)>;
-}
+// Next and MiddlewareFn come from http/Middleware.h (MiddlewareFn is a class there).
 
 struct aegon_next {
     aegon::http::Next* next_fn{nullptr};

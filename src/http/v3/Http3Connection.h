@@ -93,6 +93,8 @@ struct Http3Stream {
     Http3Stream() = default;
     ~Http3Stream();
     void cleanup_mmap() noexcept;
+    // Back to a fresh stream, keeping the buffers it allocated (streams are pooled).
+    void recycle(int64_t id) noexcept;
 };
 
 class Http3Connection {
@@ -197,7 +199,9 @@ private:
     void on_stream_reset();
 
     std::unordered_map<int64_t, std::unique_ptr<Http3Stream>> streams_;
+    std::vector<std::unique_ptr<Http3Stream>> stream_pool_;  // closed streams, ready for reuse
     std::vector<int64_t> pending_dispatch_;
+    std::vector<int64_t> dispatch_scratch_;
     std::vector<std::string> scids_;
     bool http3_streams_setup_{false};
     bool closed_{false};

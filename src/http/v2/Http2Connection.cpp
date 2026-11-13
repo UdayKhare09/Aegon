@@ -1,3 +1,4 @@
+#include <cerrno>
 #include "http/v2/Http2Connection.h"
 #include "http/v2/Http2Frame.h"
 #include "http/SseStream.h"
@@ -65,6 +66,40 @@ Http2Stream::~Http2Stream() {
     cleanup_mmap();
 }
 
+void Http2Stream::recycle(int32_t id) noexcept {
+    cleanup_mmap();
+    stream_id = id;
+    req.reset();
+    req.set_version(HttpVersion::Http2);
+    res.reset();
+    path_storage.clear();
+    query_storage.clear();
+    inline_arena_used = 0;
+    header_storage.clear();
+    body_accum.clear();
+    body_offset = 0;
+    headers_total_size = 0;
+    error_status = StatusCode::Ok;
+    request_complete = false;
+    response_submitted = false;
+    reset = false;
+    trailers_submitted = false;
+    sse_frames.clear();
+    is_sse = false;
+    sse_eof = false;
+    grpc_frames.clear();
+    is_grpc_stream = false;
+    grpc_eof = false;
+    grpc_inbound.reset();
+    dispatched = false;
+    matched = nullptr;
+    file_data = nullptr;
+    file_size = 0;
+    file_offset = 0;
+    is_file = false;
+    file_eof = false;
+}
+
 void Http2Stream::cleanup_mmap() noexcept {
     if (mmap_base && mmap_base != MAP_FAILED) {
         ::munmap(mmap_base, mmap_size);
@@ -113,9 +148,16 @@ Http2Connection::~Http2Connection() {
 Http2Stream* Http2Connection::get_or_create_stream(int32_t stream_id) {
     auto it = streams_.find(stream_id);
     if (it == streams_.end()) {
-        auto stream = std::make_unique<Http2Stream>();
-        stream->stream_id = stream_id;
-        stream->req.set_version(HttpVersion::Http2);
+        std::unique_ptr<Http2Stream> stream;
+        if (!stream_pool_.empty()) {
+            stream = std::move(stream_pool_.back());
+            stream_pool_.pop_back();
+            stream->recycle(stream_id);
+        } else {
+            stream = std::make_unique<Http2Stream>();
+            stream->stream_id = stream_id;
+            stream->req.set_version(HttpVersion::Http2);
+        }
         auto* ptr = stream.get();
         streams_.emplace(stream_id, std::move(stream));
         return ptr;
@@ -234,6 +276,7 @@ int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
                 stream->grpc_inbound->set_eof();
             } else {
                 auto match_res = router_.match(stream->req);
+                stream->matched = match_res.route_found ? match_res.handler : nullptr;
                 if (match_res.handler && match_res.handler->is_streaming()) {
                     stream->grpc_inbound = std::make_shared<grpc::GrpcInboundChannel>();
                     stream->grpc_inbound->set_eof();
@@ -244,6 +287,7 @@ int Http2Connection::on_frame_recv(const nghttp2_frame* frame) {
             }
         } else {
             auto match_res = router_.match(stream->req);
+            stream->matched = match_res.route_found ? match_res.handler : nullptr;
             if (match_res.handler && match_res.handler->is_streaming()) {
                 stream->grpc_inbound = std::make_shared<grpc::GrpcInboundChannel>();
                 stream->is_grpc_stream = true;
@@ -331,10 +375,14 @@ int Http2Connection::on_invalid_frame_recv(const nghttp2_frame* frame, int lib_e
 
 int Http2Connection::on_stream_close(int32_t stream_id, uint32_t) {
     closed_stream_ids_.insert(stream_id);
-    if (closed_stream_ids_.size() > 1024) {
-        closed_stream_ids_.erase(closed_stream_ids_.begin());
+    auto it = streams_.find(stream_id);
+    if (it != streams_.end()) {
+        if (stream_pool_.size() < 256) {
+            it->second->cleanup_mmap();
+            stream_pool_.push_back(std::move(it->second));
+        }
+        streams_.erase(it);
     }
-    streams_.erase(stream_id);
     return 0;
 }
 
@@ -884,8 +932,13 @@ core::Task<bool> Http2Connection::upgrade_request(Request req, std::string_view 
 core::Task<void> Http2Connection::dispatch_pending_requests() {
     if (pending_dispatch_.empty()) co_return;
 
-    auto ready = std::move(pending_dispatch_);
-    pending_dispatch_.clear();
+    // A local vector (the loop below can suspend, and dispatch may be re-entered meanwhile),
+    // whose capacity is handed back afterwards so steady state allocates nothing.
+    std::vector<int32_t> ready;
+    ready.swap(pending_dispatch_);
+    if (dispatch_scratch_.capacity() > 0 && pending_dispatch_.capacity() == 0) {
+        pending_dispatch_.swap(dispatch_scratch_);
+    }
 
     for (int32_t sid : ready) {
         if (closed_stream_ids_.contains(sid)) continue;
@@ -906,7 +959,7 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
         }
 
         Context ctx(stream->req, stream->res, services_);
-        if (router_.dispatch_sync(stream->req, stream->res, services_, ctx)) [[likely]] {
+        if (router_.dispatch_sync(stream->req, stream->res, services_, ctx, stream->matched)) [[likely]] {
             // Handled synchronously inline with 0 coroutines
         } else {
             // Build SSE write-back: pushes each frame into the stream queue and flushes.
@@ -959,6 +1012,10 @@ core::Task<void> Http2Connection::dispatch_pending_requests() {
         } else {
             submit_response(stream);
         }
+    }
+    ready.clear();
+    if (dispatch_scratch_.capacity() < ready.capacity()) {
+        dispatch_scratch_.swap(ready);
     }
 }
 
@@ -1017,6 +1074,28 @@ void Http2Connection::setup_file_response(Http2Stream* stream) {
     submit_response(stream);
 }
 
+// Sends one batch: through the direct output (TLS) or a direct send() (cleartext) without
+// suspending in the common case; the ring / async drain only for what the socket refused.
+core::Task<bool> Http2Connection::send_batch(std::string& buf) {
+    const auto* data = reinterpret_cast<const uint8_t*>(buf.data());
+    const size_t len = buf.size();
+    if (direct_) {
+        if (!direct_.write(std::span<const uint8_t>(data, len))) co_return false;
+        if (direct_.pending() && !co_await direct_.drain()) co_return false;
+        co_return true;
+    }
+    if (sender_) {
+        int sent = co_await sender_(std::span<const uint8_t>(data, len));
+        co_return sent > 0;
+    }
+    int sent = core::IoEngine::send_now(client_fd_, data, len);
+    if (sent == static_cast<int>(len)) co_return true;
+    if (sent < 0 && sent != -EAGAIN && sent != -EWOULDBLOCK && sent != -EINTR) co_return false;
+    size_t done = sent > 0 ? static_cast<size_t>(sent) : 0;
+    int rem = co_await loop_.engine().send_all(client_fd_, std::string_view(buf).substr(done));
+    co_return rem == static_cast<int>(len - done);
+}
+
 core::Task<bool> Http2Connection::flush_outbound() {
     if (is_flushing_) {
         flush_again_ = true;
@@ -1047,25 +1126,7 @@ core::Task<bool> Http2Connection::flush_outbound() {
             if (outbound_buf_.size() >= 65536) {
                 outbound_buf_.swap(send_buf_);
                 outbound_buf_.clear();
-                int sent = 0;
-                if (sender_) {
-                    sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(send_buf_.data()), send_buf_.size()));
-                } else {
-                    sent = co_await loop_.engine().send(client_fd_, send_buf_);
-                    if (sent != static_cast<int>(send_buf_.size())) [[unlikely]] {
-                        if (sent <= 0) {
-                            closed_ = true;
-                            co_return false;
-                        }
-                        int rem = co_await loop_.engine().send_all(client_fd_, std::string_view(send_buf_).substr(sent));
-                        if (rem != static_cast<int>(send_buf_.size() - sent)) {
-                            closed_ = true;
-                            co_return false;
-                        }
-                        sent += rem;
-                    }
-                }
-                if (sent <= 0) {
+                if (!co_await send_batch(send_buf_)) {
                     closed_ = true;
                     co_return false;
                 }
@@ -1075,25 +1136,7 @@ core::Task<bool> Http2Connection::flush_outbound() {
         if (!outbound_buf_.empty()) {
             outbound_buf_.swap(send_buf_);
             outbound_buf_.clear();
-            int sent = 0;
-            if (sender_) {
-                sent = co_await sender_(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(send_buf_.data()), send_buf_.size()));
-            } else {
-                sent = co_await loop_.engine().send(client_fd_, send_buf_);
-                if (sent != static_cast<int>(send_buf_.size())) [[unlikely]] {
-                    if (sent <= 0) {
-                        closed_ = true;
-                        co_return false;
-                    }
-                    int rem = co_await loop_.engine().send_all(client_fd_, std::string_view(send_buf_).substr(sent));
-                    if (rem != static_cast<int>(send_buf_.size() - sent)) {
-                        closed_ = true;
-                        co_return false;
-                    }
-                    sent += rem;
-                }
-            }
-            if (sent <= 0) {
+            if (!co_await send_batch(send_buf_)) {
                 closed_ = true;
                 co_return false;
             }
