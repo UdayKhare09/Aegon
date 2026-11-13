@@ -131,9 +131,11 @@ int main() {
 Build the executable using CMake and Ninja:
 
 ```bash
-cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake -B build -S . -G Ninja
+cmake --build build -j$(nproc)
 ```
+
+Aegon always builds with `-O3 -march=native`; no build type is required.
 
 Run the server:
 

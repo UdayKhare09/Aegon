@@ -1,45 +1,148 @@
 # ==============================================================================
 # Aegon Third-Party Dependencies Resolution & Imported Targets
 # Standardized namespace: Aegon::Ext::<Name>
+#
+# Every required system dependency is resolved at configure time. If a header
+# or library is missing, configuration stops immediately with an install hint
+# instead of falling back to a bare linker name and failing later at link time.
 # ==============================================================================
 
 find_package(PkgConfig QUIET)
+
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+# aegon_find_required_library(
+#     TARGET <Aegon::Ext::name>
+#     DISPLAY <human-readable name>
+#     HEADER <header to find>
+#     LIBRARIES <library name>...
+#     [PKG_CONFIG <pkg-config module>]
+#     [ROOTS <root variable>...]
+#     [ARCH <Arch package>]
+#     [DEBIAN <Debian package>]
+# )
+#
+# Resolve a dependency that may not ship a CMake config package. pkg-config is
+# tried first, then a manual header/library search using the supplied root
+# variables (both CMake cache variables and environment variables).
+function(aegon_find_required_library)
+    cmake_parse_arguments(ARG ""
+        "TARGET;DISPLAY;HEADER;PKG_CONFIG;ARCH;DEBIAN"
+        "LIBRARIES;ROOTS"
+        ${ARGN})
+
+    if(TARGET "${ARG_TARGET}")
+        return()
+    endif()
+
+    if(NOT ARG_TARGET OR NOT ARG_DISPLAY OR NOT ARG_HEADER OR NOT ARG_LIBRARIES)
+        message(FATAL_ERROR
+            "aegon_find_required_library: TARGET, DISPLAY, HEADER and LIBRARIES are required")
+    endif()
+
+    string(MAKE_C_IDENTIFIER "${ARG_TARGET}" _dep_id)
+    set(_pkg_prefix "AEGON_PKG_${_dep_id}")
+    set(_pkg_target "PkgConfig::${_pkg_prefix}")
+
+    # Prefer pkg-config because it carries transitive link dependencies and
+    # private flags that a bare find_library() cannot know about.
+    if(ARG_PKG_CONFIG AND PKG_CONFIG_FOUND)
+        pkg_check_modules(${_pkg_prefix} QUIET IMPORTED_TARGET "${ARG_PKG_CONFIG}")
+        if(TARGET "${_pkg_target}")
+            add_library(${ARG_TARGET} INTERFACE IMPORTED GLOBAL)
+            target_link_libraries(${ARG_TARGET} INTERFACE ${_pkg_target})
+            message(STATUS
+                "[Dependency] ${ARG_DISPLAY} found via pkg-config (${${_pkg_prefix}_VERSION})")
+            return()
+        endif()
+    endif()
+
+    set(_include_hints "")
+    set(_library_hints "")
+    foreach(_root_var IN LISTS ARG_ROOTS)
+        foreach(_root IN ITEMS "${${_root_var}}" "$ENV{${_root_var}}")
+            if(_root)
+                list(APPEND _include_hints "${_root}" "${_root}/include")
+                list(APPEND _library_hints "${_root}" "${_root}/lib" "${_root}/lib64")
+            endif()
+        endforeach()
+    endforeach()
+
+    find_path(AEGON_${_dep_id}_INCLUDE_DIR
+        NAMES ${ARG_HEADER}
+        HINTS ${_include_hints}
+    )
+    find_library(AEGON_${_dep_id}_LIBRARY
+        NAMES ${ARG_LIBRARIES}
+        HINTS ${_library_hints}
+    )
+
+    if(NOT AEGON_${_dep_id}_INCLUDE_DIR OR NOT AEGON_${_dep_id}_LIBRARY)
+        set(_install_hints "")
+        if(ARG_ARCH)
+            string(APPEND _install_hints "  Arch:   sudo pacman -S ${ARG_ARCH}\n")
+        endif()
+        if(ARG_DEBIAN)
+            string(APPEND _install_hints "  Debian: sudo apt install ${ARG_DEBIAN}\n")
+        endif()
+
+        if(ARG_ROOTS)
+            list(GET ARG_ROOTS 0 _primary_root)
+            set(_root_hint "Or set ${_primary_root} to the install prefix.")
+        else()
+            set(_root_hint "Install the development package and re-run CMake.")
+        endif()
+
+        if(_install_hints)
+            set(_install_hints "Install it with:\n${_install_hints}")
+        endif()
+
+        message(FATAL_ERROR
+            "Missing required dependency: ${ARG_DISPLAY}\n"
+            "${_install_hints}"
+            "${_root_hint}"
+        )
+    endif()
+
+    add_library(${ARG_TARGET} UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(${ARG_TARGET} PROPERTIES
+        IMPORTED_LOCATION "${AEGON_${_dep_id}_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${AEGON_${_dep_id}_INCLUDE_DIR}"
+    )
+    message(STATUS "[Dependency] ${ARG_DISPLAY} found: ${AEGON_${_dep_id}_LIBRARY}")
+endfunction()
 
 # ------------------------------------------------------------------------------
 # 1. Threads
 # ------------------------------------------------------------------------------
 find_package(Threads REQUIRED)
 if(NOT TARGET Aegon::Ext::Threads)
-    add_library(Aegon::Ext::Threads INTERFACE IMPORTED)
+    add_library(Aegon::Ext::Threads INTERFACE IMPORTED GLOBAL)
     target_link_libraries(Aegon::Ext::Threads INTERFACE Threads::Threads)
 endif()
 
 # ------------------------------------------------------------------------------
 # 2. Linux io_uring (liburing)
 # ------------------------------------------------------------------------------
-if(NOT TARGET Aegon::Ext::uring)
-    pkg_check_modules(PKG_URING QUIET IMPORTED_TARGET liburing)
-    if(TARGET PkgConfig::PKG_URING)
-        add_library(Aegon::Ext::uring INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::uring INTERFACE PkgConfig::PKG_URING)
-        message(STATUS "[Dependency] liburing found via pkg-config (${PKG_URING_VERSION})")
-    else()
-        find_path(URING_INCLUDE_DIR NAMES liburing.h)
-        find_library(URING_LIBRARY NAMES uring)
-        if(NOT URING_LIBRARY OR NOT URING_INCLUDE_DIR)
-            message(FATAL_ERROR "liburing development package (liburing-dev / liburing-devel) is required on Linux.")
-        endif()
-        add_library(Aegon::Ext::uring INTERFACE IMPORTED)
-        target_include_directories(Aegon::Ext::uring INTERFACE ${URING_INCLUDE_DIR})
-        target_link_libraries(Aegon::Ext::uring INTERFACE ${URING_LIBRARY})
-        message(STATUS "[Dependency] liburing found: ${URING_LIBRARY}")
-    endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    aegon_find_required_library(
+        TARGET      Aegon::Ext::uring
+        DISPLAY     "liburing"
+        HEADER      liburing.h
+        LIBRARIES   uring
+        PKG_CONFIG  liburing
+        ROOTS       URING_ROOT LIBURING_ROOT
+        ARCH        liburing
+        DEBIAN      liburing-dev
+    )
 endif()
 
 # ------------------------------------------------------------------------------
-# 3. Serialization: Glaze
+# 3. Serialization: Glaze (header-only)
 # ------------------------------------------------------------------------------
-find_package(glaze QUIET)
+find_package(glaze CONFIG QUIET)
 if(NOT TARGET glaze::glaze)
     include(FetchContent)
     message(STATUS "[Dependency] glaze not found on system; acquiring via FetchContent (v9.1.0)...")
@@ -52,275 +155,259 @@ if(NOT TARGET glaze::glaze)
     FetchContent_MakeAvailable(glaze)
 endif()
 
+if(NOT TARGET glaze::glaze)
+    message(FATAL_ERROR
+        "Missing required dependency: glaze\n"
+        "  Arch:   sudo pacman -S glaze\n"
+        "  Others: build from source or install via vcpkg\n"
+        "Or set CMAKE_PREFIX_PATH to the glaze install prefix."
+    )
+endif()
+
 if(NOT TARGET Aegon::Ext::glaze)
-    add_library(Aegon::Ext::glaze INTERFACE IMPORTED)
+    add_library(Aegon::Ext::glaze INTERFACE IMPORTED GLOBAL)
     target_link_libraries(Aegon::Ext::glaze INTERFACE glaze::glaze)
 endif()
 
 # ------------------------------------------------------------------------------
 # 4. Cryptography & TLS: OpenSSL
 # ------------------------------------------------------------------------------
-find_package(OpenSSL REQUIRED)
+find_package(OpenSSL 3.0 QUIET)
+# FindOpenSSL sets OPENSSL_FOUND; newer CMake versions also set OpenSSL_FOUND.
+if((NOT OPENSSL_FOUND AND NOT OpenSSL_FOUND) OR NOT TARGET OpenSSL::SSL OR NOT TARGET OpenSSL::Crypto)
+    message(FATAL_ERROR
+        "Missing required dependency: OpenSSL >= 3.0\n"
+        "  Arch:   sudo pacman -S openssl\n"
+        "  Debian: sudo apt install libssl-dev\n"
+        "Or set OPENSSL_ROOT_DIR to the install prefix."
+    )
+endif()
+
 if(NOT TARGET Aegon::Ext::OpenSSL_Crypto)
-    add_library(Aegon::Ext::OpenSSL_Crypto INTERFACE IMPORTED)
+    add_library(Aegon::Ext::OpenSSL_Crypto INTERFACE IMPORTED GLOBAL)
     target_link_libraries(Aegon::Ext::OpenSSL_Crypto INTERFACE OpenSSL::Crypto)
 endif()
 if(NOT TARGET Aegon::Ext::OpenSSL_SSL)
-    add_library(Aegon::Ext::OpenSSL_SSL INTERFACE IMPORTED)
+    add_library(Aegon::Ext::OpenSSL_SSL INTERFACE IMPORTED GLOBAL)
     target_link_libraries(Aegon::Ext::OpenSSL_SSL INTERFACE OpenSSL::SSL)
 endif()
 
 # ------------------------------------------------------------------------------
 # 5. Database: PostgreSQL (libpq)
 # ------------------------------------------------------------------------------
-if(NOT TARGET Aegon::Ext::PostgreSQL)
-    find_package(PostgreSQL QUIET)
-    if(TARGET PostgreSQL::PostgreSQL)
-        add_library(Aegon::Ext::PostgreSQL INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::PostgreSQL INTERFACE PostgreSQL::PostgreSQL)
-        message(STATUS "[Dependency] PostgreSQL found via CMake package")
-    else()
-        pkg_check_modules(PKG_PQ QUIET IMPORTED_TARGET libpq)
-        if(TARGET PkgConfig::PKG_PQ)
-            add_library(Aegon::Ext::PostgreSQL INTERFACE IMPORTED)
-            target_link_libraries(Aegon::Ext::PostgreSQL INTERFACE PkgConfig::PKG_PQ)
-            message(STATUS "[Dependency] PostgreSQL (libpq) found via pkg-config")
-        else()
-            find_path(PQ_INCLUDE_DIR NAMES libpq-fe.h HINTS ${PostgreSQL_INCLUDE_DIRS})
-            find_library(PQ_LIBRARY NAMES pq HINTS ${PostgreSQL_LIBRARIES})
-            add_library(Aegon::Ext::PostgreSQL INTERFACE IMPORTED)
-            if(PQ_INCLUDE_DIR)
-                target_include_directories(Aegon::Ext::PostgreSQL INTERFACE ${PQ_INCLUDE_DIR})
-            endif()
-            if(PQ_LIBRARY)
-                target_link_libraries(Aegon::Ext::PostgreSQL INTERFACE ${PQ_LIBRARY})
-            else()
-                target_link_libraries(Aegon::Ext::PostgreSQL INTERFACE pq)
-            endif()
-        endif()
-    endif()
+find_package(PostgreSQL QUIET)
+if(TARGET PostgreSQL::PostgreSQL)
+    add_library(Aegon::Ext::PostgreSQL INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::PostgreSQL INTERFACE PostgreSQL::PostgreSQL)
+    message(STATUS "[Dependency] PostgreSQL found via CMake package")
+else()
+    aegon_find_required_library(
+        TARGET      Aegon::Ext::PostgreSQL
+        DISPLAY     "PostgreSQL (libpq)"
+        HEADER      libpq-fe.h
+        LIBRARIES   pq
+        PKG_CONFIG  libpq
+        ROOTS       PostgreSQL_ROOT PQ_ROOT
+        ARCH        postgresql-libs
+        DEBIAN      libpq-dev
+    )
 endif()
 
 # ------------------------------------------------------------------------------
 # 6. Database: SQLite3
 # ------------------------------------------------------------------------------
-if(NOT TARGET Aegon::Ext::SQLite3)
-    find_package(SQLite3 QUIET)
-    if(TARGET SQLite3::SQLite3)
-        add_library(Aegon::Ext::SQLite3 INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::SQLite3 INTERFACE SQLite3::SQLite3)
-        message(STATUS "[Dependency] SQLite3 found via CMake package")
-    elseif(TARGET SQLite::SQLite3)
-        add_library(Aegon::Ext::SQLite3 INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::SQLite3 INTERFACE SQLite::SQLite3)
-    else()
-        pkg_check_modules(PKG_SQLITE3 QUIET IMPORTED_TARGET sqlite3)
-        if(TARGET PkgConfig::PKG_SQLITE3)
-            add_library(Aegon::Ext::SQLite3 INTERFACE IMPORTED)
-            target_link_libraries(Aegon::Ext::SQLite3 INTERFACE PkgConfig::PKG_SQLITE3)
-            message(STATUS "[Dependency] SQLite3 found via pkg-config")
-        else()
-            find_path(SQLITE3_INCLUDE_DIR NAMES sqlite3.h)
-            find_library(SQLITE3_LIBRARY NAMES sqlite3)
-            add_library(Aegon::Ext::SQLite3 INTERFACE IMPORTED)
-            if(SQLITE3_INCLUDE_DIR)
-                target_include_directories(Aegon::Ext::SQLite3 INTERFACE ${SQLITE3_INCLUDE_DIR})
-            endif()
-            if(SQLITE3_LIBRARY)
-                target_link_libraries(Aegon::Ext::SQLite3 INTERFACE ${SQLITE3_LIBRARY})
-            else()
-                target_link_libraries(Aegon::Ext::SQLite3 INTERFACE sqlite3)
-            endif()
-        endif()
-    endif()
+find_package(SQLite3 QUIET)
+if(TARGET SQLite3::SQLite3)
+    add_library(Aegon::Ext::SQLite3 INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::SQLite3 INTERFACE SQLite3::SQLite3)
+    message(STATUS "[Dependency] SQLite3 found via CMake package")
+elseif(TARGET SQLite::SQLite3)
+    add_library(Aegon::Ext::SQLite3 INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::SQLite3 INTERFACE SQLite::SQLite3)
+    message(STATUS "[Dependency] SQLite3 found via CMake package")
+elseif(TARGET unofficial::sqlite3::sqlite3)
+    add_library(Aegon::Ext::SQLite3 INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::SQLite3 INTERFACE unofficial::sqlite3::sqlite3)
+    message(STATUS "[Dependency] SQLite3 found via CMake package")
+else()
+    aegon_find_required_library(
+        TARGET      Aegon::Ext::SQLite3
+        DISPLAY     "SQLite3"
+        HEADER      sqlite3.h
+        LIBRARIES   sqlite3
+        PKG_CONFIG  sqlite3
+        ROOTS       SQLite3_ROOT SQLITE3_ROOT
+        ARCH        sqlite
+        DEBIAN      libsqlite3-dev
+    )
 endif()
 
 # ------------------------------------------------------------------------------
 # 7. Compression: libdeflate
 # ------------------------------------------------------------------------------
-if(NOT TARGET Aegon::Ext::deflate)
-    find_package(libdeflate CONFIG QUIET)
-    if(TARGET libdeflate::libdeflate_shared)
-        add_library(Aegon::Ext::deflate INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::deflate INTERFACE libdeflate::libdeflate_shared)
-        message(STATUS "[Dependency] libdeflate found via CMake CONFIG (shared)")
-    elseif(TARGET libdeflate::libdeflate_static)
-        add_library(Aegon::Ext::deflate INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::deflate INTERFACE libdeflate::libdeflate_static)
-        message(STATUS "[Dependency] libdeflate found via CMake CONFIG (static)")
-    elseif(TARGET libdeflate::libdeflate)
-        add_library(Aegon::Ext::deflate INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::deflate INTERFACE libdeflate::libdeflate)
-        message(STATUS "[Dependency] libdeflate found via CMake CONFIG")
-    else()
-        pkg_check_modules(PKG_DEFLATE QUIET IMPORTED_TARGET libdeflate)
-        if(TARGET PkgConfig::PKG_DEFLATE)
-            add_library(Aegon::Ext::deflate INTERFACE IMPORTED)
-            target_link_libraries(Aegon::Ext::deflate INTERFACE PkgConfig::PKG_DEFLATE)
-            message(STATUS "[Dependency] libdeflate found via pkg-config")
-        else()
-            find_path(DEFLATE_INCLUDE_DIR NAMES libdeflate.h)
-            find_library(DEFLATE_LIBRARY NAMES deflate libdeflate)
-            add_library(Aegon::Ext::deflate INTERFACE IMPORTED)
-            if(DEFLATE_INCLUDE_DIR)
-                target_include_directories(Aegon::Ext::deflate INTERFACE ${DEFLATE_INCLUDE_DIR})
-            endif()
-            if(DEFLATE_LIBRARY)
-                target_link_libraries(Aegon::Ext::deflate INTERFACE ${DEFLATE_LIBRARY})
-            else()
-                target_link_libraries(Aegon::Ext::deflate INTERFACE deflate)
-            endif()
-        endif()
-    endif()
+find_package(libdeflate CONFIG QUIET)
+if(TARGET libdeflate::libdeflate_shared)
+    add_library(Aegon::Ext::deflate INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::deflate INTERFACE libdeflate::libdeflate_shared)
+    message(STATUS "[Dependency] libdeflate found via CMake package (shared)")
+elseif(TARGET libdeflate::libdeflate_static)
+    add_library(Aegon::Ext::deflate INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::deflate INTERFACE libdeflate::libdeflate_static)
+    message(STATUS "[Dependency] libdeflate found via CMake package (static)")
+elseif(TARGET libdeflate::libdeflate)
+    add_library(Aegon::Ext::deflate INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::deflate INTERFACE libdeflate::libdeflate)
+    message(STATUS "[Dependency] libdeflate found via CMake package")
+else()
+    aegon_find_required_library(
+        TARGET      Aegon::Ext::deflate
+        DISPLAY     "libdeflate"
+        HEADER      libdeflate.h
+        LIBRARIES   deflate libdeflate
+        PKG_CONFIG  libdeflate
+        ROOTS       LIBDEFLATE_ROOT DEFLATE_ROOT
+        ARCH        libdeflate
+        DEBIAN      libdeflate-dev
+    )
 endif()
 
 # ------------------------------------------------------------------------------
 # 8. HTTP/2: nghttp2
 # ------------------------------------------------------------------------------
-if(NOT TARGET Aegon::Ext::nghttp2)
-    find_package(nghttp2 CONFIG QUIET)
-    if(TARGET nghttp2::nghttp2)
-        add_library(Aegon::Ext::nghttp2 INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::nghttp2 INTERFACE nghttp2::nghttp2)
-        message(STATUS "[Dependency] nghttp2 found via CMake CONFIG")
-    else()
-        pkg_check_modules(PKG_NGHTTP2 QUIET IMPORTED_TARGET libnghttp2)
-        if(TARGET PkgConfig::PKG_NGHTTP2)
-            add_library(Aegon::Ext::nghttp2 INTERFACE IMPORTED)
-            target_link_libraries(Aegon::Ext::nghttp2 INTERFACE PkgConfig::PKG_NGHTTP2)
-            message(STATUS "[Dependency] nghttp2 found via pkg-config")
-        else()
-            find_path(NGHTTP2_INCLUDE_DIR NAMES nghttp2/nghttp2.h)
-            find_library(NGHTTP2_LIBRARY NAMES nghttp2)
-            add_library(Aegon::Ext::nghttp2 INTERFACE IMPORTED)
-            if(NGHTTP2_INCLUDE_DIR)
-                target_include_directories(Aegon::Ext::nghttp2 INTERFACE ${NGHTTP2_INCLUDE_DIR})
-            endif()
-            if(NGHTTP2_LIBRARY)
-                target_link_libraries(Aegon::Ext::nghttp2 INTERFACE ${NGHTTP2_LIBRARY})
-            else()
-                target_link_libraries(Aegon::Ext::nghttp2 INTERFACE nghttp2)
-            endif()
-        endif()
-    endif()
+find_package(nghttp2 CONFIG QUIET)
+if(TARGET nghttp2::nghttp2)
+    add_library(Aegon::Ext::nghttp2 INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::nghttp2 INTERFACE nghttp2::nghttp2)
+    message(STATUS "[Dependency] nghttp2 found via CMake package")
+else()
+    aegon_find_required_library(
+        TARGET      Aegon::Ext::nghttp2
+        DISPLAY     "nghttp2"
+        HEADER      nghttp2/nghttp2.h
+        LIBRARIES   nghttp2
+        PKG_CONFIG  libnghttp2
+        ROOTS       NGHTTP2_ROOT
+        ARCH        libnghttp2
+        DEBIAN      libnghttp2-dev
+    )
 endif()
 
 # ------------------------------------------------------------------------------
 # 9. HTTP/3 & QPACK: nghttp3
 # ------------------------------------------------------------------------------
-if(NOT TARGET Aegon::Ext::nghttp3)
-    find_package(nghttp3 CONFIG QUIET)
-    if(TARGET nghttp3::nghttp3)
-        add_library(Aegon::Ext::nghttp3 INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::nghttp3 INTERFACE nghttp3::nghttp3)
-        message(STATUS "[Dependency] nghttp3 found via CMake CONFIG")
-    else()
-        pkg_check_modules(PKG_NGHTTP3 QUIET IMPORTED_TARGET libnghttp3)
-        if(TARGET PkgConfig::PKG_NGHTTP3)
-            add_library(Aegon::Ext::nghttp3 INTERFACE IMPORTED)
-            target_link_libraries(Aegon::Ext::nghttp3 INTERFACE PkgConfig::PKG_NGHTTP3)
-            message(STATUS "[Dependency] nghttp3 found via pkg-config")
-        else()
-            find_path(NGHTTP3_INCLUDE_DIR NAMES nghttp3/nghttp3.h)
-            find_library(NGHTTP3_LIBRARY NAMES nghttp3)
-            add_library(Aegon::Ext::nghttp3 INTERFACE IMPORTED)
-            if(NGHTTP3_INCLUDE_DIR)
-                target_include_directories(Aegon::Ext::nghttp3 INTERFACE ${NGHTTP3_INCLUDE_DIR})
-            endif()
-            if(NGHTTP3_LIBRARY)
-                target_link_libraries(Aegon::Ext::nghttp3 INTERFACE ${NGHTTP3_LIBRARY})
-            else()
-                target_link_libraries(Aegon::Ext::nghttp3 INTERFACE nghttp3)
-            endif()
-        endif()
-    endif()
+find_package(nghttp3 CONFIG QUIET)
+if(TARGET nghttp3::nghttp3)
+    add_library(Aegon::Ext::nghttp3 INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::nghttp3 INTERFACE nghttp3::nghttp3)
+    message(STATUS "[Dependency] nghttp3 found via CMake package")
+else()
+    aegon_find_required_library(
+        TARGET      Aegon::Ext::nghttp3
+        DISPLAY     "nghttp3"
+        HEADER      nghttp3/nghttp3.h
+        LIBRARIES   nghttp3
+        PKG_CONFIG  libnghttp3
+        ROOTS       NGHTTP3_ROOT
+        ARCH        libnghttp3
+        DEBIAN      libnghttp3-dev
+    )
 endif()
 
 # ------------------------------------------------------------------------------
 # 10. QUIC: ngtcp2 & ngtcp2_crypto_ossl
 # ------------------------------------------------------------------------------
-if(NOT TARGET Aegon::Ext::ngtcp2_crypto)
-    find_package(ngtcp2 CONFIG QUIET)
-    if(TARGET ngtcp2::ngtcp2_crypto_ossl)
-        add_library(Aegon::Ext::ngtcp2_crypto INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::ngtcp2_crypto INTERFACE ngtcp2::ngtcp2_crypto_ossl)
-        message(STATUS "[Dependency] ngtcp2_crypto_ossl found via CMake CONFIG")
-    else()
-        pkg_check_modules(PKG_NGTCP2_CRYPTO QUIET IMPORTED_TARGET libngtcp2_crypto_ossl)
-        if(TARGET PkgConfig::PKG_NGTCP2_CRYPTO)
-            add_library(Aegon::Ext::ngtcp2_crypto INTERFACE IMPORTED)
-            target_link_libraries(Aegon::Ext::ngtcp2_crypto INTERFACE PkgConfig::PKG_NGTCP2_CRYPTO)
-            message(STATUS "[Dependency] ngtcp2_crypto_ossl found via pkg-config")
-        else()
-            find_path(NGTCP2_CRYPTO_INCLUDE_DIR NAMES ngtcp2/ngtcp2_crypto.h)
-            find_library(NGTCP2_CRYPTO_LIBRARY NAMES ngtcp2_crypto_ossl)
-            add_library(Aegon::Ext::ngtcp2_crypto INTERFACE IMPORTED)
-            if(NGTCP2_CRYPTO_INCLUDE_DIR)
-                target_include_directories(Aegon::Ext::ngtcp2_crypto INTERFACE ${NGTCP2_CRYPTO_INCLUDE_DIR})
-            endif()
-            if(NGTCP2_CRYPTO_LIBRARY)
-                target_link_libraries(Aegon::Ext::ngtcp2_crypto INTERFACE ${NGTCP2_CRYPTO_LIBRARY})
-            else()
-                target_link_libraries(Aegon::Ext::ngtcp2_crypto INTERFACE ngtcp2_crypto_ossl)
-            endif()
-        endif()
-    endif()
+find_package(ngtcp2 CONFIG QUIET)
+
+if(TARGET ngtcp2::ngtcp2)
+    add_library(Aegon::Ext::ngtcp2 INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::ngtcp2 INTERFACE ngtcp2::ngtcp2)
+    message(STATUS "[Dependency] ngtcp2 found via CMake package")
+else()
+    aegon_find_required_library(
+        TARGET      Aegon::Ext::ngtcp2
+        DISPLAY     "ngtcp2"
+        HEADER      ngtcp2/ngtcp2.h
+        LIBRARIES   ngtcp2
+        PKG_CONFIG  libngtcp2
+        ROOTS       NGTCP2_ROOT
+        ARCH        libngtcp2
+        DEBIAN      libngtcp2-dev
+    )
 endif()
 
-if(NOT TARGET Aegon::Ext::ngtcp2)
-    if(TARGET ngtcp2::ngtcp2)
-        add_library(Aegon::Ext::ngtcp2 INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::ngtcp2 INTERFACE ngtcp2::ngtcp2)
-        message(STATUS "[Dependency] ngtcp2 found via CMake CONFIG")
-    else()
-        pkg_check_modules(PKG_NGTCP2 QUIET IMPORTED_TARGET libngtcp2)
-        if(TARGET PkgConfig::PKG_NGTCP2)
-            add_library(Aegon::Ext::ngtcp2 INTERFACE IMPORTED)
-            target_link_libraries(Aegon::Ext::ngtcp2 INTERFACE PkgConfig::PKG_NGTCP2)
-            message(STATUS "[Dependency] ngtcp2 found via pkg-config")
-        else()
-            find_path(NGTCP2_INCLUDE_DIR NAMES ngtcp2/ngtcp2.h)
-            find_library(NGTCP2_LIBRARY NAMES ngtcp2)
-            add_library(Aegon::Ext::ngtcp2 INTERFACE IMPORTED)
-            if(NGTCP2_INCLUDE_DIR)
-                target_include_directories(Aegon::Ext::ngtcp2 INTERFACE ${NGTCP2_INCLUDE_DIR})
-            endif()
-            if(NGTCP2_LIBRARY)
-                target_link_libraries(Aegon::Ext::ngtcp2 INTERFACE ${NGTCP2_LIBRARY})
-            else()
-                target_link_libraries(Aegon::Ext::ngtcp2 INTERFACE ngtcp2)
-            endif()
-        endif()
-    endif()
+if(TARGET ngtcp2::ngtcp2_crypto_ossl)
+    add_library(Aegon::Ext::ngtcp2_crypto INTERFACE IMPORTED GLOBAL)
+    target_link_libraries(Aegon::Ext::ngtcp2_crypto INTERFACE ngtcp2::ngtcp2_crypto_ossl)
+    message(STATUS "[Dependency] ngtcp2_crypto_ossl found via CMake package")
+else()
+    aegon_find_required_library(
+        TARGET      Aegon::Ext::ngtcp2_crypto
+        DISPLAY     "ngtcp2_crypto_ossl"
+        HEADER      ngtcp2/ngtcp2_crypto_ossl.h
+        LIBRARIES   ngtcp2_crypto_ossl
+        PKG_CONFIG  libngtcp2_crypto_ossl
+        ROOTS       NGTCP2_ROOT
+        ARCH        libngtcp2
+        DEBIAN      libngtcp2-dev
+    )
 endif()
 
 # ------------------------------------------------------------------------------
-# 11. Protobuf (for native gRPC support)
+# 11. Protobuf (native gRPC support and test code generation)
 # ------------------------------------------------------------------------------
+# Prefer pkg-config: on some distros the CMake package target omits the Abseil
+# link dependencies that libprotobuf requires.
 if(NOT TARGET Aegon::Ext::Protobuf)
-    pkg_check_modules(PKG_PROTOBUF QUIET IMPORTED_TARGET protobuf)
-    if(TARGET PkgConfig::PKG_PROTOBUF)
-        add_library(Aegon::Ext::Protobuf INTERFACE IMPORTED)
-        target_link_libraries(Aegon::Ext::Protobuf INTERFACE PkgConfig::PKG_PROTOBUF)
-        message(STATUS "[Dependency] Protobuf found via pkg-config")
-    else()
-        find_package(Protobuf QUIET)
-        if(TARGET protobuf::libprotobuf)
-            add_library(Aegon::Ext::Protobuf INTERFACE IMPORTED)
-            target_link_libraries(Aegon::Ext::Protobuf INTERFACE protobuf::libprotobuf)
-            message(STATUS "[Dependency] Protobuf found via CMake package")
-        else()
-            find_path(PROTOBUF_INCLUDE_DIR NAMES google/protobuf/message.h HINTS ${Protobuf_INCLUDE_DIRS})
-            find_library(PROTOBUF_LIBRARY NAMES protobuf HINTS ${Protobuf_LIBRARIES})
-            add_library(Aegon::Ext::Protobuf INTERFACE IMPORTED)
-            if(PROTOBUF_INCLUDE_DIR)
-                target_include_directories(Aegon::Ext::Protobuf INTERFACE ${PROTOBUF_INCLUDE_DIR})
-            endif()
-            if(PROTOBUF_LIBRARY)
-                target_link_libraries(Aegon::Ext::Protobuf INTERFACE ${PROTOBUF_LIBRARY})
-            else()
-                target_link_libraries(Aegon::Ext::Protobuf INTERFACE protobuf)
-            endif()
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(AEGON_PKG_PROTOBUF QUIET IMPORTED_TARGET protobuf)
+        if(TARGET PkgConfig::AEGON_PKG_PROTOBUF)
+            add_library(Aegon::Ext::Protobuf INTERFACE IMPORTED GLOBAL)
+            target_link_libraries(Aegon::Ext::Protobuf INTERFACE PkgConfig::AEGON_PKG_PROTOBUF)
+            message(STATUS "[Dependency] Protobuf found via pkg-config (${AEGON_PKG_PROTOBUF_VERSION})")
         endif()
+    endif()
+endif()
+
+if(NOT TARGET Aegon::Ext::Protobuf)
+    # Prefer the upstream CONFIG package: unlike the built-in module target, it
+    # carries Protobuf's Abseil link dependencies.
+    find_package(Protobuf CONFIG QUIET)
+    if(NOT TARGET protobuf::libprotobuf)
+        find_package(Protobuf QUIET)
+    endif()
+
+    if(TARGET protobuf::libprotobuf)
+        add_library(Aegon::Ext::Protobuf INTERFACE IMPORTED GLOBAL)
+        target_link_libraries(Aegon::Ext::Protobuf INTERFACE protobuf::libprotobuf)
+        message(STATUS "[Dependency] Protobuf found via CMake package")
+    elseif(Protobuf_FOUND AND Protobuf_LIBRARIES)
+        add_library(Aegon::Ext::Protobuf INTERFACE IMPORTED GLOBAL)
+        if(Protobuf_INCLUDE_DIRS)
+            target_include_directories(Aegon::Ext::Protobuf INTERFACE ${Protobuf_INCLUDE_DIRS})
+        endif()
+        target_link_libraries(Aegon::Ext::Protobuf INTERFACE ${Protobuf_LIBRARIES})
+        message(STATUS "[Dependency] Protobuf found via CMake package")
+    else()
+        aegon_find_required_library(
+            TARGET      Aegon::Ext::Protobuf
+            DISPLAY     "protobuf"
+            HEADER      google/protobuf/message.h
+            LIBRARIES   protobuf
+            PKG_CONFIG  protobuf
+            ROOTS       Protobuf_ROOT PROTOBUF_ROOT
+            ARCH        protobuf
+            DEBIAN      "libprotobuf-dev protobuf-compiler"
+        )
+    endif()
+endif()
+
+if(AEGON_BUILD_TESTS)
+    find_program(AEGON_PROTOC_EXECUTABLE NAMES protoc)
+    if(NOT AEGON_PROTOC_EXECUTABLE)
+        message(FATAL_ERROR
+            "Missing required test dependency: protoc\n"
+            "  Arch:   sudo pacman -S protobuf\n"
+            "  Debian: sudo apt install protobuf-compiler"
+        )
     endif()
 endif()

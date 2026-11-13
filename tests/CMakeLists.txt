@@ -129,7 +129,7 @@ if(TARGET aegon_http)
 
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/proto/benchmark.pb.cc ${CMAKE_CURRENT_SOURCE_DIR}/proto/benchmark.pb.h
-        COMMAND protoc --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto --cpp_out=${CMAKE_CURRENT_SOURCE_DIR}/proto ${CMAKE_CURRENT_SOURCE_DIR}/proto/benchmark.proto
+        COMMAND ${AEGON_PROTOC_EXECUTABLE} --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto --cpp_out=${CMAKE_CURRENT_SOURCE_DIR}/proto ${CMAKE_CURRENT_SOURCE_DIR}/proto/benchmark.proto
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/proto/benchmark.proto
         COMMENT "Compiling benchmark.proto with protoc"
     )

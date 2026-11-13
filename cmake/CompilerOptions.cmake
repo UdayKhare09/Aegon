@@ -9,12 +9,6 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Default to Release build if no build type is specified (for single-configuration generators)
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose build type: Debug Release RelWithDebInfo MinSizeRel" FORCE)
-    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
-endif()
-
 # Minimum compiler version validation for complete C++23 feature support
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "13.0")
@@ -34,8 +28,11 @@ if(CCACHE_PROGRAM)
     message(STATUS "[Build Speed] ccache detected and enabled: ${CCACHE_PROGRAM}")
 endif()
 
-# Optional native CPU host tuning (-march=native)
-option(AEGON_ENABLE_NATIVE_TUNING "Optimize binaries for host CPU (-march=native)" OFF)
+# Aegon always builds optimized for the host CPU. There are no build profiles.
+add_compile_options(
+    -O3
+    -march=native
+)
 
 add_compile_options(
     -Wall
@@ -44,11 +41,6 @@ add_compile_options(
     -Wno-missing-field-initializers
     -Wno-missing-braces
 )
-
-if(AEGON_ENABLE_NATIVE_TUNING)
-    add_compile_options(-march=native)
-    message(STATUS "[Compiler Options] Host CPU native tuning enabled (-march=native)")
-endif()
 
 # Ultra-fast modern linker (mold / lld)
 find_program(MOLD_LINKER mold)

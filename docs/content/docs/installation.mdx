@@ -139,6 +139,8 @@ Install the required development headers:
   </Tab>
 </Tabs>
 
+If a dependency is missing, CMake stops during configuration with the package name and Arch/Debian install hints. For a custom install prefix, set the matching `<NAME>_ROOT` variable (for example, `-DNGHTTP3_ROOT=/usr/local`).
+
 ### Build Steps
 
 #### 1. Clone Repository
@@ -150,16 +152,16 @@ cd Aegon
 #### 2. Configure with CMake
 ```bash
 cmake -B build -S . -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
     -DAEGON_BUILD_TESTS=ON \
     -DAEGON_BUILD_C_ABI=ON \
     -DAEGON_BUILD_C_EXAMPLES=ON
 ```
 
+Aegon always compiles with `-O3 -march=native`; there is no build-type or profile selection.
+
 #### CMake Configuration Options
 | Option | Default | Description |
 | :--- | :---: | :--- |
-| `CMAKE_BUILD_TYPE` | `Release` | Build mode (`Release`, `Debug`, `RelWithDebInfo`) |
 | `AEGON_BUILD_TESTS` | `ON` | Build the unified CTest suite and benchmark harness |
 | `AEGON_BUILD_C_ABI` | `ON` | Build the C ABI wrapper libraries (`libaegon_c.so` and `libaegon_c.a`) |
 | `AEGON_BUILD_C_EXAMPLES` | `OFF` | Build C ABI reference examples (`examples/c`) |

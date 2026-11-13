@@ -13,7 +13,7 @@ if(AEGON_HARDENING)
         -Wformat=2                # Strict printf/scanf format checks
         -Wformat-security         # Disallow potential format string vulnerabilities
         -Wnull-dereference        # Warn on dereferencing null pointers
-        $<$<NOT:$<CONFIG:Debug>>:-D_FORTIFY_SOURCE=3> # Runtime buffer bounds check
+        -D_FORTIFY_SOURCE=3       # Runtime buffer bounds check
     )
 
     add_link_options(

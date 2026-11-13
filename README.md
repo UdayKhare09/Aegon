@@ -236,11 +236,12 @@ cd Aegon
 
 ```bash
 cmake -B build -S . \
-    -DCMAKE_BUILD_TYPE=Release \
     -DAEGON_BUILD_TESTS=ON \
     -DAEGON_BUILD_C_ABI=ON \
     -DAEGON_BUILD_C_EXAMPLES=ON
 ```
+
+Aegon always builds with `-O3 -march=native`; there is no build-type selection.
 
 #### Build Configuration Flags
 
