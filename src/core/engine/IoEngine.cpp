@@ -83,6 +83,12 @@ int TimeoutAwaiter::await_resume() noexcept {
     return result;
 }
 
+TimeoutAwaiter::~TimeoutAwaiter() {
+    if (heap_index != npos) {
+        engine.cancel_timeout(*this);
+    }
+}
+
 int CloseAwaiter::await_resume() noexcept {
     return result;
 }
@@ -131,20 +137,18 @@ void MultishotAcceptStream::StreamState::on_completion(int res, uint32_t cqe_fla
     r.has_more     = (cqe_flags & 0x02 /* IORING_CQE_F_MORE */) != 0;
     r.is_direct_fd = use_direct;
 
-    bool kernel_disarmed = !r.has_more && res >= 0;
-    if (kernel_disarmed) {
-        armed = false;
-    } else {
-        armed = r.has_more;
-    }
-
-    if (!r.has_more || res < 0) {
+    armed = r.has_more;
+    // A final CQE that still carries an accepted fd (the kernel ends multishot on CQ
+    // overflow, among others) means "re-arm on the next next()", not "finished". Only an
+    // error ends the stream; the caller re-creates it.
+    if (res < 0) {
         finished = true;
         armed    = false;
     }
 
     if (continuation && !continuation.done()) {
         current_result = r;
+        has_result     = true;
         auto cont = continuation;
         continuation = nullptr;
         cont.resume();
@@ -192,20 +196,29 @@ void MultishotRecvStream::StreamState::on_completion(int res, uint32_t cqe_flags
     r.has_more = (cqe_flags & 0x02 /* IORING_CQE_F_MORE */) != 0;
     r.eof      = (res == 0);
 
-    bool kernel_disarmed = !r.has_more && res > 0;
-    if (kernel_disarmed) {
+    armed = r.has_more;
+
+    // Out of provided buffers: the kernel ended the multishot recv, but the connection is
+    // fine. Re-arm (the SQE goes out with the next submit, after the loop has returned
+    // buffers) instead of ending the stream, and deliver nothing.
+    if (res == -ENOBUFS) {
         armed = false;
-    } else {
-        armed = r.has_more;
+        if (!cancelled && !finished) {
+            submit();
+        }
+        return;
     }
 
-    if (!r.has_more || res <= 0) {
+    // A final CQE that carries data means "re-arm on the next next()". Only EOF or an
+    // error ends the stream.
+    if (res <= 0) {
         finished = true;
         armed    = false;
     }
 
     if (continuation && !continuation.done()) {
         current_result = r;
+        has_result     = true;
         auto cont = continuation;
         continuation = nullptr;
         cont.resume();

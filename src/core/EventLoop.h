@@ -72,9 +72,14 @@ private:
     BufferPool                buffer_pool_;
     std::unique_ptr<IoEngine> engine_;
     std::atomic<bool>         running_{false};
-    std::vector<Task<void>>   tasks_;
+    // Live root tasks. Each one destroys itself and unlinks when it finishes, so the loop
+    // only reads the count; it never scans the tasks.
+    detail::RootTaskList      roots_;
     std::mutex                post_mutex_;
     std::vector<std::function<void()>> post_queue_;
+    // Set (under post_mutex_) when post_queue_ becomes non-empty, so the loop checks for
+    // cross-thread work with one relaxed load instead of a mutex round trip per iteration.
+    std::atomic<bool>         has_posts_{false};
 };
 
 struct YieldAwaiter {

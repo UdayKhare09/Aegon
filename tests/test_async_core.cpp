@@ -3,6 +3,8 @@
 #include "core/BufferPool.h"
 #include "core/EventLoop.h"
 #include <iostream>
+#include <vector>
+#include <chrono>
 #include <cassert>
 #include <cstring>
 #include <thread>
@@ -209,6 +211,36 @@ int main() {
 
         assert(posted_counter.load(std::memory_order_acquire) == 5);
         std::cout << "  -> PASS: EventLoop::post executed 5 tasks from foreign thread.\n";
+    }
+
+    // Timers: userspace heap in the io_uring engine. Deadline order, accuracy, and an
+    // awaiter destroyed while armed (its heap slot must be removed, never resumed).
+    {
+        std::cout << "[TEST T] Timers fire in deadline order; a destroyed waiter is disarmed...\n";
+        EventLoop loop(256, 16, 4096);
+        std::vector<char> order;
+        auto start = std::chrono::steady_clock::now();
+        double a_ms = 0, b_ms = 0;
+        auto since = [&] {
+            return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        };
+        auto waiter = [&](uint64_t ms, char tag, double* at) -> Task<void> {
+            co_await loop.engine().timeout(ms * 1'000'000ULL);
+            order.push_back(tag);
+            if (at) *at = since();
+        };
+        loop.spawn(waiter(20, 'A', &a_ms));
+        loop.spawn(waiter(5, 'B', &b_ms));
+        {
+            Task<void> doomed = waiter(30, 'X', nullptr);
+            doomed.resume();   // now suspended on its timer
+        }                      // destroyed while armed
+        loop.spawn(waiter(45, 'C', nullptr));  // keeps the loop running past X's deadline
+        loop.run();
+        assert((order == std::vector<char>{'B', 'A', 'C'}));
+        assert(b_ms >= 5 && b_ms < 15);
+        assert(a_ms >= 20 && a_ms < 30);
+        std::cout << "  -> PASS: B at " << b_ms << " ms, A at " << a_ms << " ms, X never fired.\n";
     }
 
     std::cout << "\n=======================================================\n";

@@ -5,6 +5,8 @@
 #include "http/Server.h"
 #include "http/Context.h"
 #include <cassert>
+#include <cerrno>
+#include <coroutine>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -343,6 +345,79 @@ void test_multishot_recv_stream() {
     std::cout << "  -> PASS: Received " << TOTAL_MESSAGES << " consecutive packets via true multishot recv stream without re-submitting SQEs!\n";
 }
 
+// Regression: a multishot stream whose kernel request ended with a final *successful* CQE
+// (no IORING_CQE_F_MORE, e.g. after CQ overflow) must re-arm on the next next(), and must
+// never hand the same result out twice. Replaying the last accepted fd made accept_loop
+// spawn connections on one fd forever (unbounded memory, dead worker); replaying the last
+// recv handed one provided buffer out twice.
+namespace {
+struct Detached {
+    struct promise_type {
+        Detached get_return_object() noexcept { return {}; }
+        std::suspend_never initial_suspend() noexcept { return {}; }
+        std::suspend_never final_suspend() noexcept { return {}; }
+        void return_void() noexcept {}
+        void unhandled_exception() noexcept { std::terminate(); }
+    };
+};
+
+Detached consume_accepts(MultishotAcceptStream::StreamState& st, std::vector<int>& out, int n) {
+    for (int i = 0; i < n; ++i) {
+        auto r = co_await MultishotAcceptStream::NextAwaiter{st};
+        out.push_back(r.fd);
+    }
+}
+
+Detached consume_recvs(MultishotRecvStream::StreamState& st, std::vector<std::pair<int, int>>& out, int n) {
+    for (int i = 0; i < n; ++i) {
+        auto r = co_await MultishotRecvStream::NextAwaiter{st};
+        out.emplace_back(r.bytes, r.buffer_valid ? static_cast<int>(r.bid) : -1);
+    }
+}
+} // namespace
+
+void test_multishot_streams_never_replay() {
+    std::cout << "[TEST 7] Multishot streams: final CQE re-arms, results are never replayed...\n";
+    IoUringEngine engine(EngineConfig{.entries = 64});
+    constexpr uint32_t F_BUFFER = 0x01, F_MORE = 0x02;
+
+    {
+        MultishotAcceptStream::StreamState st(engine, -1);
+        st.armed = true;
+        std::vector<int> fds;
+        consume_accepts(st, fds, 3);
+        st.on_completion(7, 0);          // final CQE that still accepted fd 7
+        assert(fds.size() == 1 && fds[0] == 7);
+        assert(!st.finished && st.armed); // next() re-armed instead of replaying fd 7
+        st.on_completion(9, F_MORE);
+        st.on_completion(-EBADF, 0);      // a real error ends the stream...
+        assert((fds == std::vector<int>{7, 9, -EBADF}));
+        assert(st.finished);
+        auto again = MultishotAcceptStream::NextAwaiter{st};
+        assert(again.await_ready());
+        assert(again.await_resume().fd < 0); // ...and nothing is replayed after it
+    }
+    {
+        MultishotRecvStream::StreamState st(engine, -1, 0);
+        st.armed = true;
+        std::vector<std::pair<int, int>> got;
+        consume_recvs(st, got, 3);
+        st.on_completion(100, F_BUFFER | (5u << 16));   // final CQE carrying buffer 5
+        assert(got.size() == 1 && got[0] == std::make_pair(100, 5));
+        assert(!st.finished && st.armed);
+        st.on_completion(-ENOBUFS, 0);                   // starved: re-armed, nothing delivered
+        assert(got.size() == 1 && !st.finished && st.armed);
+        st.on_completion(50, F_BUFFER | F_MORE | (6u << 16));
+        st.on_completion(0, 0);                          // EOF
+        assert(got.size() == 3 && got[1] == std::make_pair(50, 6) && got[2].first == 0);
+        auto again = MultishotRecvStream::NextAwaiter{st};
+        assert(again.await_ready());
+        auto r = again.await_resume();
+        assert(r.bytes == 0 && r.eof && !r.buffer_valid); // never buffer 6 again
+    }
+    std::cout << "  -> PASS\n";
+}
+
 int main() {
     std::cout << "\n=======================================================\n";
     std::cout << "   AEGON ADVANCED IO & ZERO-COPY ENGINE TEST SUITE     \n";
@@ -355,6 +430,7 @@ int main() {
     test_multishot_accept_stream();
     test_zero_copy_file_serving();
     test_multishot_recv_stream();
+    test_multishot_streams_never_replay();
 
     std::cout << "\n=======================================================\n";
     std::cout << "   >>> ALL ADVANCED IO & ZERO-COPY TESTS PASSED! <<<   \n";

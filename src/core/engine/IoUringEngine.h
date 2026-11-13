@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include "core/engine/IoEngine.h"
 #include <liburing.h>
 #include <unordered_set>
@@ -44,6 +45,7 @@ public:
     void submit_connect(ConnectAwaiter& aw) noexcept override;
     void submit_poll(PollAwaiter& aw) noexcept override;
     void submit_timeout(TimeoutAwaiter& aw) noexcept override;
+    void cancel_timeout(TimeoutAwaiter& aw) noexcept override;
     void submit_close(CloseAwaiter& aw) noexcept override;
     void submit_shutdown(ShutdownAwaiter& aw) noexcept override;
     void submit_cancel(CancelAwaiter& aw) noexcept override;
@@ -91,12 +93,24 @@ private:
     int wakeup_fd_{-1};
     std::unordered_set<uint64_t> cancelled_user_data_{};
 
+    // Timers live in userspace: a binary min-heap of armed awaiters (each knows its slot),
+    // expired after every completion batch. The ring wait is bounded by the earliest
+    // deadline (IORING_ENTER_EXT_ARG), so a timeout costs no SQE, no kernel hrtimer and no CQE.
+    std::vector<TimeoutAwaiter*> timers_{};
+    void timer_swap(size_t a, size_t b) noexcept;
+    void timer_sift_up(size_t i) noexcept;
+    void timer_sift_down(size_t i) noexcept;
+    void timer_remove(size_t i) noexcept;
+    size_t fire_timers() noexcept;
+
     struct PostedCompletion {
         IoAwaiter* awaiter{nullptr};
         int res{0};
     };
     std::deque<PostedCompletion> posted_completions_{};
     std::mutex posted_mutex_{};
+    // Set under posted_mutex_ when posted_completions_ becomes non-empty (see EventLoop).
+    std::atomic<bool> has_posted_{false};
 };
 
 } // namespace aegon::core

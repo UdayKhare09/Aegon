@@ -1,4 +1,6 @@
 #pragma once
+#include <cerrno>
+#include <sys/socket.h>
 
 #include "core/Task.h"
 #include "core/OsSocket.h"
@@ -208,10 +210,22 @@ struct TimeoutAwaiter : IoAwaiter {
     int64_t sec{0};
     int64_t nsec{0};
 
+    // Engines that keep timers in userspace (IoUringEngine) record the absolute deadline and
+    // the awaiter's slot in their timer heap here; heap_index == npos when not armed.
+    static constexpr size_t npos = static_cast<size_t>(-1);
+    uint64_t deadline_ns{0};
+    size_t heap_index{npos};
+
     TimeoutAwaiter(IoEngine& e, uint64_t n) noexcept
         : engine(e), ns(n),
           sec(static_cast<int64_t>(n / 1'000'000'000ULL)),
           nsec(static_cast<int64_t>(n % 1'000'000'000ULL)) {}
+    // A coroutine destroyed while waiting must not leave a dangling timer behind.
+    ~TimeoutAwaiter() override;
+    TimeoutAwaiter(const TimeoutAwaiter&) = delete;
+    TimeoutAwaiter& operator=(const TimeoutAwaiter&) = delete;
+    TimeoutAwaiter(TimeoutAwaiter&& o) noexcept
+        : IoAwaiter(), engine(o.engine), ns(o.ns), sec(o.sec), nsec(o.nsec) {}
     void submit() noexcept override;
     int await_resume() noexcept;
 };
@@ -322,6 +336,9 @@ public:
         bool finished{false};
         bool cancelled{false};
         bool use_direct{false};
+        // A result handed straight to a waiting coroutine. It is consumed exactly once by
+        // await_resume: a stream that has finished must not replay its last accepted fd.
+        bool has_result{false};
         std::deque<AcceptResult> backlog{};
         AcceptResult current_result{};
 
@@ -345,7 +362,7 @@ public:
         StreamState& state;
 
         bool await_ready() const noexcept {
-            return !state.backlog.empty() || state.finished || state.cancelled;
+            return !state.backlog.empty() || state.has_result || state.finished || state.cancelled;
         }
 
         void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -361,7 +378,16 @@ public:
                 state.backlog.pop_front();
                 return res;
             }
-            return state.current_result;
+            if (state.has_result) {
+                state.has_result = false;
+                return state.current_result;
+            }
+            // Finished or cancelled with nothing left to deliver: tell the caller to re-arm.
+            AcceptResult end;
+            end.fd = INVALID_OS_SOCKET;
+            end.has_more = false;
+            end.is_direct_fd = state.use_direct;
+            return end;
         }
     };
 
@@ -388,6 +414,9 @@ public:
         bool armed{false};
         bool finished{false};
         bool cancelled{false};
+        // See MultishotAcceptStream::StreamState::has_result: delivered once, never replayed
+        // (a replay would hand the same provided-buffer id out twice).
+        bool has_result{false};
         std::deque<RecvResult> backlog{};
         RecvResult current_result{};
 
@@ -411,7 +440,7 @@ public:
         StreamState& state;
 
         bool await_ready() const noexcept {
-            return !state.backlog.empty() || state.finished || state.cancelled;
+            return !state.backlog.empty() || state.has_result || state.finished || state.cancelled;
         }
 
         void await_suspend(std::coroutine_handle<> h) noexcept {
@@ -427,15 +456,20 @@ public:
                 state.backlog.pop_front();
                 return res;
             }
-            if (state.cancelled) {
-                return RecvResult{.bytes = -125 /* ECANCELED */};
-            }
-            if (state.finished) {
+            if (state.has_result) {
+                state.has_result = false;
                 RecvResult r = state.current_result;
                 if (r.bytes == 0) r.eof = true;
                 return r;
             }
-            return state.current_result;
+            if (state.cancelled) {
+                return RecvResult{.bytes = -125 /* ECANCELED */};
+            }
+            // Finished with its terminal result already delivered: report end of stream.
+            RecvResult end{};
+            end.bytes = 0;
+            end.eof = true;
+            return end;
         }
     };
 
@@ -483,6 +517,8 @@ public:
     virtual void submit_connect(ConnectAwaiter& aw) noexcept = 0;
     virtual void submit_poll(PollAwaiter& aw) noexcept = 0;
     virtual void submit_timeout(TimeoutAwaiter& aw) noexcept = 0;
+    // Disarms a pending timeout whose awaiter is going away (no completion is delivered).
+    virtual void cancel_timeout(TimeoutAwaiter& /*aw*/) noexcept {}
     virtual void submit_close(CloseAwaiter& aw) noexcept = 0;
     virtual void submit_shutdown(ShutdownAwaiter& aw) noexcept = 0;
     virtual void submit_cancel(CancelAwaiter& aw) noexcept = 0;
@@ -609,6 +645,17 @@ public:
 
     [[nodiscard]] FallocateAwaiter fallocate(int fd, int mode, int64_t offset, int64_t len) noexcept {
         return FallocateAwaiter{*this, fd, mode, offset, len};
+    }
+
+    /**
+     * Sends from the calling (loop) thread right now with a non-blocking send(2): no ring
+     * round trip and no coroutine suspension. Returns the bytes sent (possibly fewer than
+     * `len`), or -errno; -EAGAIN when the socket buffer is full. Callers fall back to
+     * send_all() for whatever is left. Not for io_uring direct (fixed) descriptors.
+     */
+    static int send_now(os_socket_t fd, const void* buf, size_t len) noexcept {
+        ssize_t n = ::send(fd, buf, len, MSG_DONTWAIT | MSG_NOSIGNAL);
+        return n >= 0 ? static_cast<int>(n) : -errno;
     }
 
     // Engine-level send_all loop (reusable across all engines)

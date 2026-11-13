@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdio>
+#include <cstdint>
+#include <new>
 #include <coroutine>
 #include <exception>
 #include <utility>
@@ -15,21 +18,109 @@ class [[nodiscard]] Task;
 
 namespace detail {
 
-struct TaskPromiseBase {
-    static void* operator new(size_t size) {
-        void* ptr = nullptr;
-        if (::posix_memalign(&ptr, 64, size) != 0) {
-            throw std::bad_alloc();
+struct TaskPromiseBase;
+
+// Intrusive list of an event loop's live root tasks (see EventLoop::spawn). Insert and
+// unlink are O(1); the list is only walked when the loop is torn down.
+struct RootTaskList {
+    TaskPromiseBase* head{nullptr};
+    size_t size{0};
+
+    inline void link(TaskPromiseBase* p) noexcept;
+    inline void unlink(TaskPromiseBase* p) noexcept;
+    // Destroys every root still suspended (loop teardown).
+    inline void destroy_all() noexcept;
+};
+
+inline void report_root_exception(const std::exception_ptr& e) noexcept {
+    if (!e) return;
+    try {
+        std::rethrow_exception(e);
+    } catch (const std::exception& ex) {
+        std::fprintf(stderr, "[EventLoop] Uncaught exception in root task: %s\n", ex.what());
+    } catch (...) {
+        std::fprintf(stderr, "[EventLoop] Uncaught unknown exception in root task\n");
+    }
+}
+
+// Per-thread free lists of coroutine frames, by 64-byte size class up to 4 KiB. A server
+// creates and destroys frames for every connection, request handler and async read, so
+// recycling them keeps that off the general-purpose allocator. Frames are 64-byte aligned.
+// A frame freed on another thread joins that thread's list, which is fine for a free list.
+struct FramePool {
+    static constexpr size_t kGranule = 64;
+    static constexpr size_t kClasses = 64;            // up to 64 * 64 = 4096 bytes
+    static constexpr uint32_t kMaxPerClass = 4096;    // beyond this, frames go back to the system
+
+    struct Node { Node* next; };
+    Node* heads[kClasses]{};
+    uint32_t counts[kClasses]{};
+
+    static size_t class_of(size_t size) noexcept { return (size + kGranule - 1) / kGranule - 1; }
+
+    void* allocate(size_t size) {
+        const size_t c = class_of(size);
+        if (c < kClasses) {
+            if (Node* n = heads[c]) {
+                heads[c] = n->next;
+                --counts[c];
+                return n;
+            }
+            void* p = std::aligned_alloc(kGranule, (c + 1) * kGranule);
+            if (!p) throw std::bad_alloc();
+            return p;
         }
-        return ptr;
+        void* p = nullptr;
+        if (::posix_memalign(&p, kGranule, size) != 0) throw std::bad_alloc();
+        return p;
     }
 
-    static void operator delete(void* ptr) noexcept {
-        ::free(ptr);
+    void deallocate(void* p, size_t size) noexcept {
+        const size_t c = class_of(size);
+        if (c < kClasses && counts[c] < kMaxPerClass) {
+            auto* n = static_cast<Node*>(p);
+            n->next = heads[c];
+            heads[c] = n;
+            ++counts[c];
+            return;
+        }
+        std::free(p);
+    }
+
+    ~FramePool() {
+        for (size_t c = 0; c < kClasses; ++c) {
+            while (Node* n = heads[c]) {
+                heads[c] = n->next;
+                std::free(n);
+            }
+        }
+    }
+};
+
+inline FramePool& frame_pool() noexcept {
+    thread_local FramePool pool;
+    return pool;
+}
+
+struct TaskPromiseBase {
+    static void* operator new(size_t size) {
+        return frame_pool().allocate(size);
+    }
+
+    // Coroutine frames are freed with their size, which picks the size class.
+    static void operator delete(void* ptr, size_t size) noexcept {
+        frame_pool().deallocate(ptr, size);
     }
 
     std::coroutine_handle<> continuation_{nullptr};
     std::exception_ptr exception_{nullptr};
+    // Set for a root task handed to EventLoop::spawn(): the frame destroys itself when it
+    // finishes and unlinks itself from the loop's list of live roots, so the loop never
+    // has to scan its tasks to find the finished ones.
+    RootTaskList* root_list_{nullptr};
+    TaskPromiseBase* root_prev_{nullptr};
+    TaskPromiseBase* root_next_{nullptr};
+    std::coroutine_handle<> root_handle_{nullptr};
 
     [[nodiscard]] auto initial_suspend() noexcept {
         return std::suspend_always{};
@@ -40,9 +131,15 @@ struct TaskPromiseBase {
 
         template <typename Promise>
         [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> h) noexcept {
+            auto& p = h.promise();
             // Symmetric transfer to the awaiting coroutine
-            if (h.promise().continuation_) {
-                return h.promise().continuation_;
+            if (p.continuation_) {
+                return p.continuation_;
+            }
+            if (p.root_list_) {
+                p.root_list_->unlink(&p);
+                report_root_exception(p.exception_);
+                h.destroy();
             }
             return std::noop_coroutine();
         }
@@ -58,6 +155,33 @@ struct TaskPromiseBase {
         exception_ = std::current_exception();
     }
 };
+
+inline void RootTaskList::link(TaskPromiseBase* p) noexcept {
+    p->root_list_ = this;
+    p->root_prev_ = nullptr;
+    p->root_next_ = head;
+    if (head) head->root_prev_ = p;
+    head = p;
+    ++size;
+}
+
+inline void RootTaskList::unlink(TaskPromiseBase* p) noexcept {
+    if (p->root_prev_) p->root_prev_->root_next_ = p->root_next_;
+    else head = p->root_next_;
+    if (p->root_next_) p->root_next_->root_prev_ = p->root_prev_;
+    p->root_prev_ = p->root_next_ = nullptr;
+    p->root_list_ = nullptr;
+    --size;
+}
+
+inline void RootTaskList::destroy_all() noexcept {
+    while (head) {
+        TaskPromiseBase* p = head;
+        auto h = p->root_handle_;
+        unlink(p);
+        h.destroy();
+    }
+}
 
 template <typename T>
 struct TaskPromise final : TaskPromiseBase {
@@ -226,6 +350,14 @@ public:
         if (!coro_) [[unlikely]]
             throw std::runtime_error("Accessing result of an invalid Task");
         return std::move(coro_.promise()).result();
+    }
+
+    /**
+     * Gives up ownership of the coroutine frame and returns its handle (nullptr if empty).
+     * The caller becomes responsible for destroying it.
+     */
+    [[nodiscard]] handle_type release() noexcept {
+        return std::exchange(coro_, nullptr);
     }
 
 private:

@@ -33,7 +33,7 @@ EventLoop::~EventLoop() {
     if (engine_) {
         engine_->process_completions();
     }
-    tasks_.clear();
+    roots_.destroy_all();
 }
 
 void EventLoop::pin_to_core(int core_id) {
@@ -50,10 +50,13 @@ void EventLoop::pin_to_core(int core_id) {
 }
 
 void EventLoop::spawn(Task<void> task) {
-    task.resume();
-    if (!task.is_ready()) {
-        tasks_.push_back(std::move(task));
-    }
+    auto h = task.release();
+    if (!h) return;
+    auto& p = h.promise();
+    p.root_handle_ = h;
+    roots_.link(&p);
+    // If it runs to completion right here, its final awaiter unlinks and destroys it.
+    h.resume();
 }
 
 void EventLoop::post(std::function<void()> fn) {
@@ -61,6 +64,7 @@ void EventLoop::post(std::function<void()> fn) {
     {
         std::lock_guard<std::mutex> lock(post_mutex_);
         post_queue_.push_back(std::move(fn));
+        has_posts_.store(true, std::memory_order_release);
     }
     if (engine_) {
         engine_->wakeup();
@@ -68,9 +72,11 @@ void EventLoop::post(std::function<void()> fn) {
 }
 
 void EventLoop::drain_post_queue() {
+    if (!has_posts_.load(std::memory_order_acquire)) return;
     std::vector<std::function<void()>> local_queue;
     {
         std::lock_guard<std::mutex> lock(post_mutex_);
+        has_posts_.store(false, std::memory_order_relaxed);
         if (post_queue_.empty()) return;
         local_queue.swap(post_queue_);
     }
@@ -107,7 +113,7 @@ void EventLoop::run() {
 
     while (running_.load(std::memory_order_acquire)) {
         drain_post_queue();
-        if (tasks_.empty()) {
+        if (roots_.size == 0) {
             break;
         }
 
@@ -116,21 +122,7 @@ void EventLoop::run() {
         drain_post_queue();
         buffer_pool_.flush_returns();
 
-        std::erase_if(tasks_, [](Task<void>& t) {
-            if (t.is_ready()) {
-                try {
-                    t.result();
-                } catch (const std::exception& e) {
-                    std::fprintf(stderr, "[EventLoop] Uncaught exception in root task: %s\n", e.what());
-                } catch (...) {
-                    std::fprintf(stderr, "[EventLoop] Uncaught unknown exception in root task\n");
-                }
-                return true;
-            }
-            return false;
-        });
-
-        if (tasks_.empty()) {
+        if (roots_.size == 0) {
             break;
         }
     }

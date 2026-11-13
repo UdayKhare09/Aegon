@@ -275,8 +275,9 @@ void EpollEngine::process_epoll_event(int fd, uint32_t events) noexcept {
                 auto* st = static_cast<MultishotRecvStream::StreamState*>(aw);
                 while (slot.in_awaiter == st && st->armed && !st->cancelled && !st->finished) {
                     if (!buffer_pool_) {
+                        // No pool will ever exist: terminal (-ENOBUFS would mean "re-arm").
                         remove_interest(fd, EPOLLIN);
-                        st->on_completion(-ENOBUFS, 0);
+                        st->on_completion(-ENOMEM, 0);
                         break;
                     }
                     int bid = buffer_pool_->alloc_buffer();
