@@ -1,20 +1,11 @@
 @PACKAGE_INIT@
 
-include(CMakeFindDependencyMacro)
-
-# Core threads & system libraries
-find_dependency(Threads)
-find_dependency(glaze CONFIG)
-
-# Database dependencies for Aegon::orm
-find_dependency(PostgreSQL)
-find_dependency(SQLite3)
-
-# TLS & Cryptography dependencies for Aegon::http and Aegon::redis
-find_dependency(OpenSSL)
-
-# Compression dependency for Aegon::http
-find_dependency(libdeflate)
+# Recreate the Aegon::Ext::* dependency targets that the exported Aegon targets link
+# against (Threads, liburing, glaze, OpenSSL, PostgreSQL, SQLite3, libdeflate, nghttp2,
+# nghttp3, ngtcp2, protobuf), with the same discovery Aegon's own build uses.
+if(NOT TARGET Aegon::Ext::Threads)
+    include("${CMAKE_CURRENT_LIST_DIR}/AegonDependencies.cmake")
+endif()
 
 # Import the Aegon targets
 include("${CMAKE_CURRENT_LIST_DIR}/AegonTargets.cmake")

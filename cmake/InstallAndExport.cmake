@@ -68,3 +68,12 @@ install(
         "${CMAKE_CURRENT_BINARY_DIR}/AegonConfigVersion.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Aegon
 )
+
+# The exported targets link against Aegon::Ext::* (imported INTERFACE targets created by
+# Dependencies.cmake). Imported targets are not exported, so the package ships the same
+# discovery logic and AegonConfig.cmake re-runs it in the consumer.
+install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Dependencies.cmake"
+    RENAME AegonDependencies.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Aegon
+)

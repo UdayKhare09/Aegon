@@ -26,6 +26,7 @@ target_link_libraries(aegon_http PUBLIC
     aegon_log
     Aegon::Ext::glaze
     Aegon::Ext::deflate
+    Aegon::Ext::brotlienc
     Aegon::Ext::nghttp2
     Aegon::Ext::nghttp3
     Aegon::Ext::Protobuf

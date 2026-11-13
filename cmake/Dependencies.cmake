@@ -243,6 +243,20 @@ else()
 endif()
 
 # ------------------------------------------------------------------------------
+# 7b. Compression: brotli encoder (Content-Encoding: br in middleware::Compress)
+# ------------------------------------------------------------------------------
+aegon_find_required_library(
+    TARGET      Aegon::Ext::brotlienc
+    DISPLAY     "brotli (libbrotlienc)"
+    HEADER      brotli/encode.h
+    LIBRARIES   brotlienc
+    PKG_CONFIG  libbrotlienc
+    ROOTS       BROTLI_ROOT
+    ARCH        brotli
+    DEBIAN      libbrotli-dev
+)
+
+# ------------------------------------------------------------------------------
 # 7. Compression: libdeflate
 # ------------------------------------------------------------------------------
 find_package(libdeflate CONFIG QUIET)
