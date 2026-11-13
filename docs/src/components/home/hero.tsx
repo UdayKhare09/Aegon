@@ -60,7 +60,23 @@ export function Hero() {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
           </span>
-          <span className="font-semibold text-amber-200">HttpArena Verified #1 Benchmark</span>
+          <a
+            href="https://http-arena.com/frameworks/lang/cpp/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:underline flex items-center gap-1 font-semibold text-amber-200"
+          >
+            HttpArena #1 in C++
+          </a>
+          <span className="text-neutral-500">&amp;</span>
+          <a
+            href="https://http-arena.com/frameworks/lang/java/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:underline flex items-center gap-1 font-semibold text-amber-200"
+          >
+            #1 in Java
+          </a>
           <span className="text-neutral-600 hidden sm:inline">&bull;</span>
           <span className="text-neutral-300 hidden sm:inline">C++23 Thread-Per-Core</span>
           <span className="bg-amber-400/20 px-2 py-0.5 rounded text-[11px] font-mono font-bold text-amber-200 border border-amber-400/30">

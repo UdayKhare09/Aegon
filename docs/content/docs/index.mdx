@@ -49,7 +49,7 @@ Built around standard C++ coroutines (`co_await`), Aegon provides first-class su
 
 ## Real-World Performance (HttpArena Benchmarks)
 
-All benchmark numbers are produced by the independent [HttpArena](https://http-arena.com) platform under scientifically controlled bare-metal conditions on a 64-core AMD Ryzen Threadripper PRO 3995WX processor:
+Aegon is independently verified as the **[#1 C++ Web Framework](https://http-arena.com/frameworks/lang/cpp/)** and **[#1 Java Web Framework](https://http-arena.com/frameworks/lang/java/)** on the bare-metal [HttpArena](https://http-arena.com) benchmarking platform under scientifically controlled conditions on a 64-core AMD Ryzen Threadripper PRO 3995WX processor:
 
 | Profile | Concurrency | Peak Throughput | Avg Latency | p99 Latency | Ranking |
 | :--- | :---: | :---: | :---: | :---: | :---: |
@@ -134,3 +134,15 @@ int main() {
 <Callout type="info">
 Notice that route handlers in Aegon can be either synchronous (`void(http::Context&)`) or asynchronous (`core::Task<void>(http::Context&)`). The framework handles both uniformly without performance penalties.
 </Callout>
+
+---
+
+## Authors & Maintainers
+
+Aegon is developed and actively maintained by:
+
+- **[Uday Khare](https://github.com/UdayKhare09)**
+- **[Surendra Singh Chouhan](https://github.com/Surendra1341)**
+- **[Team Zemo](https://teamzemo.tech/)**
+
+Open-source under the [MIT License](https://github.com/UdayKhare09/Aegon/blob/main/LICENSE). Built for mission-critical, low-latency microservices.

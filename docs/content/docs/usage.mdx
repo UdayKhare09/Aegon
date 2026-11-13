@@ -218,7 +218,11 @@ gcc main.c $(pkg-config --cflags --libs aegon-c) -o c_server
 
 ## 5. Java 22+ Foreign Function & Memory (FFM)
 
-Aegon provides native Java bindings built on Project Panama (FFM API), achieving C-level HTTP performance inside the JVM without traditional JNI overhead:
+Aegon provides native Java bindings built on Project Panama (FFM API) and virtual threads (Project Loom), achieving C-level HTTP performance inside the JVM without traditional JNI overhead.
+
+<Callout type="info">
+**HttpArena Verified Leader**: The Aegon Java engine is ranked **[#1 in Java](https://http-arena.com/frameworks/lang/java/)** on the independent [HttpArena](https://http-arena.com) benchmarks, delivering higher throughput and lower CPU cost than traditional JVM frameworks.
+</Callout>
 
 ```java title="App.java"
 import com.teamzemo.aegon.AegonServer;

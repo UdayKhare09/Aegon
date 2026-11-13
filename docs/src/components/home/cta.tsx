@@ -87,7 +87,7 @@ export function CtaSection() {
               <span className="text-neutral-700 hidden sm:inline">&bull;</span>
               <span>Sub-Microsecond Latency</span>
               <span className="text-neutral-700 hidden sm:inline">&bull;</span>
-              <span>Apache-2.0 Open Source</span>
+              <span>MIT Licensed Open Source</span>
             </div>
           </motion.div>
         </div>
