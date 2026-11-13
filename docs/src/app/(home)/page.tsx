@@ -2,6 +2,7 @@ import { Hero } from '@/components/home/hero';
 import { StatsSection } from '@/components/home/stats';
 import { CodeShowcase } from '@/components/home/code-showcase';
 import { FeaturesGrid } from '@/components/home/features';
+import { DocsHub } from '@/components/home/docs-hub';
 import { CtaSection } from '@/components/home/cta';
 
 export const metadata = {
@@ -17,6 +18,7 @@ export default function HomePage() {
       <StatsSection />
       <CodeShowcase />
       <FeaturesGrid />
+      <DocsHub />
       <CtaSection />
     </div>
   );
