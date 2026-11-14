@@ -97,6 +97,7 @@ private:
     // expired after every completion batch. The ring wait is bounded by the earliest
     // deadline (IORING_ENTER_EXT_ARG), so a timeout costs no SQE, no kernel hrtimer and no CQE.
     std::vector<TimeoutAwaiter*> timers_{};
+    uint64_t now_ns_{0};  // clock at the last fire_timers(), reused to bound the next wait
     void timer_swap(size_t a, size_t b) noexcept;
     void timer_sift_up(size_t i) noexcept;
     void timer_sift_down(size_t i) noexcept;

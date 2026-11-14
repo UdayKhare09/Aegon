@@ -56,6 +56,17 @@ struct ServerConfig {
     uint16_t buffer_pool_entries{8192};
     uint16_t buffer_size{4096};
 
+    // Pin worker i to the i-th CPU of the process's affinity mask. Off by default: unpinned,
+    // the scheduler can wake a worker on a core that is already awake, which keeps latency
+    // and CPU per request low when load is light. Pinning can still help when NIC queues and
+    // IRQ affinity are set up to match the workers.
+    bool pin_workers{false};
+
+    // Kernel TLS (TX) after the handshake. Off by default: records are encrypted by OpenSSL
+    // and written straight from its buffer to the socket. Enable it where the NIC offloads
+    // TLS (kTLS device mode) or for sendfile over TLS.
+    bool ktls{false};
+
     // TCP Socket Options
     TcpConfig tcp{};
 

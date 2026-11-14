@@ -18,16 +18,14 @@ Http1Connection::Http1Connection(core::EventLoop& loop, core::os_socket_t client
                                  const ServiceRegistry* services, const ServerConfig& config)
     : loop_(&loop), client_fd_(client_fd), router_(&router), services_(services), config_(config),
       ctx_(req_, res_, services_) {
-    req_accum_.reserve(16384);
-    resp_batch_.reserve(16384);
+    // No up-front reservations: with in-place parsing most connections never need an input
+    // buffer, and the output buffer grows to the largest response the connection sends.
 }
 
 void Http1Connection::reset(core::os_socket_t client_fd) noexcept {
     client_fd_ = client_fd;
     req_accum_.clear();
-    if (req_accum_.capacity() < 16384) req_accum_.reserve(16384);
     resp_batch_.clear();
-    if (resp_batch_.capacity() < 16384) resp_batch_.reserve(16384);
     req_.reset();
     res_.reset();
     ctx_.reset();
@@ -41,9 +39,7 @@ void Http1Connection::reset(core::EventLoop& loop, core::os_socket_t client_fd, 
     services_ = services;
     config_ = config;
     req_accum_.clear();
-    if (req_accum_.capacity() < 16384) req_accum_.reserve(16384);
     resp_batch_.clear();
-    if (resp_batch_.capacity() < 16384) resp_batch_.reserve(16384);
     req_.reset();
     res_.reset();
     ctx_.reset();
@@ -55,18 +51,11 @@ void Http1Connection::cleanup() noexcept {
     loop_ = nullptr;
     router_ = nullptr;
     services_ = nullptr;
-    if (req_accum_.capacity() > 65536) {
-        req_accum_.shrink_to_fit();
-        req_accum_.reserve(16384);
-    } else {
-        req_accum_.clear();
-    }
-    if (resp_batch_.capacity() > 65536) {
-        resp_batch_.shrink_to_fit();
-        resp_batch_.reserve(16384);
-    } else {
-        resp_batch_.clear();
-    }
+    // Pooled connections keep at most 16 KB per buffer.
+    req_accum_.clear();
+    if (req_accum_.capacity() > 16384) req_accum_.shrink_to_fit();
+    resp_batch_.clear();
+    if (resp_batch_.capacity() > 16384) resp_batch_.shrink_to_fit();
     req_.reset();
     res_.reset();
     ctx_.reset();

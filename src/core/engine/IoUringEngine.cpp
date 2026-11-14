@@ -167,7 +167,10 @@ int IoUringEngine::submit_and_wait(uint32_t min_complete) {
     // CQE is already in the ring, which strands deferred completions until a later enter (a
     // latency tail). So whenever there is already work (a CQE or a due timer), submit and
     // run task work without blocking; block with the deadline only on an empty CQ.
-    const uint64_t now = monotonic_ns();
+    // The clock read when timers were last fired (end of the previous batch): one clock
+    // read per loop iteration instead of two. It is stale only by the work done since, so
+    // the wait can run a few microseconds long, never short.
+    const uint64_t now = now_ns_ ? now_ns_ : monotonic_ns();
     const uint64_t due = timers_.front()->deadline_ns;
     if (due <= now || io_uring_cq_ready(&ring_) > 0) {
         return io_uring_submit_and_get_events(&ring_);
@@ -448,8 +451,12 @@ void IoUringEngine::cancel_timeout(TimeoutAwaiter& aw) noexcept {
 }
 
 size_t IoUringEngine::fire_timers() noexcept {
-    if (timers_.empty()) return 0;
+    if (timers_.empty()) {
+        now_ns_ = 0;
+        return 0;
+    }
     const uint64_t now = monotonic_ns();
+    now_ns_ = now;
     size_t fired = 0;
     while (!timers_.empty() && timers_.front()->deadline_ns <= now) {
         TimeoutAwaiter* aw = timers_.front();

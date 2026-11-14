@@ -177,6 +177,7 @@ core::Task<void> Server::handle_http2_upgrade(core::EventLoop& loop, core::os_so
 
 core::Task<void> Server::handle_tls_connection(core::EventLoop& loop, core::os_socket_t client_fd, uint16_t port) {
     net::tls::TlsStream tls_stream(loop, client_fd, tls_ctx_->native_handle());
+    tls_stream.allow_ktls(config_.ktls);
     bool ok = co_await tls_stream.handshake();
     if (!ok) {
         (void)(co_await loop.engine().close(client_fd));
@@ -439,7 +440,7 @@ void Server::run(size_t threads) {
                     for (int c = 0; c < CPU_SETSIZE; ++c) {
                         if (CPU_ISSET(c, &current_mask)) allowed.push_back(c);
                     }
-                    if (i < allowed.size()) {
+                    if (config_.pin_workers && i < allowed.size()) {
                         core_id = allowed[i];
                     }
                 }

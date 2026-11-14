@@ -212,6 +212,17 @@ public:
         return *this;
     }
     [[nodiscard]] const TcpConfig& tcp() const noexcept { return config_.tcp; }
+    /** Pin each worker thread to one CPU (see ServerConfig::pin_workers). */
+    Server& pin_workers(bool enable = true) noexcept {
+        config_.pin_workers = enable;
+        return *this;
+    }
+
+    /** Kernel TLS TX offload after the handshake (see ServerConfig::ktls). */
+    Server& ktls(bool enable = true) noexcept {
+        config_.ktls = enable;
+        return *this;
+    }
     Server& tcp_nodelay(bool enable = true) noexcept {
         config_.tcp.nodelay = enable;
         return *this;

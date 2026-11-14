@@ -140,7 +140,7 @@ TlsStream::~TlsStream() {
 TlsStream::TlsStream(TlsStream&& other) noexcept
     : loop_(other.loop_), client_fd_(other.client_fd_),
       ssl_(other.ssl_), io_(std::move(other.io_)),
-      handshake_done_(other.handshake_done_), ktls_tx_(other.ktls_tx_),
+      handshake_done_(other.handshake_done_), ktls_tx_(other.ktls_tx_), ktls_allowed_(other.ktls_allowed_),
       server_traffic_secret_(std::move(other.server_traffic_secret_)),
       rx_(std::move(other.rx_)) {
     other.ssl_ = nullptr;
@@ -159,6 +159,7 @@ TlsStream& TlsStream::operator=(TlsStream&& other) noexcept {
         io_ = std::move(other.io_);
         handshake_done_ = other.handshake_done_;
         ktls_tx_ = other.ktls_tx_;
+        ktls_allowed_ = other.ktls_allowed_;
         server_traffic_secret_ = std::move(other.server_traffic_secret_);
         rx_ = std::move(other.rx_);
 
@@ -201,7 +202,7 @@ core::Task<bool> TlsStream::flush_outbound() {
 }
 
 bool TlsStream::try_enable_ktls_tx() {
-    if (server_traffic_secret_.empty() || client_fd_ < 0) return false;
+    if (!ktls_allowed_ || server_traffic_secret_.empty() || client_fd_ < 0) return false;
 
     const char* env_disable = std::getenv("AEGON_DISABLE_KTLS");
     if (env_disable && (std::strcmp(env_disable, "1") == 0 || std::strcmp(env_disable, "true") == 0)) {

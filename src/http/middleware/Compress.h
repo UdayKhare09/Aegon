@@ -18,12 +18,11 @@ namespace aegon::http::middleware {
 struct CompressOptions {
     int level{1};                // gzip/deflate (libdeflate) level: 1 = fastest, 12 = maximum
     size_t min_size{256};        // Don't compress bodies smaller than this threshold (in bytes)
-    // Brotli (RFC 7932, Content-Encoding: br) for dynamic responses. Off by default: on
-    // typical 4-8 KB API bodies brotli costs 2-4x the CPU of libdeflate level 1 for 10-20%
-    // fewer bytes (q2: 16us/1270B, q5: 41us/1125B vs gzip L1: 10us/1380B on the HttpArena
-    // json bodies), which loses whenever the server, not the network, is the bottleneck.
-    // Enable it for large or bandwidth-bound responses. Static files serve precompressed .br
-    // regardless of this setting.
+    // Brotli (RFC 7932, Content-Encoding: br) for dynamic responses. Off by default: on small
+    // API bodies it spends several times the CPU of libdeflate level 1 for a modest size
+    // reduction, which only pays off when the network rather than the server is the
+    // bottleneck. Enable it for large or bandwidth-bound responses. Static files serve
+    // precompressed .br regardless of this setting.
     bool brotli{false};
     int brotli_quality{4};       // 0..11
     int brotli_lgwin{18};        // log2 of the sliding window, 10..24

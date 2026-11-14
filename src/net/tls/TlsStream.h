@@ -65,6 +65,9 @@ public:
      */
     [[nodiscard]] bool is_ktls_tx() const noexcept { return ktls_tx_; }
 
+    /** Whether kernel TLS TX may be enabled after the handshake (off by default). */
+    void allow_ktls(bool allow) noexcept { ktls_allowed_ = allow; }
+
     /**
      * @brief Captures server traffic secret from TLS 1.3 keylog callback for kTLS programming.
      */
@@ -106,6 +109,7 @@ private:
     std::unique_ptr<BioIo> io_{};  // heap: the BIO points at it, so a moved TlsStream stays valid
     bool handshake_done_{false};
     bool ktls_tx_{false};
+    bool ktls_allowed_{false};
     std::string server_traffic_secret_{};
     // After the handshake, ciphertext arrives through one armed multishot recv instead of a
     // one-shot recv per read.
