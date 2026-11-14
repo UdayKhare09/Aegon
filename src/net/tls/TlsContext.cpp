@@ -150,11 +150,20 @@ bool TlsContext::generate_self_signed(const std::string& common_name) {
 
     X509_set_pubkey(x509, pkey);
 
-    X509_NAME* name = X509_get_subject_name(x509);
+    // Built separately and set as subject and issuer: OpenSSL 4 returns the certificate's
+    // own subject name as const, so it can no longer be edited in place.
+    X509_NAME* name = X509_NAME_new();
+    if (!name) {
+        X509_free(x509);
+        EVP_PKEY_free(pkey);
+        return false;
+    }
     X509_NAME_add_entry_by_txt(name, "C", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("US"), -1, -1, 0);
     X509_NAME_add_entry_by_txt(name, "O", MBSTRING_ASC, reinterpret_cast<const unsigned char*>("Aegon Dev"), -1, -1, 0);
     X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(common_name.c_str()), -1, -1, 0);
+    X509_set_subject_name(x509, name);
     X509_set_issuer_name(x509, name);
+    X509_NAME_free(name);
 
     // Add Subject Alternative Name (SAN) extension for localhost / IP compatibility
     X509V3_CTX ctx_v3;
